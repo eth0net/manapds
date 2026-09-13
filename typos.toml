@@ -1,0 +1,19 @@
+# Spelling, with British variants treated as errors.
+#
+#     typos
+#
+# The technical vocabulary is American — `color`, `license`, `serialize` — and
+# so are the atproto field names this server has to spell exactly, so the prose
+# follows them rather than splitting the repo between the two.
+
+[default]
+locale = "en-us"
+
+[files]
+extend-exclude = [
+  # Verbatim license text. Not ours to correct.
+  "LICENSE-MIT",
+  "LICENSE-APACHE",
+  # Interop vectors captured from atproto, compared byte for byte.
+  "**/tests/fixtures/**",
+]

@@ -1,0 +1,60 @@
+# Git hooks, run by `prek` (https://prek.j178.dev).
+#:schema https://www.schemastore.org/prek.json
+#
+#     prek install
+#
+# Split by latency: anything that only reads files runs on `pre-commit`, so
+# committing stays quick. Anything that compiles runs on `pre-push`, where the
+# wait is expected and the alternative is finding out from CI.
+
+default_install_hook_types = ["pre-commit", "pre-push", "commit-msg"]
+
+# Bundled with prek itself, so there is no repository to clone and no Python to
+# install: a fresh checkout can run these offline.
+[[repos]]
+repo = "builtin"
+hooks = [
+  { id = "trailing-whitespace", args = ["--markdown-linebreak-ext=md"] },
+  { id = "end-of-file-fixer" },
+  # .gitattributes pins the working tree to LF; this catches a file that
+  # slipped in before it applied.
+  { id = "mixed-line-ending", args = ["--fix=lf"] },
+  { id = "check-merge-conflict" },
+  { id = "check-case-conflict" },
+  # Windows is a supported target and a CI platform, so a path that cannot
+  # exist there has to be caught here.
+  { id = "check-illegal-windows-names" },
+  { id = "check-added-large-files" },
+  { id = "check-toml" },
+  { id = "check-yaml" },
+]
+
+# Neither builtin nor `system`: prek installs a pinned binary, so nothing has
+# to be on PATH. Upstream's `--write-changes` is dropped — a spell checker
+# editing prose unasked is worse than one that names the line. Config, and what
+# it excludes, in `typos.toml`.
+[[repos]]
+repo = "https://github.com/crate-ci/typos"
+rev = "v1.50.1"
+hooks = [{ id = "typos", args = ["--force-exclude"] }]
+
+# Scoped to Rust files so touching only docs needs no toolchain. The pre-push
+# set is what CI runs, so a red push costs no CI round trip.
+[[repos]]
+repo = "local"
+hooks = [
+  # Formats in place and fails if anything moved, so the fix is `git add`.
+  { id = "cargo-fmt", name = "cargo fmt", entry = "cargo fmt --all", language = "system", files = '\.rs$', pass_filenames = false, require_serial = true },
+  { id = "cargo-clippy", name = "cargo clippy", entry = "cargo clippy --all-targets -- -D warnings", language = "system", files = '\.rs$|(^|/)Cargo\.(toml|lock)$', pass_filenames = false, require_serial = true },
+  { id = "cargo-test", name = "cargo test", entry = "cargo test --all-targets", language = "system", files = '\.rs$|(^|/)Cargo\.(toml|lock)$|\.md$', pass_filenames = false, require_serial = true, stages = ["pre-push"] },
+  { id = "cargo-msrv", name = "cargo check (MSRV 1.98)", entry = "cargo +1.98 check", language = "system", files = '\.rs$|(^|/)Cargo\.(toml|lock)$', pass_filenames = false, require_serial = true, stages = ["pre-push"] },
+]
+
+# The sign-off CONTRIBUTING asks for. Git has no `commit.signOff`, so an
+# unenforced convention is the only alternative. Merge commits are exempt, as
+# DCO checks conventionally are — they carry no new work to certify.
+[[repos]]
+repo = "local"
+hooks = [
+  { id = "dco", name = "sign-off (git commit -s)", entry = "grep -qE '^(Signed-off-by: |Merge )'", language = "system", stages = ["commit-msg"] },
+]

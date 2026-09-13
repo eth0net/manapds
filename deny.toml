@@ -1,0 +1,59 @@
+# Supply-chain checks for the dependency tree, run by `cargo deny`.
+# See https://embarkstudios.github.io/cargo-deny/ for the full schema.
+#
+#     cargo deny check
+#
+# Four questions, each of which can fail CI: is anything in the tree subject to
+# a security advisory, is every license one we can ship under, is the tree free
+# of duplicate versions, and did every crate come from where we think it did.
+#
+# What this does *not* do is look at any code. A crate can be entirely unsafe
+# and pass all four, so this is a tripwire for what changes underneath us rather
+# than a substitute for choosing dependencies carefully in the first place.
+
+[advisories]
+# No `ignore` entries. An advisory against something in this tree should be
+# dealt with rather than annotated, and if one ever has to be waived it belongs
+# here with a reason and a link.
+ignore = []
+
+[licenses]
+# The binary is distributed under `MIT OR Apache-2.0`, so everything linked into
+# it has to be compatible with both. This is the exact set the tree needs — add
+# nothing speculatively.
+#
+# Adding to this list is a licensing decision, not a build fix. A dependency
+# that fails here should be replaced unless the license is genuinely one the
+# project is willing to ship under.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    # matchit, which is axum's router. Permissive and compatible with both.
+    "BSD-3-Clause",
+    # unicode-ident, under every proc macro in the tree. The Unicode license
+    # covers the character tables it embeds, not the code.
+    "Unicode-3.0",
+]
+
+[bans]
+# Kept at `deny` so a duplicate has to be argued for rather than accumulate one
+# transitive bump at a time. When this fires, the fix is usually to align a
+# version rather than to silence it. If two versions genuinely have to coexist,
+# add a `[[bans.skip]]` saying which crate, why nothing can align it, and what
+# would let the entry go.
+multiple-versions = "deny"
+wildcards = "deny"
+
+# Both are proc macros, so neither reaches the binary — this is build time
+# only. `tracing-attributes` is the last crate in the tree on syn 2; the entry
+# goes when it releases against syn 3.
+[[bans.skip]]
+crate = "syn@2"
+
+[sources]
+# Everything comes from crates.io. A git or alternate-registry dependency is a
+# real decision — no crates.io yanking, no advisory coverage by default, and a
+# build that depends on a host staying up — so it should be made deliberately
+# rather than arrive in a lockfile.
+unknown-registry = "deny"
+unknown-git = "deny"

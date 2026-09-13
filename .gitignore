@@ -1,0 +1,7 @@
+/target
+# Runtime state: SQLite databases, blobs and keys a local server writes.
+/data
+*.db
+*.db-shm
+*.db-wal
+.env

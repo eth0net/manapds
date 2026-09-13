@@ -1,0 +1,4 @@
+# Windows is a supported target and a CI platform, and the test suite will
+# compare CAR files and CBOR blocks against hashes the protocol fixes, so a
+# CRLF checkout would fail it rather than merely produce a noisy diff.
+* text=auto eol=lf
