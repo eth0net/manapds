@@ -6,5 +6,6 @@ pub mod config;
 pub mod crypto;
 pub mod repo;
 pub mod server;
+pub mod store;
 pub mod syntax;
 pub mod xrpc;

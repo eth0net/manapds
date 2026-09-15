@@ -47,6 +47,9 @@ pub enum Error {
     /// A block that is not what the CID over it says it is.
     #[error("{0} is not the CID of the bytes under it")]
     WrongCid(Cid),
+    /// Whatever the blocks are kept in would not answer.
+    #[error("store: {0}")]
+    Store(String),
 }
 
 mod block;

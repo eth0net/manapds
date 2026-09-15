@@ -17,6 +17,7 @@ publish = false
 axum = "0.8.9"
 bs58 = "0.5.1"
 ipld-core = { version = "0.4.3", features = ["serde"] }
+jiff = "0.2.37"
 k256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std"] }
 p256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std"] }
 rand = "0.10.2"
@@ -50,3 +51,4 @@ strip = true
 [dev-dependencies]
 base64 = "0.23.1"
 hex = "0.4.3"
+tempfile = "3.27.0"
