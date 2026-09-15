@@ -84,6 +84,27 @@ fn minted_tids_parse_and_climb() {
     }
 }
 
+#[test]
+fn a_tid_decodes_to_the_parts_it_was_made_from() {
+    for (micros, clock_id) in [(1_700_000_000_000_000, 17), (0, 0), (1 << 52, 1023)] {
+        assert_eq!(
+            Tid::from_parts(micros, clock_id).to_parts(),
+            (micros, clock_id)
+        );
+    }
+}
+
+#[test]
+fn minting_clears_a_tid_already_written() {
+    // A clock this far ahead of the wall clock only moves on by being pushed.
+    let ahead = Tid::from_parts(1 << 52, 1023);
+    let mut clock = TidClock::new();
+
+    let next = clock.mint_after(&ahead);
+    assert!(next > ahead, "{next} follows {ahead}");
+    assert!(clock.mint() > next, "the floor sticks for the next one too");
+}
+
 fn accepts<T: FromStr>(file: &str) {
     for vector in vectors(file) {
         assert!(T::from_str(&vector).is_ok(), "rejected {vector:?}");

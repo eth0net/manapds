@@ -52,6 +52,12 @@ impl Clock {
         }
     }
 
+    /// The next TID, kept above one already written.
+    pub fn mint_after(&mut self, previous: &Tid) -> Tid {
+        self.last = self.last.max(previous.to_parts().0);
+        self.mint()
+    }
+
     /// The next TID, one microsecond past the last if the clock has not moved.
     pub fn mint(&mut self) -> Tid {
         let now = std::time::SystemTime::now()
@@ -76,6 +82,24 @@ impl Tid {
     #[must_use]
     pub fn from_parts(micros: u64, clock_id: u64) -> Self {
         Self(encode((micros % MICROS) * CLOCK_IDS + clock_id % CLOCK_IDS))
+    }
+
+    /// The microsecond timestamp and the clock id it was minted under.
+    #[must_use]
+    pub fn to_parts(&self) -> (u64, u64) {
+        let value = self
+            .0
+            .bytes()
+            .fold(0, |value, byte| value * 32 + digit(byte));
+        (value / CLOCK_IDS, value % CLOCK_IDS)
+    }
+}
+
+/// The value of a base32-sortable digit, which parsing has already checked.
+fn digit(byte: u8) -> u64 {
+    match byte {
+        b'2'..=b'7' => u64::from(byte - b'2'),
+        _ => u64::from(byte - b'a') + 6,
     }
 }
 
