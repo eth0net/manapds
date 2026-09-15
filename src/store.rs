@@ -29,6 +29,9 @@ pub enum Error {
     /// A blob whose bytes are not what its CID says.
     #[error("{0} is not the CID of the bytes under it")]
     WrongCid(ipld_core::cid::Cid),
+    /// A key file holding something that is not a key.
+    #[error("signing key: {0}")]
+    Key(#[from] crate::crypto::Error),
 }
 
 mod accounts;
@@ -36,6 +39,7 @@ mod actor;
 pub mod blobs;
 mod db;
 mod did_cache;
+pub mod keys;
 mod sequencer;
 
 pub use accounts::{Account, Accounts};

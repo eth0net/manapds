@@ -5,10 +5,10 @@ use std::path::Path;
 
 use manapds::crypto::{Algorithm, Keypair};
 use manapds::repo::{Ipld, Repo, Store, Write};
-use manapds::store::blobs;
 use manapds::store::{
     Account, Accounts, Actor, DidCache, Directory, Error, Event, Root, Sequencer,
 };
+use manapds::store::{blobs, keys};
 use manapds::syntax::{Did, Nsid, RecordKey, TidClock};
 use rusqlite::Connection;
 
@@ -465,4 +465,28 @@ fn a_cached_document_comes_back_with_its_age() {
 
     cache.forget(&account()).expect("forgets");
     assert_eq!(cache.get(&account()).expect("reads"), None);
+}
+
+#[test]
+fn a_signing_key_survives_the_file_it_is_kept_in() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let path = Directory::new(home.path()).actor_key(&account());
+    let keypair = Keypair::generate(Algorithm::Secp256k1);
+
+    keys::write(&path, &keypair).expect("writes");
+    let read = keys::read(&path).expect("reads");
+    assert_eq!(read.public_key(), keypair.public_key());
+
+    // The reference writes 32 raw bytes and nothing else.
+    assert_eq!(std::fs::read(&path).expect("reads").len(), 32);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path)
+            .expect("reads")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "nobody else reads a signing key");
+    }
 }
