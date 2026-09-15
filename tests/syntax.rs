@@ -5,7 +5,7 @@
 
 use std::{fs, path::Path, str::FromStr};
 
-use manapds::syntax::{AtIdentifier, AtUri, Did, Handle, Nsid, RecordKey, Tid};
+use manapds::syntax::{AtIdentifier, AtUri, Did, Handle, Nsid, RecordKey, Tid, TidClock};
 
 #[test]
 fn at_identifier() {
@@ -54,6 +54,33 @@ fn at_uri_round_trips() {
     for vector in vectors("aturi_syntax_valid.txt") {
         let parsed = AtUri::from_str(&vector).expect("valid");
         assert_eq!(parsed.to_string(), vector);
+    }
+}
+
+#[test]
+fn tid_from_parts() {
+    // The reference pads the clock id to two digits and the timestamp not at
+    // all, so it agrees only above a timestamp of 32^10.
+    assert_eq!(
+        Tid::from_parts(1_700_000_000_000_000, 17).as_str(),
+        "3ke6kg3wk222l"
+    );
+    assert_eq!(
+        Tid::from_parts(1_758_000_000_000_000, 1023).as_str(),
+        "3lywl4sbs22zz"
+    );
+    assert_eq!(Tid::from_parts(0, 0).as_str(), "2222222222222");
+}
+
+#[test]
+fn minted_tids_parse_and_climb() {
+    let mut clock = TidClock::new();
+    let mut previous = clock.mint();
+    for _ in 0..10_000 {
+        let tid = clock.mint();
+        assert!(tid.as_str().parse::<Tid>().is_ok(), "minted {tid}");
+        assert!(tid > previous, "{tid} follows {previous}");
+        previous = tid;
     }
 }
 

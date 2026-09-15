@@ -113,4 +113,4 @@ pub use did::Did;
 pub use handle::Handle;
 pub use nsid::Nsid;
 pub use record_key::RecordKey;
-pub use tid::Tid;
+pub use tid::{Clock as TidClock, Tid};
