@@ -8,8 +8,9 @@ Minimal by intent: the reference server does a great deal this one will not.
 `docs/` carries the reasoning, one file per subject — `roadmap.md` for the
 order of work and what v0 leaves out, `architecture.md` for the process and
 storage shape, `repo.md` for the MST and the crypto, `oauth.md` for the
-authorization server. This file is the orientation for picking the project back
-up; read the doc before changing anything it covers.
+authorization server, `porting.md` for the reference version behind all of it.
+This file is the orientation for picking the project back up; read the doc
+before changing anything it covers.
 
 ## Shape
 
