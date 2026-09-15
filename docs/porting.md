@@ -70,3 +70,11 @@ Upstream opens every connection with no busy timeout and retries around the
 lock in its own loop. Here the timeout is set on the connection and SQLite
 blocks on it. Both wait for the same writer to finish, but one of them is a
 retry loop that has to be right about which errors are worth retrying.
+
+### A signing key is readable by nobody else
+
+Upstream writes the key file at whatever the umask allows, which on a normal
+system means everyone on the box can read it. Here it is set to owner-only
+after the write. An account's key is the one thing that cannot be reissued
+without a PLC operation, so the cost of being strict is a permissions error on
+a badly restored backup and the cost of not being is the account.
