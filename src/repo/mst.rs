@@ -41,7 +41,7 @@ pub struct Leaf {
     pub value: Cid,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum Entry {
     Leaf(Leaf),
     Tree(Mst),
@@ -52,7 +52,7 @@ enum Entry {
 /// Every operation that changes the tree takes it and gives back the changed
 /// one, because a node's identity is its contents: nothing is edited in place
 /// further down than the hash is recomputed.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Mst {
     /// `None` until the node is read from the store.
     entries: Option<Vec<Entry>>,

@@ -1,8 +1,13 @@
 //! The repository layer, against the CIDs the reference publishes.
 
 use manapds::crypto::{Algorithm, Keypair};
-use manapds::repo::{BlockMap, Cid, Commit, Error, Mst, Store, VERSION, cid_for, decode, encode};
-use manapds::syntax::{Did, TidClock};
+use std::collections::BTreeMap;
+
+use manapds::repo::{
+    BlockMap, Cid, Commit, Error, Ipld, Mst, Repo, Store, VERSION, Write, car, cid_for, decode,
+    encode,
+};
+use manapds::syntax::{Did, Nsid, RecordKey, TidClock};
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
@@ -386,4 +391,167 @@ fn a_commit_round_trips_through_a_block() {
             .expect("encodes")
             .starts_with(b"\xa6\x63did")
     );
+}
+
+fn account() -> Did {
+    "did:plc:4cjoyc3cgpal7gnrpzyjhnv3".parse().expect("a DID")
+}
+
+fn collection() -> Nsid {
+    "com.example.record".parse().expect("an NSID")
+}
+
+fn rkey(key: &str) -> RecordKey {
+    key.parse().expect("a record key")
+}
+
+fn post(text: &str) -> Ipld {
+    Ipld::Map(BTreeMap::from([
+        (
+            "$type".to_owned(),
+            Ipld::String("com.example.record".to_owned()),
+        ),
+        ("text".to_owned(), Ipld::String(text.to_owned())),
+    ]))
+}
+
+#[test]
+fn a_repository_survives_the_round_trip_through_a_car() {
+    let key = Keypair::generate(Algorithm::Secp256k1);
+    let mut clock = TidClock::new();
+    let (mut repo, mut store) = Repo::create(account(), &key, &mut clock).expect("creates");
+
+    assert_eq!(repo.verify(&key.public_key()), Ok(()));
+    assert_eq!(repo.records(&store), Ok(Vec::new()));
+    let first = repo.rev().clone();
+
+    let writes = vec![
+        Write::Create {
+            collection: collection(),
+            rkey: rkey("3jqfcqzm4fc2j"),
+            record: post("first"),
+        },
+        Write::Create {
+            collection: collection(),
+            rkey: rkey("3jqfcqzm4fd2j"),
+            record: post("second"),
+        },
+    ];
+    store.merge(
+        repo.apply(&store, &writes, &key, &mut clock)
+            .expect("applies"),
+    );
+
+    assert!(repo.rev() > &first, "{} follows {first}", repo.rev());
+    assert_eq!(repo.records(&store).expect("reads").len(), 2);
+    assert_eq!(repo.verify(&key.public_key()), Ok(()));
+
+    let car = car::write(repo.cid(), &store).expect("writes");
+    let (root, blocks) = car::read(&car).expect("reads");
+    let mut reloaded = Repo::load(&blocks, root).expect("loads");
+
+    assert_eq!(reloaded.cid(), repo.cid());
+    assert_eq!(reloaded.rev(), repo.rev());
+    assert_eq!(reloaded.did(), repo.did());
+    assert_eq!(reloaded.verify(&key.public_key()), Ok(()));
+    assert_eq!(reloaded.records(&blocks), repo.records(&store));
+
+    let found = reloaded
+        .get(&blocks, &collection(), &rkey("3jqfcqzm4fc2j"))
+        .expect("reads")
+        .expect("held");
+    assert_eq!(
+        decode::<Ipld>(&blocks.get(&found).expect("stored")),
+        Ok(post("first"))
+    );
+}
+
+#[test]
+fn a_write_that_fails_leaves_the_revision_where_it_was() {
+    let key = Keypair::generate(Algorithm::Secp256k1);
+    let mut clock = TidClock::new();
+    let (mut repo, mut store) = Repo::create(account(), &key, &mut clock).expect("creates");
+
+    let create = |text| Write::Create {
+        collection: collection(),
+        rkey: rkey("3jqfcqzm4fc2j"),
+        record: post(text),
+    };
+    store.merge(
+        repo.apply(&store, &[create("first")], &key, &mut clock)
+            .expect("applies"),
+    );
+    let settled = repo.cid();
+    let rev = repo.rev().clone();
+
+    // The second write in the batch is the one that cannot land.
+    let clash = repo.apply(
+        &store,
+        &[
+            Write::Delete {
+                collection: collection(),
+                rkey: rkey("3jqfcqzm4fc2j"),
+            },
+            create("again"),
+            create("and again"),
+        ],
+        &key,
+        &mut clock,
+    );
+
+    assert_eq!(
+        clash.err(),
+        Some(Error::KeyExists(
+            "com.example.record/3jqfcqzm4fc2j".to_owned()
+        ))
+    );
+    assert_eq!(repo.cid(), settled);
+    assert_eq!(repo.rev(), &rev);
+    assert_eq!(repo.records(&store).expect("reads").len(), 1);
+}
+
+#[test]
+fn updates_and_deletes_move_the_root() {
+    let key = Keypair::generate(Algorithm::Secp256k1);
+    let mut clock = TidClock::new();
+    let (mut repo, mut store) = Repo::create(account(), &key, &mut clock).expect("creates");
+    let empty = repo.commit().data;
+
+    let created = Write::Create {
+        collection: collection(),
+        rkey: rkey("3jqfcqzm4fc2j"),
+        record: post("first"),
+    };
+    let edited = Write::Update {
+        collection: collection(),
+        rkey: rkey("3jqfcqzm4fc2j"),
+        record: post("edited"),
+    };
+    let deleted = Write::Delete {
+        collection: collection(),
+        rkey: rkey("3jqfcqzm4fc2j"),
+    };
+
+    store.merge(
+        repo.apply(&store, &[created], &key, &mut clock)
+            .expect("applies"),
+    );
+    let after_create = repo.commit().data;
+
+    store.merge(
+        repo.apply(&store, &[edited], &key, &mut clock)
+            .expect("applies"),
+    );
+    assert_ne!(repo.commit().data, after_create);
+
+    store.merge(
+        repo.apply(&store, &[deleted], &key, &mut clock)
+            .expect("applies"),
+    );
+    assert_eq!(
+        repo.commit().data,
+        empty,
+        "an emptied tree is the empty one"
+    );
+    assert_eq!(repo.verify(&key.public_key()), Ok(()));
 }
