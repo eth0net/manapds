@@ -20,8 +20,22 @@ pub enum Error {
     /// Stored bytes are not the shape they were read as.
     #[error("not the dag-cbor expected: {0}")]
     Decode(String),
+    /// A key that is not one collection and one record key.
+    #[error("not a valid tree key: {0}")]
+    InvalidKey(String),
+    /// A write that would land on a key already holding something.
+    #[error("already a record at {0}")]
+    KeyExists(String),
+    /// A write or read against a key the tree does not hold.
+    #[error("no record at {0}")]
+    KeyMissing(String),
+    /// A stored node that no sequence of writes could have produced.
+    #[error("malformed node: {0}")]
+    MalformedNode(&'static str),
 }
 
 mod block;
+mod mst;
 
 pub use block::{BlockMap, Store, cid_for, decode, encode, read};
+pub use mst::{Leaf, Mst};

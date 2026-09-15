@@ -1,6 +1,8 @@
 //! The repository layer, against the CIDs the reference publishes.
 
-use manapds::repo::{BlockMap, Cid, Error, Store, cid_for, decode, encode};
+use manapds::repo::{BlockMap, Cid, Error, Mst, Store, cid_for, decode, encode};
+use manapds::syntax::TidClock;
+use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
 /// The shape of an MST node, which is all this file needs of one: the CID over
@@ -58,4 +60,286 @@ fn blocks_come_back_as_they_went_in() {
 fn a_block_that_is_not_there_says_which() {
     let cid = cid_for(b"\xa0");
     assert_eq!(BlockMap::new().get(&cid), Err(Error::MissingBlock(cid)));
+}
+
+/// The record every tree below points its leaves at; only the keys matter to
+/// the shape, so one CID does for all of them.
+const RECORD: &str = "bafyreie5cvv4h45feadgeuwhbcutmh6t2ceseocckahdoe6uat64zmz454";
+
+/// Roots the reference test suite pins, so agreeing with them is agreeing with
+/// every other server.
+const EMPTY: &str = "bafyreie5737gdxlw5i64vzichcalba3z2v5n6icifvx5xytvske7mr3hpm";
+const TRIVIAL: &str = "bafyreibj4lsc3aqnrvphp5xmrnfoorvru4wynt6lwidqbm2623a6tatzdu";
+const SINGLE_LAYER_2: &str = "bafyreih7wfei65pxzhauoibu3ls7jgmkju4bspy4t2ha2qdjnzqvoy33ai";
+const SIMPLE: &str = "bafyreicmahysq4n6wfuxo522m6dpiy7z7qzym3dzs756t5n7nfdgccwq7m";
+
+fn record() -> Cid {
+    RECORD.parse().expect("a CID")
+}
+
+fn tree_of(keys: &[&str]) -> Mst {
+    let mut mst = Mst::empty();
+    for key in keys {
+        mst = mst.add(&BlockMap::new(), key, record()).expect("adds");
+    }
+    mst
+}
+
+fn root_of(mst: &mut Mst) -> String {
+    mst.root(&BlockMap::new()).expect("hashes").to_string()
+}
+
+#[test]
+fn known_maps_hash_to_the_published_roots() {
+    assert_eq!(root_of(&mut tree_of(&[])), EMPTY);
+    assert_eq!(
+        root_of(&mut tree_of(&["com.example.record/3jqfcqzm3fo2j"])),
+        TRIVIAL
+    );
+    assert_eq!(
+        root_of(&mut tree_of(&["com.example.record/3jqfcqzm3fx2j"])),
+        SINGLE_LAYER_2
+    );
+    assert_eq!(
+        root_of(&mut tree_of(&[
+            "com.example.record/3jqfcqzm3fp2j",
+            "com.example.record/3jqfcqzm3fr2j",
+            "com.example.record/3jqfcqzm3fs2j",
+            "com.example.record/3jqfcqzm3ft2j",
+            "com.example.record/3jqfcqzm4fc2j",
+        ])),
+        SIMPLE
+    );
+}
+
+#[test]
+fn insertion_order_does_not_show() {
+    let forwards = &[
+        "com.example.record/3jqfcqzm3fp2j",
+        "com.example.record/3jqfcqzm3fr2j",
+        "com.example.record/3jqfcqzm3fs2j",
+        "com.example.record/3jqfcqzm3ft2j",
+        "com.example.record/3jqfcqzm4fc2j",
+    ];
+    let mut backwards: Vec<&str> = forwards.to_vec();
+    backwards.reverse();
+    assert_eq!(root_of(&mut tree_of(&backwards)), SIMPLE);
+}
+
+#[test]
+fn deleting_the_top_layer_trims_it() {
+    let store = BlockMap::new();
+    let mut mst = tree_of(&[
+        "com.example.record/3jqfcqzm3fn2j",
+        "com.example.record/3jqfcqzm3fo2j",
+        "com.example.record/3jqfcqzm3fp2j",
+        "com.example.record/3jqfcqzm3fs2j",
+        "com.example.record/3jqfcqzm3ft2j",
+        "com.example.record/3jqfcqzm3fu2j",
+    ]);
+    assert_eq!(
+        root_of(&mut mst),
+        "bafyreifnqrwbk6ffmyaz5qtujqrzf5qmxf7cbxvgzktl4e3gabuxbtatv4"
+    );
+
+    let mut mst = mst
+        .delete(&store, "com.example.record/3jqfcqzm3fs2j")
+        .expect("deletes");
+    assert_eq!(mst.leaves(&store).expect("reads").len(), 5);
+    assert_eq!(
+        root_of(&mut mst),
+        "bafyreie4kjuxbwkhzg2i5dljaswcroeih4dgiqq6pazcmunwt2byd725vi"
+    );
+}
+
+#[test]
+fn an_insert_splits_two_layers_down() {
+    let store = BlockMap::new();
+    let l1 = "bafyreiettyludka6fpgp33stwxfuwhkzlur6chs4d2v4nkmq2j3ogpdjem";
+    let l2 = "bafyreid2x5eqs4w4qxvc5jiwda4cien3gw2q6cshofxwnvv7iucrmfohpm";
+    // F, at layer 2, is the gap in the middle.
+    let mut mst = tree_of(&[
+        "com.example.record/3jqfcqzm3fo2j",
+        "com.example.record/3jqfcqzm3fp2j",
+        "com.example.record/3jqfcqzm3fr2j",
+        "com.example.record/3jqfcqzm3fs2j",
+        "com.example.record/3jqfcqzm3ft2j",
+        "com.example.record/3jqfcqzm3fz2j",
+        "com.example.record/3jqfcqzm4fc2j",
+        "com.example.record/3jqfcqzm4fd2j",
+        "com.example.record/3jqfcqzm4ff2j",
+        "com.example.record/3jqfcqzm4fg2j",
+        "com.example.record/3jqfcqzm4fh2j",
+    ]);
+    assert_eq!(root_of(&mut mst), l1);
+
+    let mut mst = mst
+        .add(&store, "com.example.record/3jqfcqzm3fx2j", record())
+        .expect("adds");
+    assert_eq!(mst.leaves(&store).expect("reads").len(), 12);
+    assert_eq!(root_of(&mut mst), l2);
+
+    let mut mst = mst
+        .delete(&store, "com.example.record/3jqfcqzm3fx2j")
+        .expect("deletes");
+    assert_eq!(root_of(&mut mst), l1);
+}
+
+#[test]
+fn a_new_layer_can_be_two_above_the_old_one() {
+    let store = BlockMap::new();
+    let l0 = "bafyreidfcktqnfmykz2ps3dbul35pepleq7kvv526g47xahuz3rqtptmky";
+    let l2 = "bafyreiavxaxdz7o7rbvr3zg2liox2yww46t7g6hkehx4i4h3lwudly7dhy";
+    let with_d = "bafyreig4jv3vuajbsybhyvb7gggvpwh2zszwfyttjrj6qwvcsp24h6popu";
+
+    let mut mst = tree_of(&[
+        "com.example.record/3jqfcqzm3ft2j",
+        "com.example.record/3jqfcqzm3fz2j",
+    ]);
+    assert_eq!(root_of(&mut mst), l0);
+
+    let mut mst = mst
+        .add(&store, "com.example.record/3jqfcqzm3fx2j", record())
+        .expect("adds");
+    assert_eq!(root_of(&mut mst), l2);
+
+    let mut mst = mst
+        .delete(&store, "com.example.record/3jqfcqzm3fx2j")
+        .expect("deletes");
+    assert_eq!(root_of(&mut mst), l0);
+
+    let mut mst = mst
+        .add(&store, "com.example.record/3jqfcqzm3fx2j", record())
+        .expect("adds")
+        .add(&store, "com.example.record/3jqfcqzm4fd2j", record())
+        .expect("adds");
+    assert_eq!(root_of(&mut mst), with_d);
+
+    let mut mst = mst
+        .delete(&store, "com.example.record/3jqfcqzm4fd2j")
+        .expect("deletes");
+    assert_eq!(root_of(&mut mst), l2);
+}
+
+#[test]
+fn keys_are_a_collection_and_a_record_key() {
+    let store = BlockMap::new();
+    for key in [
+        "coll/3jui7kd54zh2y",
+        "coll/self",
+        "coll/example.com",
+        "com.example/rkey",
+        "coll/~1.2-3_",
+        "coll/dHJ1ZQ",
+        "coll/pre:fix",
+        "coll/_",
+    ] {
+        assert!(Mst::empty().add(&store, key, record()).is_ok(), "{key}");
+    }
+    for key in [
+        "",
+        "asdf",
+        "nested/collection/asdf",
+        "coll/",
+        "/rkey",
+        "coll/jalapeñoA",
+        "coll/coöperative",
+        "coll/abc💩",
+        "coll/key$",
+        "coll/key%",
+        "coll/key(",
+        "coll/key)",
+        "coll/key+",
+        "coll/key=",
+        "coll/@handle",
+        "coll/any space",
+        "coll/#extra",
+        "coll/any+space",
+        "coll/number[3]",
+        "coll/number(3)",
+        "coll/dHJ1ZQ==",
+        "coll/\"quote\"",
+        &format!("coll/{}", "a".repeat(1025)),
+    ] {
+        assert_eq!(
+            Mst::empty().add(&store, key, record()).err(),
+            Some(Error::InvalidKey(key.to_owned())),
+            "{key}"
+        );
+    }
+}
+
+#[test]
+fn a_stored_tree_reads_back_the_same() {
+    let keys = [
+        "com.example.record/3jqfcqzm3fo2j",
+        "com.example.record/3jqfcqzm3fp2j",
+        "com.example.record/3jqfcqzm3fr2j",
+        "com.example.record/3jqfcqzm3fs2j",
+        "com.example.record/3jqfcqzm3ft2j",
+        "com.example.record/3jqfcqzm3fz2j",
+        "com.example.record/3jqfcqzm4fc2j",
+        "com.example.record/3jqfcqzm4fd2j",
+    ];
+    let mut built = tree_of(&keys);
+    let (root, blocks) = built.unstored_blocks(&BlockMap::new()).expect("hashes");
+
+    let mut loaded = Mst::load(root);
+    assert_eq!(loaded.root(&blocks).expect("hashes"), root);
+    let read: Vec<String> = loaded
+        .leaves(&blocks)
+        .expect("reads")
+        .into_iter()
+        .map(|leaf| leaf.key)
+        .collect();
+    assert_eq!(read, keys);
+
+    assert_eq!(loaded.get(&blocks, keys[3]).expect("reads"), Some(record()));
+    assert_eq!(loaded.get(&blocks, "com.example.record/nope"), Ok(None));
+}
+
+#[test]
+fn a_thousand_records_survive_a_shuffle() {
+    let store = BlockMap::new();
+    let mut clock = TidClock::new();
+    let keys: Vec<String> = (0..1000)
+        .map(|_| format!("com.example.record/{}", clock.mint()))
+        .collect();
+
+    let mut ordered = tree_of(&keys.iter().map(String::as_str).collect::<Vec<_>>());
+    let root = root_of(&mut ordered);
+
+    let mut shuffled = keys.clone();
+    shuffled.shuffle(&mut rand::rng());
+    let mut rebuilt = tree_of(&shuffled.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(root_of(&mut rebuilt), root);
+
+    let mut emptied = rebuilt;
+    for key in &shuffled {
+        emptied = emptied.delete(&store, key).expect("deletes");
+    }
+    assert_eq!(root_of(&mut emptied), EMPTY);
+}
+
+#[test]
+fn a_key_is_written_once_and_edited_after() {
+    let store = BlockMap::new();
+    let key = "com.example.record/3jqfcqzm3fo2j";
+    let other = cid_for(b"\xa0");
+
+    let mst = Mst::empty().add(&store, key, record()).expect("adds");
+    assert_eq!(
+        mst.add(&store, key, other).err(),
+        Some(Error::KeyExists(key.to_owned()))
+    );
+
+    let mst = Mst::empty().add(&store, key, record()).expect("adds");
+    let mut mst = mst.update(&store, key, other).expect("updates");
+    assert_eq!(mst.get(&store, key), Ok(Some(other)));
+
+    let missing = "com.example.record/3jqfcqzm3fp2j";
+    assert_eq!(
+        mst.update(&store, missing, other).err(),
+        Some(Error::KeyMissing(missing.to_owned()))
+    );
 }
