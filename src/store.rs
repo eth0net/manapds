@@ -28,10 +28,12 @@ pub enum Error {
     TooNew(String),
 }
 
+mod accounts;
 mod actor;
 mod db;
 mod sequencer;
 
+pub use accounts::{Account, Accounts};
 pub use actor::{Actor, Root};
 pub use sequencer::{Entry, Event, Sequencer};
 

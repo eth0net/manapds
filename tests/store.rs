@@ -5,7 +5,7 @@ use std::path::Path;
 
 use manapds::crypto::{Algorithm, Keypair};
 use manapds::repo::{Ipld, Repo, Store, Write};
-use manapds::store::{Actor, Directory, Error, Event, Root, Sequencer};
+use manapds::store::{Account, Accounts, Actor, Directory, Error, Event, Root, Sequencer};
 use manapds::syntax::{Did, Nsid, RecordKey, TidClock};
 use rusqlite::Connection;
 
@@ -282,5 +282,91 @@ fn the_log_keeps_its_numbering_across_a_reopen() {
             .expect("writes")
             > last,
         "a restart must not rewind the sequence"
+    );
+}
+
+fn registration(handle: &str, email: &str) -> Account {
+    Account {
+        did: account(),
+        handle: Some(handle.parse().expect("a handle")),
+        email: email.to_owned(),
+        password_scrypt: "not a real hash".to_owned(),
+    }
+}
+
+#[test]
+fn an_account_reads_back_by_did_or_handle() {
+    let mut accounts = Accounts::memory().expect("opens");
+    let registered = registration("alice.example.com", "alice@example.com");
+    accounts.create(&registered).expect("creates");
+
+    assert_eq!(
+        accounts.by_did(&account()).expect("reads"),
+        Some(registered.clone())
+    );
+    assert_eq!(
+        accounts
+            .by_handle(&"alice.example.com".parse().expect("a handle"))
+            .expect("reads"),
+        Some(registered)
+    );
+    assert_eq!(
+        accounts
+            .by_handle(&"bob.example.com".parse().expect("a handle"))
+            .expect("reads"),
+        None
+    );
+}
+
+#[test]
+fn a_handle_is_taken_whatever_case_it_is_asked_in() {
+    let mut accounts = Accounts::memory().expect("opens");
+    accounts
+        .create(&registration("alice.example.com", "alice@example.com"))
+        .expect("creates");
+
+    // The unique index is over lower("handle"), so this is the schema
+    // refusing rather than the query.
+    let mut clash = registration("ALICE.example.com", "other@example.com");
+    clash.did = "did:plc:zzzzzzzzzzzzzzzzzzzzzzzz".parse().expect("a DID");
+    assert!(accounts.create(&clash).is_err());
+
+    let found = accounts
+        .by_handle(&"alice.example.com".parse().expect("a handle"))
+        .expect("reads")
+        .expect("held");
+    assert_eq!(found.email, "alice@example.com");
+}
+
+#[test]
+fn an_email_is_taken_whatever_case_it_is_given_in() {
+    let mut accounts = Accounts::memory().expect("opens");
+    accounts
+        .create(&registration("alice.example.com", "alice@example.com"))
+        .expect("creates");
+
+    let mut clash = registration("bob.example.com", "ALICE@example.com");
+    clash.did = "did:plc:zzzzzzzzzzzzzzzzzzzzzzzz".parse().expect("a DID");
+    assert!(accounts.create(&clash).is_err());
+}
+
+#[test]
+fn the_account_database_refuses_the_oauth_migrations() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let path = home.path().join("account.sqlite");
+    Accounts::open(&path).expect("opens");
+
+    Connection::open(&path)
+        .expect("opens")
+        .execute(
+            r#"insert into "kysely_migration" ("name", "timestamp") values ('004', '')"#,
+            [],
+        )
+        .expect("writes");
+
+    let refused = Accounts::open(&path);
+    assert!(
+        matches!(refused, Err(Error::TooNew(ref name)) if name == "004"),
+        "{refused:?}"
     );
 }
