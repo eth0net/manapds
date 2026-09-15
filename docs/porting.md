@@ -42,3 +42,24 @@ are all refused. Upstream still accepts them through entry points it has
 marked deprecated. Nothing current emits any of the three, so refusing them
 costs a caller that was already living on borrowed time, and it buys an
 `AtUri` that prints back exactly what it parsed.
+
+### Commits are version 3 and parsed all the way down
+
+The DID and the `rev` in a stored commit become a `Did` and a `Tid` as the
+block is read, so a commit naming neither is caught where it is read instead
+of somewhere later that assumed. Version 2 is rejected outright where upstream
+still lifts it; every repository old enough to hold one was migrated years
+before this server existed.
+
+### CAR files name one root and prove every block
+
+Upstream takes any number of roots and will skip the hash check on request.
+Here a file has exactly one root and each block is hashed against the CID it
+arrived under, which is what stops an import quietly installing a block that
+is not what it claims.
+
+### TIDs use the whole clock id
+
+Ten bits are reserved for it and upstream randomizes five of them. Filling the
+field costs nothing and pushes out the point where two servers minting in the
+same microsecond land on the same TID.
