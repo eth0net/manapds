@@ -3,6 +3,7 @@
 //! The binary wires these together; each module is usable without a socket.
 
 pub mod config;
+pub mod crypto;
 pub mod server;
 pub mod syntax;
 pub mod xrpc;
