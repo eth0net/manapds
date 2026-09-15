@@ -14,11 +14,14 @@ default_install_hook_types = ["pre-commit", "pre-push", "commit-msg"]
 [[repos]]
 repo = "builtin"
 hooks = [
-  { id = "trailing-whitespace", args = ["--markdown-linebreak-ext=md"] },
-  { id = "end-of-file-fixer" },
+  # Whitespace carries meaning in the vendored vectors — a trailing space is
+  # what several of them are testing — so the three that rewrite it stop short
+  # of `tests/fixtures`.
+  { id = "trailing-whitespace", args = ["--markdown-linebreak-ext=md"], exclude = '^tests/fixtures/' },
+  { id = "end-of-file-fixer", exclude = '^tests/fixtures/' },
   # .gitattributes pins the working tree to LF; this catches a file that
   # slipped in before it applied.
-  { id = "mixed-line-ending", args = ["--fix=lf"] },
+  { id = "mixed-line-ending", args = ["--fix=lf"], exclude = '^tests/fixtures/' },
   { id = "check-merge-conflict" },
   { id = "check-case-conflict" },
   # Windows is a supported target and a CI platform, so a path that cannot

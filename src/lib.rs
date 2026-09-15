@@ -4,4 +4,5 @@
 
 pub mod config;
 pub mod server;
+pub mod syntax;
 pub mod xrpc;
