@@ -28,6 +28,11 @@ not by what is interesting.
    `listRepos`, `getRepoStatus` — what a relay or another server fetches,
    without yet holding a socket open.
 
+The first tag waits for step 6. That is the earliest point another person can
+start this and have a client sign in and read something back, and a version
+number before then would be marking a library nobody can run. The README has to
+say how to start it by the same commit, or the tag claims more than it delivers.
+
 Rate limits land with step 6 rather than later, at the reference's numbers:
 `applyWrites` capped at 200 operations, and the hourly and daily point budgets
 that decide how long a large import takes. An importer tuned against limits
