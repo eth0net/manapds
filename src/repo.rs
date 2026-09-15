@@ -38,9 +38,16 @@ pub enum Error {
     /// A commit the key offered did not sign.
     #[error("commit signature: {0}")]
     Signature(#[from] crate::crypto::Error),
+    /// A CAR file that does not parse as one.
+    #[error("malformed CAR: {0}")]
+    MalformedCar(&'static str),
+    /// A block that is not what the CID over it says it is.
+    #[error("{0} is not the CID of the bytes under it")]
+    WrongCid(Cid),
 }
 
 mod block;
+pub mod car;
 mod commit;
 mod mst;
 
