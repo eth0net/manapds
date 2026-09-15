@@ -30,8 +30,10 @@ pub enum Error {
 
 mod actor;
 mod db;
+mod sequencer;
 
 pub use actor::{Actor, Root};
+pub use sequencer::{Entry, Event, Sequencer};
 
 /// The data directory, and where each thing under it lives.
 #[derive(Clone, Debug)]
