@@ -1,7 +1,8 @@
 //! The repository layer, against the CIDs the reference publishes.
 
-use manapds::repo::{BlockMap, Cid, Error, Mst, Store, cid_for, decode, encode};
-use manapds::syntax::TidClock;
+use manapds::crypto::{Algorithm, Keypair};
+use manapds::repo::{BlockMap, Cid, Commit, Error, Mst, Store, VERSION, cid_for, decode, encode};
+use manapds::syntax::{Did, TidClock};
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
@@ -341,5 +342,48 @@ fn a_key_is_written_once_and_edited_after() {
     assert_eq!(
         mst.update(&store, missing, other).err(),
         Some(Error::KeyMissing(missing.to_owned()))
+    );
+}
+
+#[test]
+fn a_commit_verifies_against_the_key_that_signed_it() {
+    let key = Keypair::generate(Algorithm::Secp256k1);
+    let did: Did = "did:plc:4cjoyc3cgpal7gnrpzyjhnv3".parse().expect("a DID");
+    let commit = Commit::sign(did, TidClock::new().mint(), record(), &key).expect("signs");
+
+    assert_eq!(commit.version, VERSION);
+    assert_eq!(commit.prev, None);
+    assert_eq!(commit.sig.len(), 64);
+    assert_eq!(commit.verify(&key.public_key()), Ok(()));
+
+    let elsewhere = Keypair::generate(Algorithm::Secp256k1);
+    assert!(commit.verify(&elsewhere.public_key()).is_err());
+
+    let mut moved = commit.clone();
+    moved.data = cid_for(b"\xa0");
+    assert!(moved.verify(&key.public_key()).is_err());
+
+    let mut aged = commit;
+    aged.version = 2;
+    assert_eq!(aged.verify(&key.public_key()), Err(Error::WrongVersion(2)));
+}
+
+#[test]
+fn a_commit_round_trips_through_a_block() {
+    let key = Keypair::generate(Algorithm::Secp256k1);
+    let did: Did = "did:plc:4cjoyc3cgpal7gnrpzyjhnv3".parse().expect("a DID");
+    let commit = Commit::sign(did, TidClock::new().mint(), record(), &key).expect("signs");
+
+    let mut blocks = BlockMap::new();
+    let cid = blocks.add(&commit).expect("encodes");
+    let read: Commit = decode(&blocks.get(&cid).expect("stored")).expect("decodes");
+
+    assert_eq!(read, commit);
+    assert_eq!(read.verify(&key.public_key()), Ok(()));
+    // Six keys, shortest first, so the signature covers a known byte order.
+    assert!(
+        encode(&commit)
+            .expect("encodes")
+            .starts_with(b"\xa6\x63did")
     );
 }

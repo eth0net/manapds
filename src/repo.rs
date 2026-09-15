@@ -32,10 +32,18 @@ pub enum Error {
     /// A stored node that no sequence of writes could have produced.
     #[error("malformed node: {0}")]
     MalformedNode(&'static str),
+    /// A commit at a version this server does not read.
+    #[error("commit is version {0}, not 3")]
+    WrongVersion(u8),
+    /// A commit the key offered did not sign.
+    #[error("commit signature: {0}")]
+    Signature(#[from] crate::crypto::Error),
 }
 
 mod block;
+mod commit;
 mod mst;
 
 pub use block::{BlockMap, Store, cid_for, decode, encode, read};
+pub use commit::{Commit, VERSION};
 pub use mst::{Leaf, Mst};
