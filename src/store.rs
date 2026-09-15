@@ -26,15 +26,20 @@ pub enum Error {
     /// A database migrated past what this server can read.
     #[error("schema is at {0}, which is newer than this server")]
     TooNew(String),
+    /// A blob whose bytes are not what its CID says.
+    #[error("{0} is not the CID of the bytes under it")]
+    WrongCid(ipld_core::cid::Cid),
 }
 
 mod accounts;
 mod actor;
+pub mod blobs;
 mod db;
 mod sequencer;
 
 pub use accounts::{Account, Accounts};
 pub use actor::{Actor, Root};
+pub use blobs::Blobs;
 pub use sequencer::{Entry, Event, Sequencer};
 
 /// The data directory, and where each thing under it lives.
@@ -86,6 +91,13 @@ impl Directory {
     #[must_use]
     pub fn actor_key(&self, did: &Did) -> PathBuf {
         self.actor(did).join("key")
+    }
+
+    /// Every account's blobs. Named for the blocks it does not hold, because
+    /// that is what the deployment scripts already set.
+    #[must_use]
+    pub fn blobs(&self) -> Blobs {
+        Blobs::new(self.0.join("blocks"))
     }
 }
 

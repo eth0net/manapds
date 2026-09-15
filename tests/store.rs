@@ -5,6 +5,7 @@ use std::path::Path;
 
 use manapds::crypto::{Algorithm, Keypair};
 use manapds::repo::{Ipld, Repo, Store, Write};
+use manapds::store::blobs;
 use manapds::store::{Account, Accounts, Actor, Directory, Error, Event, Root, Sequencer};
 use manapds::syntax::{Did, Nsid, RecordKey, TidClock};
 use rusqlite::Connection;
@@ -369,4 +370,70 @@ fn the_account_database_refuses_the_oauth_migrations() {
         matches!(refused, Err(Error::TooNew(ref name)) if name == "004"),
         "{refused:?}"
     );
+}
+
+#[test]
+fn a_blob_is_stored_under_the_cid_of_its_bytes() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let blobs = Directory::new(home.path()).blobs();
+    let bytes = b"not really a picture";
+    let cid = blobs::cid_for(bytes);
+
+    assert!(!blobs.has(&account(), &cid));
+    blobs.put(&account(), &cid, bytes).expect("stores");
+    assert!(blobs.has(&account(), &cid));
+    assert_eq!(blobs.get(&account(), &cid).expect("reads"), bytes);
+
+    // The reference lays them out as <blocks>/<did>/<cid>.
+    assert_eq!(
+        blobs.path(&account(), &cid),
+        home.path()
+            .join("blocks")
+            .join("did:plc:4cjoyc3cgpal7gnrpzyjhnv3")
+            .join(cid.to_string())
+    );
+
+    // Upstream spells the temporary directory "tempt", and a blob lands there
+    // before its CID is known.
+    assert_eq!(
+        blobs.temp_path(&account(), "somekey"),
+        home.path()
+            .join("blocks")
+            .join("tempt")
+            .join("did:plc:4cjoyc3cgpal7gnrpzyjhnv3")
+            .join("somekey")
+    );
+
+    blobs.delete(&account(), &cid).expect("deletes");
+    assert!(!blobs.has(&account(), &cid));
+    blobs
+        .delete(&account(), &cid)
+        .expect("deleting twice is quiet");
+}
+
+#[test]
+fn bytes_that_are_not_their_cid_are_refused() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let blobs = Directory::new(home.path()).blobs();
+    let cid = blobs::cid_for(b"one thing");
+
+    assert!(blobs.put(&account(), &cid, b"another thing").is_err());
+    assert!(!blobs.has(&account(), &cid));
+}
+
+#[test]
+fn quarantine_hides_a_blob_without_losing_it() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let blobs = Directory::new(home.path()).blobs();
+    let bytes = b"not really a picture";
+    let cid = blobs::cid_for(bytes);
+    blobs.put(&account(), &cid, bytes).expect("stores");
+
+    blobs.quarantine(&account(), &cid).expect("quarantines");
+    assert!(!blobs.has(&account(), &cid));
+    assert!(blobs.quarantine_path(&account(), &cid).is_file());
+
+    blobs.unquarantine(&account(), &cid).expect("restores");
+    assert!(blobs.has(&account(), &cid));
+    assert_eq!(blobs.get(&account(), &cid).expect("reads"), bytes);
 }
