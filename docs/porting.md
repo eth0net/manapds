@@ -63,3 +63,10 @@ is not what it claims.
 Ten bits are reserved for it and upstream randomizes five of them. Filling the
 field costs nothing and pushes out the point where two servers minting in the
 same microsecond land on the same TID.
+
+### SQLite is left to do its own waiting
+
+Upstream opens every connection with no busy timeout and retries around the
+lock in its own loop. Here the timeout is set on the connection and SQLite
+blocks on it. Both wait for the same writer to finish, but one of them is a
+retry loop that has to be right about which errors are worth retrying.
