@@ -16,16 +16,21 @@ publish = false
 [dependencies]
 axum = "0.8.9"
 bs58 = "0.5.1"
+ipld-core = { version = "0.4.3", features = ["serde"] }
 k256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std"] }
 p256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std"] }
 rand = "0.10.2"
 serde = { version = "1.0.229", features = ["derive"] }
+serde_bytes = "0.11.19"
+serde_ipld_dagcbor = "0.7.0"
 serde_json = "1.0.151"
+sha2 = "0.11.0"
 thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal"] }
 tower-http = { version = "0.6.11", features = ["trace"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+unsigned-varint = "0.8.0"
 
 [lints.rust]
 missing_debug_implementations = "warn"
