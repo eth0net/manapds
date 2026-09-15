@@ -29,6 +29,7 @@ pub enum Error {
 }
 
 mod actor;
+mod db;
 
 pub use actor::{Actor, Root};
 

@@ -9,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::repo::{BlockMap, Store};
 use crate::syntax::{Did, Tid};
 
-use super::Error;
+use super::{Error, db};
 
 /// The schema as the reference's first migration leaves it. Kysely quotes its
 /// identifiers and writes `varchar`, and both are kept so that a server reading
@@ -36,19 +36,8 @@ create index "backlink_link_to_idx" on "backlink" ("path", "linkTo");
 create table "account_pref" ("id" integer primary key autoincrement, "name" varchar not null, "valueJson" text not null);
 "#;
 
-/// The ledger the reference's migrator keeps, which has to be written for that
-/// server to agree this database is already migrated.
-const LEDGER: &str = r#"
-create table if not exists "kysely_migration" ("name" varchar(255) primary key not null, "timestamp" varchar(255) not null);
-create table if not exists "kysely_migration_lock" ("id" varchar(255) primary key not null, "is_locked" integer default 0 not null);
-insert or ignore into "kysely_migration_lock" ("id", "is_locked") values ('migration_lock', 0);
-"#;
-
 /// Every migration this server knows, in the order they are applied.
-const MIGRATIONS: [(&str, &str); 1] = [("001", SCHEMA)];
-
-/// How long to wait for another writer before giving up.
-const BUSY_TIMEOUT_MS: u32 = 5_000;
+const MIGRATIONS: [db::Migration; 1] = [("001", SCHEMA)];
 
 /// Where a repository has got to.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -75,10 +64,10 @@ impl Actor {
     /// If the directory cannot be made, the file cannot be opened, or the
     /// database has been migrated past what this server reads.
     pub fn open(path: &Path, did: Did) -> Result<Self, Error> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        Self::from_connection(Connection::open(path)?, did)
+        Ok(Self {
+            did,
+            db: db::open(path, &MIGRATIONS)?,
+        })
     }
 
     /// A store held in memory, which is what tests want and nothing else does.
@@ -87,49 +76,10 @@ impl Actor {
     ///
     /// If SQLite will not open a database at all.
     pub fn memory(did: Did) -> Result<Self, Error> {
-        Self::from_connection(Connection::open_in_memory()?, did)
-    }
-
-    fn from_connection(db: Connection, did: Did) -> Result<Self, Error> {
-        db.busy_timeout(std::time::Duration::from_millis(u64::from(BUSY_TIMEOUT_MS)))?;
-        // The reference waits in its own retry loop instead; SQLite's own wait
-        // gets to the same place without one.
-        db.pragma_update(None, "journal_mode", "WAL")?;
-        let mut store = Self { did, db };
-        store.migrate()?;
-        Ok(store)
-    }
-
-    /// Brings the database up to the schema this server reads.
-    fn migrate(&mut self) -> Result<(), Error> {
-        self.db.execute_batch(LEDGER)?;
-        let applied: Vec<String> = self
-            .db
-            .prepare(r#"select "name" from "kysely_migration" order by "name""#)?
-            .query_map([], |row| row.get(0))?
-            .collect::<Result<_, _>>()?;
-
-        if let Some(unknown) = applied
-            .iter()
-            .find(|name| !MIGRATIONS.iter().any(|(known, _)| known == name))
-        {
-            return Err(Error::TooNew(unknown.clone()));
-        }
-
-        let stamp = jiff::Timestamp::now();
-        let transaction = self.db.transaction()?;
-        for (name, schema) in MIGRATIONS {
-            if applied.iter().any(|done| done == name) {
-                continue;
-            }
-            transaction.execute_batch(schema)?;
-            transaction.execute(
-                r#"insert into "kysely_migration" ("name", "timestamp") values (?1, ?2)"#,
-                params![name, format!("{stamp:.3}")],
-            )?;
-        }
-        transaction.commit()?;
-        Ok(())
+        Ok(Self {
+            did,
+            db: db::memory(&MIGRATIONS)?,
+        })
     }
 
     /// The commit the repository is on, or `None` before the first one.
