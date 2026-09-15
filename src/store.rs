@@ -35,11 +35,13 @@ mod accounts;
 mod actor;
 pub mod blobs;
 mod db;
+mod did_cache;
 mod sequencer;
 
 pub use accounts::{Account, Accounts};
 pub use actor::{Actor, Root};
 pub use blobs::Blobs;
+pub use did_cache::{Cached, DidCache};
 pub use sequencer::{Entry, Event, Sequencer};
 
 /// The data directory, and where each thing under it lives.

@@ -6,7 +6,9 @@ use std::path::Path;
 use manapds::crypto::{Algorithm, Keypair};
 use manapds::repo::{Ipld, Repo, Store, Write};
 use manapds::store::blobs;
-use manapds::store::{Account, Accounts, Actor, Directory, Error, Event, Root, Sequencer};
+use manapds::store::{
+    Account, Accounts, Actor, DidCache, Directory, Error, Event, Root, Sequencer,
+};
 use manapds::syntax::{Did, Nsid, RecordKey, TidClock};
 use rusqlite::Connection;
 
@@ -436,4 +438,31 @@ fn quarantine_hides_a_blob_without_losing_it() {
     blobs.unquarantine(&account(), &cid).expect("restores");
     assert!(blobs.has(&account(), &cid));
     assert_eq!(blobs.get(&account(), &cid).expect("reads"), bytes);
+}
+
+#[test]
+fn a_cached_document_comes_back_with_its_age() {
+    let cache = DidCache::memory().expect("opens");
+    let before = jiff::Timestamp::now().as_millisecond();
+    assert_eq!(cache.get(&account()).expect("reads"), None);
+
+    cache.put(&account(), r#"{"id":"one"}"#).expect("writes");
+    let held = cache.get(&account()).expect("reads").expect("held");
+    assert_eq!(held.document, r#"{"id":"one"}"#);
+    assert!(held.updated_at >= before, "the write time is recorded");
+
+    cache
+        .put(&account(), r#"{"id":"two"}"#)
+        .expect("overwrites");
+    assert_eq!(
+        cache
+            .get(&account())
+            .expect("reads")
+            .expect("held")
+            .document,
+        r#"{"id":"two"}"#
+    );
+
+    cache.forget(&account()).expect("forgets");
+    assert_eq!(cache.get(&account()).expect("reads"), None);
 }
