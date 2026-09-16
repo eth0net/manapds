@@ -43,6 +43,14 @@ marked deprecated. Nothing current emits any of the three, so refusing them
 costs a caller that was already living on borrowed time, and it buys an
 `AtUri` that prints back exactly what it parsed.
 
+### The OAuth tables exist before the OAuth server does
+
+Nothing here serves OAuth yet, but the account database is migrated all the way
+to 007 regardless. A database half-migrated is one neither server can open: the
+reference would refuse to run migrations it thinks are applied, and this one
+would refuse a schema it does not recognize. The tables cost a few hundred bytes
+and being the shape the other server expects is the whole point of matching it.
+
 ### Commits are version 3 and parsed all the way down
 
 The DID and the `rev` in a stored commit become a `Did` and a `Tid` as the
