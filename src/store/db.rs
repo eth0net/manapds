@@ -9,8 +9,8 @@ use super::Error;
 /// The ledger the reference's migrator keeps. Writing it is what lets that
 /// server open the same file and agree it is already migrated.
 const LEDGER: &str = r#"
-create table if not exists "kysely_migration" ("name" varchar(255) primary key not null, "timestamp" varchar(255) not null);
-create table if not exists "kysely_migration_lock" ("id" varchar(255) primary key not null, "is_locked" integer default 0 not null);
+create table if not exists "kysely_migration" ("name" varchar(255) not null primary key, "timestamp" varchar(255) not null);
+create table if not exists "kysely_migration_lock" ("id" varchar(255) not null primary key, "is_locked" integer default 0 not null);
 insert or ignore into "kysely_migration_lock" ("id", "is_locked") values ('migration_lock', 0);
 "#;
 

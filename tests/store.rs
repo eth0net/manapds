@@ -490,3 +490,86 @@ fn a_signing_key_survives_the_file_it_is_kept_in() {
         assert_eq!(mode & 0o777, 0o600, "nobody else reads a signing key");
     }
 }
+
+/// The schema a database ends up with, in the form the fixtures hold.
+fn schema(path: &std::path::Path) -> Vec<String> {
+    let db = Connection::open(path).expect("opens");
+    let mut objects: Vec<String> = db
+        .prepare(r#"select "sql" from "sqlite_master" where "sql" is not null"#)
+        .expect("prepares")
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("queries")
+        .collect::<Result<_, _>>()
+        .expect("reads");
+    objects.retain(|sql| !sql.starts_with("CREATE TABLE sqlite_sequence"));
+    objects.sort();
+    objects
+}
+
+fn reference_schema(name: &str) -> Vec<String> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/schema")
+        .join(format!("{name}.sql"));
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    // `.schema` ends each statement with a semicolon; `sqlite_master` does not.
+    let mut objects: Vec<String> = text
+        .lines()
+        .map(|line| line.trim_end_matches(';').to_owned())
+        .collect();
+    objects.sort();
+    objects
+}
+
+#[test]
+fn every_schema_is_the_one_the_reference_builds() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let at = |name: &str| home.path().join(format!("{name}.sqlite"));
+
+    Actor::open(&at("actor"), account()).expect("opens");
+    Sequencer::open(&at("sequencer")).expect("opens");
+    DidCache::open(&at("did_cache")).expect("opens");
+    for name in ["actor", "sequencer", "did_cache"] {
+        assert_eq!(schema(&at(name)), reference_schema(name), "{name}");
+    }
+
+    // The account database stops at 003; 004 to 007 are the OAuth tables.
+    // Everything it does build has to be what the reference built.
+    Accounts::open(&at("account")).expect("opens");
+    let ours = schema(&at("account"));
+    let theirs = reference_schema("account");
+    for object in &ours {
+        assert!(theirs.contains(object), "not the reference's: {object}");
+    }
+    let mut missing: Vec<&str> = theirs
+        .iter()
+        .filter(|object| !ours.contains(object))
+        .map(|object| {
+            object
+                .split('"')
+                .nth(1)
+                .expect("a quoted name in every statement")
+        })
+        .collect();
+    missing.sort_unstable();
+    assert_eq!(
+        missing,
+        [
+            "account_device",
+            "account_device_did_idx",
+            "authorization_request",
+            "authorization_request_code_idx",
+            "authorization_request_expires_at_idx",
+            "authorized_client",
+            "device",
+            "device_account",
+            "lexicon",
+            "lexicon_failures_idx",
+            "token",
+            "token_code_idx",
+            "token_did_idx",
+            "used_refresh_token",
+            "used_refresh_token_id_idx",
+        ],
+        "what migrations 004 to 007 would add"
+    );
+}
