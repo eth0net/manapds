@@ -17,9 +17,12 @@ insert or ignore into "kysely_migration_lock" ("id", "is_locked") values ('migra
 /// How long to wait for another writer before giving up.
 const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// One migration: the name the ledger records it under, and the schema it
-/// leaves behind.
-pub(super) type Migration = (&'static str, &'static str);
+/// One migration: the name the ledger records it under, and what it does. Most
+/// are a batch of DDL, but one has data to carry across as well.
+pub(super) type Migration = (
+    &'static str,
+    fn(&rusqlite::Transaction) -> Result<(), Error>,
+);
 
 /// Opens a database file, making its directory if it is not there.
 pub(super) fn open(path: &Path, migrations: &[Migration]) -> Result<Connection, Error> {
@@ -60,11 +63,11 @@ fn migrate(db: &mut Connection, migrations: &[Migration]) -> Result<(), Error> {
 
     let stamp = format!("{:.3}", jiff::Timestamp::now());
     let transaction = db.transaction()?;
-    for (name, schema) in migrations {
+    for (name, apply) in migrations {
         if applied.iter().any(|done| done == name) {
             continue;
         }
-        transaction.execute_batch(schema)?;
+        apply(&transaction)?;
         transaction.execute(
             r#"insert into "kysely_migration" ("name", "timestamp") values (?1, ?2)"#,
             params![name, stamp],

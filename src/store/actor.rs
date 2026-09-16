@@ -37,7 +37,7 @@ create table "account_pref" ("id" integer primary key autoincrement, "name" varc
 "#;
 
 /// Every migration this server knows, in the order they are applied.
-const MIGRATIONS: [db::Migration; 1] = [("001", SCHEMA)];
+const MIGRATIONS: [db::Migration; 1] = [("001", |tx| Ok(tx.execute_batch(SCHEMA)?))];
 
 /// Where a repository has got to.
 #[derive(Clone, Debug, Eq, PartialEq)]

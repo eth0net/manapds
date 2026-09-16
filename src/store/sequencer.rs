@@ -20,7 +20,7 @@ create index "repo_seq_sequenced_at_index" on "repo_seq" ("sequencedAt");
 "#;
 
 /// Every migration this server knows, in the order they are applied.
-const MIGRATIONS: [db::Migration; 1] = [("001", SCHEMA)];
+const MIGRATIONS: [db::Migration; 1] = [("001", |tx| Ok(tx.execute_batch(SCHEMA)?))];
 
 /// What kind of thing an entry records.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

@@ -17,7 +17,7 @@ create table "did_doc" ("did" varchar primary key, "doc" text not null, "updated
 "#;
 
 /// Every migration this server knows, in the order they are applied.
-const MIGRATIONS: [db::Migration; 1] = [("001", SCHEMA)];
+const MIGRATIONS: [db::Migration; 1] = [("001", |tx| Ok(tx.execute_batch(SCHEMA)?))];
 
 /// A document and when it was last fetched.
 #[derive(Clone, Debug, Eq, PartialEq)]

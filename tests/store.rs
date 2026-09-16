@@ -69,6 +69,20 @@ fn a_new_store_writes_the_ledger_the_reference_reads() {
         .expect("reads");
     assert_eq!(applied, ["001"]);
 
+    // The account database carries all seven, so the reference opening it next
+    // finds nothing left to run.
+    let account_db = home.path().join("account.sqlite");
+    Accounts::open(&account_db).expect("opens");
+    let applied: Vec<String> = Connection::open(&account_db)
+        .expect("opens")
+        .prepare(r#"select "name" from "kysely_migration" order by "name""#)
+        .expect("prepares")
+        .query_map([], |row| row.get(0))
+        .expect("queries")
+        .collect::<Result<_, _>>()
+        .expect("reads");
+    assert_eq!(applied, ["001", "002", "003", "004", "005", "006", "007"]);
+
     let (id, locked): (String, i64) = db
         .query_row(
             r#"select "id", "is_locked" from "kysely_migration_lock""#,
@@ -354,7 +368,7 @@ fn an_email_is_taken_whatever_case_it_is_given_in() {
 }
 
 #[test]
-fn the_account_database_refuses_the_oauth_migrations() {
+fn a_database_migrated_past_the_account_schema_is_refused() {
     let home = tempfile::tempdir().expect("a temporary directory");
     let path = home.path().join("account.sqlite");
     Accounts::open(&path).expect("opens");
@@ -362,14 +376,14 @@ fn the_account_database_refuses_the_oauth_migrations() {
     Connection::open(&path)
         .expect("opens")
         .execute(
-            r#"insert into "kysely_migration" ("name", "timestamp") values ('004', '')"#,
+            r#"insert into "kysely_migration" ("name", "timestamp") values ('008', '')"#,
             [],
         )
         .expect("writes");
 
     let refused = Accounts::open(&path);
     assert!(
-        matches!(refused, Err(Error::TooNew(ref name)) if name == "004"),
+        matches!(refused, Err(Error::TooNew(ref name)) if name == "008"),
         "{refused:?}"
     );
 }
@@ -528,48 +542,8 @@ fn every_schema_is_the_one_the_reference_builds() {
     Actor::open(&at("actor"), account()).expect("opens");
     Sequencer::open(&at("sequencer")).expect("opens");
     DidCache::open(&at("did_cache")).expect("opens");
-    for name in ["actor", "sequencer", "did_cache"] {
+    Accounts::open(&at("account")).expect("opens");
+    for name in ["actor", "sequencer", "did_cache", "account"] {
         assert_eq!(schema(&at(name)), reference_schema(name), "{name}");
     }
-
-    // The account database stops at 003; 004 to 007 are the OAuth tables.
-    // Everything it does build has to be what the reference built.
-    Accounts::open(&at("account")).expect("opens");
-    let ours = schema(&at("account"));
-    let theirs = reference_schema("account");
-    for object in &ours {
-        assert!(theirs.contains(object), "not the reference's: {object}");
-    }
-    let mut missing: Vec<&str> = theirs
-        .iter()
-        .filter(|object| !ours.contains(object))
-        .map(|object| {
-            object
-                .split('"')
-                .nth(1)
-                .expect("a quoted name in every statement")
-        })
-        .collect();
-    missing.sort_unstable();
-    assert_eq!(
-        missing,
-        [
-            "account_device",
-            "account_device_did_idx",
-            "authorization_request",
-            "authorization_request_code_idx",
-            "authorization_request_expires_at_idx",
-            "authorized_client",
-            "device",
-            "device_account",
-            "lexicon",
-            "lexicon_failures_idx",
-            "token",
-            "token_code_idx",
-            "token_did_idx",
-            "used_refresh_token",
-            "used_refresh_token_id_idx",
-        ],
-        "what migrations 004 to 007 would add"
-    );
 }
