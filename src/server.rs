@@ -7,18 +7,30 @@ use serde::Serialize;
 use tower_http::trace::TraceLayer;
 
 use crate::config::Config;
+use crate::xrpc;
 
 /// Builds the router. Takes the configuration rather than reading it, so a
 /// test can drive the whole surface without touching the environment.
 pub fn router(config: Config) -> Router {
     Router::new()
+        .route("/", get(root))
+        .route("/robots.txt", get(robots))
         .route("/xrpc/_health", get(health))
         .route(
             "/xrpc/com.atproto.server.describeServer",
-            get(describe_server),
+            xrpc::query(describe_server),
         )
+        .fallback(xrpc::fallback)
         .layer(TraceLayer::new_for_http())
         .with_state(Arc::new(config))
+}
+
+async fn root() -> &'static str {
+    "This is an AT Protocol Personal Data Server.\n\nMost of it is under /xrpc/.\n"
+}
+
+async fn robots() -> &'static str {
+    "# Crawling the public API is allowed\nUser-agent: *\nAllow: /\n"
 }
 
 #[derive(Debug, Serialize)]

@@ -1,4 +1,5 @@
-//! The request surface: the error shape every method answers with.
+//! The request surface: the error shape every method answers with, and the
+//! routing helpers that hold a method to its verb.
 
 use axum::{
     Json,
@@ -6,6 +7,10 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
+
+mod route;
+
+pub use route::{fallback, procedure, query};
 
 /// The result an XRPC method hands back.
 pub type Result<T> = std::result::Result<T, Error>;

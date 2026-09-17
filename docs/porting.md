@@ -86,3 +86,11 @@ system means everyone on the box can read it. Here it is set to owner-only
 after the write. An account's key is the one thing that cannot be reissued
 without a PLC operation, so the cost of being strict is a permissions error on
 a badly restored backup and the cost of not being is the account.
+
+### An XRPC path is an NSID or it is nothing
+
+Upstream checks the path against a hand-written scan that accepts a two-part
+name, so `/xrpc/com.example` reaches the method table and comes back 501. Here
+the same path is parsed as an NSID and comes back 400. Both are refusals and no
+client depends on which; parsing it once means the handler that eventually
+serves it is handed a name rather than a string.

@@ -52,3 +52,4 @@ strip = true
 base64 = "0.23.1"
 hex = "0.4.3"
 tempfile = "3.27.0"
+tower = { version = "0.5.3", features = ["util"] }
