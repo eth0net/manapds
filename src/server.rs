@@ -4,7 +4,10 @@ use std::sync::Arc;
 
 use axum::{Json, Router, extract::State, routing::get};
 use serde::Serialize;
-use tower_http::trace::TraceLayer;
+use tower_http::{
+    cors::{Any, CorsLayer},
+    trace::TraceLayer,
+};
 
 use crate::config::Config;
 use crate::xrpc;
@@ -21,8 +24,20 @@ pub fn router(config: Config) -> Router {
             xrpc::query(describe_server),
         )
         .fallback(xrpc::fallback)
-        .layer(TraceLayer::new_for_http())
         .with_state(Arc::new(config))
+        .layer(cors())
+        .layer(TraceLayer::new_for_http())
+}
+
+/// Anything may call this server, since every method either needs credentials
+/// or is public to begin with.
+fn cors() -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any)
+        .expose_headers(Any)
+        .max_age(std::time::Duration::from_hours(24))
 }
 
 async fn root() -> &'static str {

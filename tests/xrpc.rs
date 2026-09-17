@@ -101,3 +101,28 @@ async fn a_path_outside_xrpc_is_left_alone() {
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("User-agent: *"), "{body}");
 }
+
+#[tokio::test]
+async fn a_browser_is_told_it_may_call_from_anywhere() {
+    let request = Request::builder()
+        .method("OPTIONS")
+        .uri("/xrpc/com.atproto.server.describeServer")
+        .header("origin", "https://client.example.com")
+        .header("access-control-request-method", "GET")
+        .body(Body::empty())
+        .expect("a request");
+
+    let response = server::router(config())
+        .oneshot(request)
+        .await
+        .expect("an answer");
+    let allowed = |name: &str| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    };
+    assert_eq!(allowed("access-control-allow-origin").as_deref(), Some("*"));
+    assert_eq!(allowed("access-control-max-age").as_deref(), Some("86400"));
+}
