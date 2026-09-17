@@ -773,6 +773,7 @@ dependencies = [
  "base64",
  "bs58",
  "hex",
+ "hmac",
  "ipld-core",
  "jiff",
  "k256",

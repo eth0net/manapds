@@ -1,5 +1,6 @@
-//! The request surface: the error shape every method answers with, and the
-//! routing helpers that hold a method to its verb.
+//! The request surface: the error shape every method answers with, the routing
+//! helpers that hold a method to its verb, and the credentials a request
+//! carries.
 
 use axum::{
     Json,
@@ -8,6 +9,7 @@ use axum::{
 };
 use serde::Serialize;
 
+pub mod auth;
 mod route;
 
 pub use route::{fallback, procedure, query};

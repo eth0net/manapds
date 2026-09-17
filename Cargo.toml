@@ -15,7 +15,9 @@ publish = false
 
 [dependencies]
 axum = "0.8.9"
+base64 = "0.23"
 bs58 = "0.5.1"
+hmac = "0.13"
 ipld-core = { version = "0.4.3", features = ["serde"] }
 jiff = "0.2.37"
 k256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std"] }
@@ -49,7 +51,6 @@ codegen-units = 1
 strip = true
 
 [dev-dependencies]
-base64 = "0.23.1"
 hex = "0.4.3"
 tempfile = "3.27.0"
 tower = { version = "0.5.3", features = ["util"] }

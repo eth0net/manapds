@@ -2,7 +2,11 @@
 
 use std::sync::Arc;
 
-use axum::{Json, Router, extract::State, routing::get};
+use axum::{
+    Json, Router,
+    extract::{FromRef, State},
+    routing::get,
+};
 use serde::Serialize;
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -10,7 +14,40 @@ use tower_http::{
 };
 
 use crate::config::Config;
-use crate::xrpc;
+use crate::xrpc::{self, auth::Tokens};
+
+/// Everything a handler can ask the router for.
+#[derive(Clone, Debug)]
+pub struct Context {
+    /// How this server was started.
+    pub config: Arc<Config>,
+    /// The secret every session token is signed under.
+    pub tokens: Tokens,
+}
+
+impl Context {
+    /// Builds what the handlers share out of the configuration.
+    #[must_use]
+    pub fn new(config: Config) -> Self {
+        let tokens = Tokens::new(config.jwt_secret.clone(), config.service_did.clone());
+        Self {
+            config: Arc::new(config),
+            tokens,
+        }
+    }
+}
+
+impl FromRef<Context> for Tokens {
+    fn from_ref(context: &Context) -> Self {
+        context.tokens.clone()
+    }
+}
+
+impl FromRef<Context> for Arc<Config> {
+    fn from_ref(context: &Context) -> Self {
+        Arc::clone(&context.config)
+    }
+}
 
 /// Builds the router. Takes the configuration rather than reading it, so a
 /// test can drive the whole surface without touching the environment.
@@ -24,7 +61,7 @@ pub fn router(config: Config) -> Router {
             xrpc::query(describe_server),
         )
         .fallback(xrpc::fallback)
-        .with_state(Arc::new(config))
+        .with_state(Context::new(config))
         .layer(cors())
         .layer(TraceLayer::new_for_http())
 }

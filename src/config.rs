@@ -13,6 +13,9 @@ pub struct Config {
     pub port: u16,
     pub service_did: String,
     pub data_directory: PathBuf,
+    /// What every session token is signed under. Losing it signs every client
+    /// out; changing it on a running server does the same.
+    pub jwt_secret: String,
     /// Suffixes an account may take a handle under, each with its leading dot.
     pub handle_domains: Vec<String>,
     pub invite_required: bool,
@@ -26,6 +29,8 @@ pub struct Config {
 pub enum ConfigError {
     #[error("{0} is not a number: {1}")]
     NotANumber(&'static str, ParseIntError),
+    #[error("{0} has to be set")]
+    Missing(&'static str),
 }
 
 impl Config {
@@ -36,7 +41,8 @@ impl Config {
     ///
     /// # Errors
     ///
-    /// If a variable that has to be a number isn't one.
+    /// If a variable that has to be a number isn't one, or `PDS_JWT_SECRET` is
+    /// unset.
     pub fn from_env() -> Result<Self, ConfigError> {
         let hostname = string("PDS_HOSTNAME").unwrap_or_else(|| "localhost".to_owned());
 
@@ -47,6 +53,7 @@ impl Config {
             port: number("PDS_PORT")?.unwrap_or(2583),
             data_directory: string("PDS_DATA_DIRECTORY")
                 .map_or_else(|| PathBuf::from("data"), PathBuf::from),
+            jwt_secret: string("PDS_JWT_SECRET").ok_or(ConfigError::Missing("PDS_JWT_SECRET"))?,
             invite_required: boolean("PDS_INVITE_REQUIRED").unwrap_or(true),
             blob_upload_limit: number("PDS_BLOB_UPLOAD_LIMIT")?.unwrap_or(5 * 1024 * 1024),
             privacy_policy_url: string("PDS_PRIVACY_POLICY_URL"),

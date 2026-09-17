@@ -1,6 +1,7 @@
 //! The request surface: what a method answers with, who it answers, and how
 //! much of it one caller gets.
 
+use axum::extract::FromRequestParts;
 use axum::{
     Router,
     body::Body,
@@ -8,8 +9,18 @@ use axum::{
 };
 use manapds::config::Config;
 use manapds::server;
+use manapds::syntax::Did;
+use manapds::xrpc::auth::{Authorization, Credential, Scope, Tokens};
 use manapds::xrpc::{Error, Status};
 use tower::ServiceExt;
+
+fn account() -> Did {
+    "did:plc:4cjoyc3cgpal7gnrpzyjhnv3".parse().expect("a DID")
+}
+
+fn tokens() -> Tokens {
+    Tokens::new("a secret", "did:web:pds.example.com")
+}
 
 fn config() -> Config {
     Config {
@@ -17,6 +28,7 @@ fn config() -> Config {
         port: 0,
         service_did: "did:web:pds.example.com".to_owned(),
         data_directory: "data".into(),
+        jwt_secret: "a secret".to_owned(),
         handle_domains: vec![".pds.example.com".to_owned()],
         invite_required: true,
         blob_upload_limit: 5 * 1024 * 1024,
@@ -125,4 +137,147 @@ async fn a_browser_is_told_it_may_call_from_anywhere() {
     };
     assert_eq!(allowed("access-control-allow-origin").as_deref(), Some("*"));
     assert_eq!(allowed("access-control-max-age").as_deref(), Some("86400"));
+}
+
+#[test]
+fn an_access_token_comes_back_as_the_session_that_minted_it() {
+    let tokens = tokens();
+    let token = tokens.access(&account(), Scope::Access);
+    let access = tokens
+        .verify_access(&token, &Scope::STANDARD)
+        .expect("the token verifies");
+    assert_eq!(access.did, account());
+    assert_eq!(access.scope, Scope::Access);
+}
+
+#[test]
+fn a_refresh_token_carries_the_id_the_session_is_stored_under() {
+    let tokens = tokens();
+    let token = tokens.refresh(&account(), "a-stored-session");
+    let refresh = tokens
+        .verify_refresh(&token, false)
+        .expect("the token verifies");
+    assert_eq!(refresh.did, account());
+    assert_eq!(refresh.id, "a-stored-session");
+}
+
+#[test]
+fn neither_kind_of_token_can_be_spent_as_the_other() {
+    let tokens = tokens();
+    let access = tokens.access(&account(), Scope::Access);
+    let refresh = tokens.refresh(&account(), "a-stored-session");
+    assert!(tokens.verify_refresh(&access, false).is_err());
+    assert!(tokens.verify_access(&refresh, &Scope::STANDARD).is_err());
+}
+
+#[test]
+fn a_token_another_secret_signed_is_not_one_of_ours() {
+    let token =
+        Tokens::new("another secret", "did:web:pds.example.com").access(&account(), Scope::Access);
+    let error = tokens()
+        .verify_access(&token, &Scope::STANDARD)
+        .expect_err("the signature is not ours");
+    assert_eq!(error.name(), "InvalidToken");
+}
+
+#[test]
+fn a_token_minted_for_another_service_is_not_accepted_here() {
+    let token =
+        Tokens::new("a secret", "did:web:elsewhere.example.com").access(&account(), Scope::Access);
+    let error = tokens()
+        .verify_access(&token, &Scope::STANDARD)
+        .expect_err("the audience is not us");
+    assert_eq!(error.name(), "InvalidToken");
+}
+
+#[test]
+fn an_app_password_does_not_reach_what_a_full_session_does() {
+    let tokens = tokens();
+    let token = tokens.access(&account(), Scope::AppPassword);
+    assert!(tokens.verify_access(&token, &Scope::STANDARD).is_ok());
+    let error = tokens
+        .verify_access(&token, &Scope::PRIVILEGED)
+        .expect_err("an app password is not privileged");
+    assert_eq!(error.message(), "Bad token scope");
+}
+
+#[test]
+fn a_token_past_its_expiry_says_which_of_the_two_it_is() {
+    let tokens = tokens();
+    let token = tokens.access_for(
+        &account(),
+        Scope::Access,
+        jiff::SignedDuration::from_secs(-1),
+    );
+    let error = tokens
+        .verify_access(&token, &Scope::STANDARD)
+        .expect_err("an hour too late");
+    assert_eq!(error.name(), "ExpiredToken");
+    assert_eq!(error.message(), "Token has expired");
+}
+
+#[test]
+fn a_tampered_token_does_not_verify() {
+    let tokens = tokens();
+    let token = tokens.access(&account(), Scope::Access);
+    let (body, signature) = token.rsplit_once('.').expect("three parts");
+    let forged = format!("{body}x.{signature}");
+    assert!(tokens.verify_access(&forged, &Scope::STANDARD).is_err());
+}
+
+/// Runs the `Access` extractor over a request carrying this header.
+async fn extract(header: Option<&str>) -> Result<manapds::xrpc::auth::Access, Error> {
+    let mut request = Request::builder().uri("/xrpc/com.atproto.repo.createRecord");
+    if let Some(header) = header {
+        request = request.header(axum::http::header::AUTHORIZATION, header);
+    }
+    let (mut parts, ()) = request.body(()).expect("a request").into_parts();
+    manapds::xrpc::auth::Access::from_request_parts(&mut parts, &server::Context::new(config()))
+        .await
+}
+
+#[tokio::test]
+async fn a_handler_is_handed_the_account_its_caller_signed_in_as() {
+    let token = tokens().access(&account(), Scope::Access);
+    let access = extract(Some(&format!("Bearer {token}")))
+        .await
+        .expect("the session verifies");
+    assert_eq!(access.did, account());
+
+    let error = extract(None).await.expect_err("nothing was offered");
+    assert_eq!(error.status(), Status::AuthenticationRequired);
+    assert_eq!(error.name(), "AuthMissing");
+
+    let error = extract(Some("Bearer not-a-token"))
+        .await
+        .expect_err("that is not one of ours");
+    assert_eq!(error.name(), "InvalidToken");
+}
+
+#[test]
+fn the_authorization_header_is_read_as_the_scheme_it_names() {
+    assert_eq!(
+        Authorization::parse(None).expect("nothing"),
+        Authorization(None)
+    );
+    assert_eq!(
+        Authorization::parse(Some("bearer a-token"))
+            .expect("a bearer token")
+            .bearer(),
+        Some("a-token")
+    );
+    assert_eq!(
+        Authorization::parse(Some("Basic YWRtaW46aHVudGVyOjI=")).expect("a password"),
+        Authorization(Some(Credential::Basic {
+            username: "admin".to_owned(),
+            password: "hunter:2".to_owned(),
+        }))
+    );
+    assert_eq!(
+        Authorization::parse(Some("Digest nope"))
+            .expect_err("nothing here speaks digest")
+            .message(),
+        "Unsupported authorization type: Digest"
+    );
+    assert!(Authorization::parse(Some("Bearer")).is_err());
 }
