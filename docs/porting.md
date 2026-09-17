@@ -94,3 +94,23 @@ name, so `/xrpc/com.example` reaches the method table and comes back 501. Here
 the same path is parsed as an NSID and comes back 400. Both are refusals and no
 client depends on which; parsing it once means the handler that eventually
 serves it is handed a name rather than a string.
+
+### Nothing shared is kept outside the process
+
+Upstream can be pointed at Redis, and where it is, two instances agree: they
+draw rate limit budgets from one pool and catch a proof replayed against
+either. Without one it falls back to memory, which is all this server offers.
+
+Budgets, and the short-lived `jti` and code-challenge checks the authorization
+server makes, are the whole of what Redis holds for it — nothing durable — so
+the cost falls entirely on running a second instance, where each would allow a
+full budget and a proof spent on one would be fresh to the other. The limits to
+configure are the ones a single instance should allow.
+
+### Only a private address may name someone else
+
+Both servers read `X-Forwarded-For` only from a caller that could not have come
+from the internet. Upstream also trusts a configured list of public addresses,
+for the entryway in front of a hosted deployment. Nothing here runs behind an
+entryway, so the list is the private ranges and loopback, and a proxy elsewhere
+would have to be reached over a private network to be believed.

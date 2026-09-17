@@ -1,6 +1,6 @@
 //! Server configuration, read from the environment.
 
-use std::{env, num::ParseIntError, path::PathBuf};
+use std::{env, net::IpAddr, num::ParseIntError, path::PathBuf};
 
 use thiserror::Error;
 
@@ -23,6 +23,13 @@ pub struct Config {
     pub privacy_policy_url: Option<String>,
     pub terms_of_service_url: Option<String>,
     pub contact_email: Option<String>,
+    /// Whether to hold callers to a budget at all, which the reference leaves
+    /// off.
+    pub rate_limits: bool,
+    /// A key a caller sends to be let past those budgets.
+    pub rate_limit_bypass_key: Option<String>,
+    /// Addresses let past them without a key.
+    pub rate_limit_bypass_ips: Vec<IpAddr>,
 }
 
 #[derive(Debug, Error)]
@@ -59,6 +66,15 @@ impl Config {
             privacy_policy_url: string("PDS_PRIVACY_POLICY_URL"),
             terms_of_service_url: string("PDS_TERMS_OF_SERVICE_URL"),
             contact_email: string("PDS_CONTACT_EMAIL_ADDRESS"),
+            rate_limits: boolean("PDS_RATE_LIMITS_ENABLED").unwrap_or(false),
+            rate_limit_bypass_key: string("PDS_RATE_LIMIT_BYPASS_KEY"),
+            // The reference takes CIDR here and keeps only the address, so a
+            // range written out is read as the one address it starts at.
+            rate_limit_bypass_ips: list("PDS_RATE_LIMIT_BYPASS_IPS")
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|value| value.split('/').next()?.trim().parse().ok())
+                .collect(),
             hostname,
         })
     }

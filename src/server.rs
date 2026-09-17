@@ -5,6 +5,7 @@ use std::sync::Arc;
 use axum::{
     Json, Router,
     extract::{FromRef, State},
+    middleware,
     routing::get,
 };
 use serde::Serialize;
@@ -14,7 +15,7 @@ use tower_http::{
 };
 
 use crate::config::Config;
-use crate::xrpc::{self, auth::Tokens};
+use crate::xrpc::{self, auth::Tokens, limit::Limits};
 
 /// Everything a handler can ask the router for.
 #[derive(Clone, Debug)]
@@ -52,7 +53,8 @@ impl FromRef<Context> for Arc<Config> {
 /// Builds the router. Takes the configuration rather than reading it, so a
 /// test can drive the whole surface without touching the environment.
 pub fn router(config: Config) -> Router {
-    Router::new()
+    let limits = Limits::new(&config).map(Arc::new);
+    let router = Router::new()
         .route("/", get(root))
         .route("/robots.txt", get(robots))
         .route("/xrpc/_health", get(health))
@@ -61,9 +63,16 @@ pub fn router(config: Config) -> Router {
             xrpc::query(describe_server),
         )
         .fallback(xrpc::fallback)
-        .with_state(Context::new(config))
-        .layer(cors())
-        .layer(TraceLayer::new_for_http())
+        .with_state(Context::new(config));
+
+    // CORS goes outside the budget so that a browser is told why it was
+    // refused rather than being told nothing at all.
+    match limits {
+        Some(limits) => router.layer(middleware::from_fn_with_state(limits, xrpc::limit::global)),
+        None => router,
+    }
+    .layer(cors())
+    .layer(TraceLayer::new_for_http())
 }
 
 /// Anything may call this server, since every method either needs credentials

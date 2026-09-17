@@ -13,9 +13,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_env()?;
     let address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.port));
     let listener = TcpListener::bind(address).await?;
+    let hostname = config.hostname.clone();
 
-    tracing::info!(%address, hostname = %config.hostname, "listening");
-    axum::serve(listener, server::router(config))
+    tracing::info!(%address, %hostname, "listening");
+    // The connecting address is carried into the request so that rate limits
+    // have someone to count against.
+    let service = server::router(config).into_make_service_with_connect_info::<SocketAddr>();
+    axum::serve(listener, service)
         .with_graceful_shutdown(async {
             let _ = signal::ctrl_c().await;
         })
