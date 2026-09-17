@@ -10,9 +10,25 @@ a procedure, errors as `{"error": "...", "message": "..."}`. The OAuth
 endpoints and the two well-known documents are ordinary HTTP, because the
 OAuth spec says where they live and it is not under `/xrpc/`.
 
+A lexicon declares whether a method is a query or a procedure, so the router
+holds each one to the verb that implies and answers the wrong verb with the
+right one named. A path under `/xrpc/` that no route claims is a 501 rather
+than a 404: the method exists somewhere, just not here.
+
 Handlers stay thin. A handler validates input, names the account it acts for,
 and calls into the store; the interesting code is the repository layer and the
 account layer, both testable without a socket.
+
+## Budgets
+
+Every caller gets a fixed number of points per window, counted in this process
+and keyed by address. Off unless asked for, because a server behind a proxy is
+usually already counted there and one counting twice is worse than one counting
+nowhere.
+
+Whoever runs the server can be let past, by a key in a header or by address.
+That is what makes a bulk import possible without turning the budgets off for
+everyone.
 
 ## Storage is split three ways
 
@@ -46,6 +62,9 @@ Two kinds, and conflating them is the way to lose an account permanently.
 - **A signing key** signs one account's commits. One per account, generated at
   signup, stored beside the account, and replaceable by a PLC operation — the
   old key stays in the audit log so old commits still verify.
+- **The token secret** signs sessions. One per server, symmetric, and nothing
+  outside this process ever needs it. Changing it signs everyone out, which is
+  the only revocation that reaches every client at once.
 
 ## Configuration
 

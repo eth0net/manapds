@@ -11,20 +11,22 @@ has untested assumptions rather than none.
 
 ## Status
 
-Early. Scaffolding and design; the repository layer is being written now.
-Nothing here hosts an account yet. [`docs/roadmap.md`](docs/roadmap.md) is the
-order of work and [`docs/`](docs/architecture.md) carries the reasoning.
+Early. Repositories, storage and the request surface are built; nothing here
+hosts an account yet. [`docs/roadmap.md`](docs/roadmap.md) is the order of work
+and [`docs/`](docs/architecture.md) carries the reasoning.
 
 ## Running it
 
 Rust stable, and nothing else — no runtime, no database server.
 
 ```sh
-cargo run
+PDS_JWT_SECRET=... cargo run
 ```
 
 Configuration is environment variables under the same names the reference
-server uses, so an existing `pds.env` works unedited.
+server uses, so an existing `pds.env` works unedited. The secret sessions are
+signed under is the one variable with no default, since inventing one at each
+startup would sign every client out on every restart.
 
 ## Layout
 
