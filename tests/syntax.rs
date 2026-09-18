@@ -100,9 +100,29 @@ fn minting_clears_a_tid_already_written() {
     let ahead = Tid::from_parts(1 << 52, 1023);
     let mut clock = TidClock::new();
 
-    let next = clock.mint_after(&ahead);
+    let next = clock.mint_after(&ahead).expect("there is room above it");
     assert!(next > ahead, "{next} follows {ahead}");
     assert!(clock.mint() > next, "the floor sticks for the next one too");
+}
+
+#[test]
+fn a_clock_at_the_top_of_its_range_still_only_goes_forward() {
+    // The field is 53 bits of microseconds, and a rev read from a stored
+    // commit is whatever that commit says. One at the ceiling must not wrap a
+    // minted TID back under it.
+    let ceiling = Tid::from_parts((1 << 53) - 1, 1023);
+    let mut clock = TidClock::new();
+    assert_eq!(
+        clock.mint_after(&ceiling),
+        None,
+        "nothing follows {ceiling}"
+    );
+
+    // One step under it still has room, and what comes back is above it.
+    let near = Tid::from_parts((1 << 53) - 2, 0);
+    let mut clock = TidClock::new();
+    let next = clock.mint_after(&near).expect("one left");
+    assert!(next > near, "{next} follows {near}");
 }
 
 fn accepts<T: FromStr>(file: &str) {

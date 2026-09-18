@@ -52,10 +52,16 @@ impl Clock {
         }
     }
 
-    /// The next TID, kept above one already written.
-    pub fn mint_after(&mut self, previous: &Tid) -> Tid {
+    /// The next TID, kept above one already written, or `None` where the
+    /// field has no room above it.
+    ///
+    /// A revision read from a stored commit is whatever that commit says, and
+    /// one at the top of the range has nothing following it. Refusing is the
+    /// only answer that does not hand back a revision sorting under the one it
+    /// was meant to follow.
+    pub fn mint_after(&mut self, previous: &Tid) -> Option<Tid> {
         self.last = self.last.max(previous.to_parts().0);
-        self.mint()
+        (self.last < MICROS - 1).then(|| self.mint())
     }
 
     /// The next TID, one microsecond past the last if the clock has not moved.
@@ -65,7 +71,9 @@ impl Clock {
             .map_or(0, |since| {
                 u64::try_from(since.as_micros()).unwrap_or(u64::MAX)
             });
-        self.last = now.max(self.last + 1);
+        // Saturating rather than wrapping: a timestamp past the field would
+        // come back around and sort under everything already written.
+        self.last = now.max(self.last.saturating_add(1)).min(MICROS - 1);
         Tid::from_parts(self.last, self.clock_id)
     }
 }

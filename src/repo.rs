@@ -50,6 +50,9 @@ pub enum Error {
     /// Whatever the blocks are kept in would not answer.
     #[error("store: {0}")]
     Store(String),
+    /// A revision with nothing above it left in the field.
+    #[error("no revision follows {0}")]
+    NoRevisionAfter(Tid),
 }
 
 mod block;
@@ -180,7 +183,9 @@ impl Repo {
         blocks.merge(tree);
         let commit = Commit::sign(
             self.commit.did.clone(),
-            clock.mint_after(&self.commit.rev),
+            clock
+                .mint_after(&self.commit.rev)
+                .ok_or_else(|| Error::NoRevisionAfter(self.commit.rev.clone()))?,
             root,
             keypair,
         )?;
