@@ -1,5 +1,6 @@
 use std::net::{Ipv4Addr, SocketAddr};
 
+use axum::ServiceExt;
 use manapds::{config::Config, server};
 use tokio::{net::TcpListener, signal};
 use tracing_subscriber::{EnvFilter, fmt};
@@ -18,7 +19,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(%address, %hostname, "listening");
     // The connecting address is carried into the request so that rate limits
     // have someone to count against.
-    let service = server::router(config).into_make_service_with_connect_info::<SocketAddr>();
+    let service = ServiceExt::<axum::extract::Request>::into_make_service_with_connect_info::<
+        SocketAddr,
+    >(server::router(config));
     axum::serve(listener, service)
         .with_graceful_shutdown(async {
             let _ = signal::ctrl_c().await;

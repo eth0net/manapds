@@ -17,6 +17,7 @@ use manapds::xrpc::auth::{Access, Authorization, Credential, Scope, Tokens};
 use manapds::xrpc::limit::{self, Limiter};
 use manapds::xrpc::{Error, Status};
 use tower::ServiceExt;
+use tower_http::normalize_path::NormalizePath;
 
 fn account() -> Did {
     "did:plc:4cjoyc3cgpal7gnrpzyjhnv3".parse().expect("a DID")
@@ -46,7 +47,12 @@ fn config() -> Config {
 }
 
 /// Sends one request through the router, as if from `peer`.
-async fn call(router: &Router, method: &str, path: &str, peer: &str) -> (StatusCode, String) {
+async fn call(
+    router: &NormalizePath<Router>,
+    method: &str,
+    path: &str,
+    peer: &str,
+) -> (StatusCode, String) {
     let mut request = Request::builder()
         .method(method)
         .uri(path)
@@ -123,6 +129,20 @@ async fn a_query_asked_for_as_a_procedure_names_the_verb_it_wanted() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body.contains("expected GET"), "{body}");
+}
+
+#[tokio::test]
+async fn a_method_asked_for_with_a_trailing_slash_is_still_served() {
+    let router = server::router(config());
+    let (status, body) = call(
+        &router,
+        "GET",
+        "/xrpc/com.atproto.server.describeServer/",
+        "1.2.3.4:9",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("availableUserDomains"), "{body}");
 }
 
 #[tokio::test]

@@ -11,6 +11,7 @@ use axum::{
 use serde::Serialize;
 use tower_http::{
     cors::{Any, CorsLayer},
+    normalize_path::NormalizePath,
     trace::TraceLayer,
 };
 
@@ -50,9 +51,18 @@ impl FromRef<Context> for Arc<Config> {
     }
 }
 
-/// Builds the router. Takes the configuration rather than reading it, so a
-/// test can drive the whole surface without touching the environment.
-pub fn router(config: Config) -> Router {
+/// Builds the whole request surface. Takes the configuration rather than
+/// reading it, so a test can drive it without touching the environment.
+///
+/// A trailing slash is trimmed before anything routes, because upstream serves
+/// `/xrpc/<nsid>/` and a client that sends one should not be told the method
+/// does not exist.
+#[must_use]
+pub fn router(config: Config) -> NormalizePath<Router> {
+    NormalizePath::trim_trailing_slash(routes(config))
+}
+
+fn routes(config: Config) -> Router {
     let limits = Limits::new(&config).map(Arc::new);
     let router = Router::new()
         .route("/", get(root))
