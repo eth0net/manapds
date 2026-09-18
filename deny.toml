@@ -11,9 +11,8 @@
 # and pass all four, so this is a tripwire for what changes underneath us rather
 # than a substitute for choosing dependencies carefully in the first place.
 
-# The platforms CI builds, which is also what the duplicate check should judge.
-# Without this the graph includes rusqlite's wasm backend, whose two hashbrown
-# versions are never compiled for anything shipped here.
+# The platforms CI builds. This is a binary rather than a library, so a crate
+# compiled for nothing shipped here is not this project's problem to vet.
 [graph]
 targets = [
     "x86_64-unknown-linux-gnu",
@@ -45,10 +44,6 @@ allow = [
     # unicode-ident, under every proc macro in the tree. The Unicode license
     # covers the character tables it embeds, not the code.
     "Unicode-3.0",
-    # foldhash, which hashbrown hashes with under rusqlite. Permissive, and its
-    # only conditions — keep the notice, don't claim authorship — are ones both
-    # of this project's licenses already impose.
-    "Zlib",
 ]
 
 [bans]

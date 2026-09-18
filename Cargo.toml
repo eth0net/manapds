@@ -14,16 +14,16 @@ repository = "https://github.com/eth0net/manapds"
 publish = false
 
 [dependencies]
-axum = "0.8.9"
-base64 = "0.23"
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "tracing"] }
+base64 = { version = "0.23", default-features = false, features = ["std"] }
 bs58 = "0.5.1"
 hmac = "0.13"
 ipld-core = { version = "0.4.3", features = ["serde"] }
-jiff = "0.2.37"
+jiff = { version = "0.2.37", default-features = false, features = ["std"] }
 k256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std"] }
 p256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std"] }
 rand = "0.10.2"
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_bytes = "0.11.19"
 serde_ipld_dagcbor = "0.7.0"
