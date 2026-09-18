@@ -228,6 +228,7 @@ async fn a_handler_is_handed_the_account_its_caller_signed_in_as() {
     let error = extract(None).await.expect_err("nothing was offered");
     assert_eq!(error.status(), Status::AuthenticationRequired);
     assert_eq!(error.name(), "AuthMissing");
+    assert_eq!(error.message(), "Authentication Required");
 
     let error = extract(Some("Bearer not-a-token"))
         .await

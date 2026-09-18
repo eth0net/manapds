@@ -377,9 +377,9 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Error> {
         let authorization = Authorization::from_request_parts(parts, state).await?;
-        let token = authorization
-            .bearer()
-            .ok_or_else(|| Error::auth_required("").named("AuthMissing"))?;
+        let token = authorization.bearer().ok_or_else(|| {
+            Error::new(super::Status::AuthenticationRequired).named("AuthMissing")
+        })?;
         Tokens::from_ref(state).verify_access(token, &Scope::STANDARD)
     }
 }
