@@ -27,7 +27,7 @@ pub(super) type Migration = (
 /// Opens a database file, making its directory if it is not there.
 pub(super) fn open(path: &Path, migrations: &[Migration]) -> Result<Connection, Error> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        super::directory(parent)?;
     }
     prepare(Connection::open(path)?, migrations)
 }

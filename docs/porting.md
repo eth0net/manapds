@@ -82,10 +82,12 @@ retry loop that has to be right about which errors are worth retrying.
 ### A signing key is readable by nobody else
 
 Upstream writes the key file at whatever the umask allows, which on a normal
-system means everyone on the box can read it. Here it is set to owner-only
-after the write. An account's key is the one thing that cannot be reissued
-without a PLC operation, so the cost of being strict is a permissions error on
-a badly restored backup and the cost of not being is the account.
+system means everyone on the box can read it. Here the mode is set as the file
+is made, the write refuses a path already holding one, and every directory
+under the data directory is made owner-only. An account's key is the one thing
+that cannot be reissued without a PLC operation, so the cost of being strict is
+a permissions error on a badly restored backup and the cost of not being is the
+account.
 
 ### An XRPC path is an NSID or it is nothing
 

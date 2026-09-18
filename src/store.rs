@@ -48,6 +48,19 @@ pub use blobs::Blobs;
 pub use did_cache::{Cached, DidCache};
 pub use sequencer::{Entry, Event, Sequencer};
 
+/// Makes a directory nobody else can look into, which is what everything
+/// holding an account's data wants to be.
+fn directory(path: &Path) -> Result<(), std::io::Error> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path)
+}
+
 /// The data directory, and where each thing under it lives.
 #[derive(Clone, Debug)]
 pub struct Directory(PathBuf);

@@ -21,20 +21,27 @@ pub fn read(path: &Path) -> Result<Keypair, Error> {
     )?)
 }
 
-/// Writes a signing key, readable only by the user running the server.
+/// Writes a signing key that nobody else could read even for an instant, and
+/// refuses to write over one already there. See `docs/porting.md` for why the
+/// strictness is worth a permissions error.
 ///
 /// # Errors
 ///
-/// If the directory cannot be made or the file cannot be written.
+/// If the directory cannot be made, a key is already at that path, or the
+/// write fails.
 pub fn write(path: &Path, keypair: &Keypair) -> Result<(), Error> {
+    use std::io::Write;
+
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        super::directory(parent)?;
     }
-    std::fs::write(path, keypair.to_bytes())?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
     }
+    options.open(path)?.write_all(&keypair.to_bytes())?;
     Ok(())
 }

@@ -547,3 +547,42 @@ fn every_schema_is_the_one_the_reference_builds() {
         assert_eq!(schema(&at(name)), reference_schema(name), "{name}");
     }
 }
+
+#[test]
+fn a_signing_key_is_never_written_over() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let path = home
+        .path()
+        .join("actors")
+        .join("aa")
+        .join("did")
+        .join("key");
+    let keypair = Keypair::generate(Algorithm::Secp256k1);
+    keys::write(&path, &keypair).expect("writes");
+
+    let second = Keypair::generate(Algorithm::Secp256k1);
+    keys::write(&path, &second).expect_err("a key is written once");
+    assert_eq!(
+        keys::read(&path).expect("reads").to_bytes(),
+        keypair.to_bytes()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn nothing_under_the_data_directory_is_open_to_anyone_else() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let directory = Directory::new(home.path().join("data"));
+    Accounts::open(&directory.accounts()).expect("opens");
+
+    let mode = |path: &std::path::Path| {
+        std::fs::metadata(path)
+            .expect("a directory")
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    assert_eq!(mode(home.path().join("data").as_path()), 0o700);
+}
