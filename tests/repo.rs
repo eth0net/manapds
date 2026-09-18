@@ -675,3 +675,55 @@ fn the_reference_commit_proof_roots_are_the_ones_built_here() {
         );
     }
 }
+
+/// A commit block built by the reference's own encoder, so that this server's
+/// idea of the wire format is checked against something other than itself.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Golden {
+    did: String,
+    rev: String,
+    data: String,
+    signing_key: String,
+    unsigned: String,
+    block: String,
+    cid: String,
+}
+
+#[test]
+fn a_commit_is_the_bytes_the_reference_would_have_written() {
+    let golden: Golden =
+        serde_json::from_str(include_str!("fixtures/commit/golden.json")).expect("the fixture");
+    let block = hex::decode(&golden.block).expect("hex");
+    let keypair = Keypair::from_bytes(
+        Algorithm::Secp256k1,
+        &hex::decode("9085d2bef69286a6cbb51623c8fa258629945cd55ca705cc4e66700396894e0c")
+            .expect("hex"),
+    )
+    .expect("a key");
+    assert_eq!(keypair.public_key().to_string(), golden.signing_key);
+
+    // Signing is deterministic on both sides, so the whole block matches and
+    // not merely its shape.
+    let commit = Commit::sign(
+        golden.did.parse().expect("a DID"),
+        golden.rev.parse().expect("a TID"),
+        golden.data.parse().expect("a CID"),
+        &keypair,
+    )
+    .expect("signs");
+    assert_eq!(hex::encode(encode(&commit).expect("encodes")), golden.block);
+    assert_eq!(cid_for(&block).to_string(), golden.cid);
+
+    // And what the reference wrote is read back as the same commit.
+    let read: Commit = decode(&block).expect("decodes");
+    assert_eq!(read, commit);
+    assert_eq!(read.version, VERSION);
+    assert!(read.prev.is_none());
+    read.verify(&keypair.public_key())
+        .expect("the key signed it");
+
+    // The signature covers the commit without its signature, which is the one
+    // thing a reader cannot check by re-encoding what it was given.
+    assert!(golden.unsigned.len() < golden.block.len());
+}
