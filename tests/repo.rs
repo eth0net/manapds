@@ -617,3 +617,61 @@ fn a_tree_that_reaches_the_same_node_twice_is_refused() {
         .expect_err("a file that unfolds into more tree than it holds");
     assert_eq!(error, Error::MalformedNode("a node under itself"));
 }
+
+/// One of the reference's covering-proof cases, read for the roots it pins
+/// rather than the proof: a tree built from `keys`, then the same tree after
+/// `adds` and `dels` are applied together.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommitProof {
+    comment: String,
+    leaf_value: String,
+    keys: Vec<String>,
+    adds: Vec<String>,
+    dels: Vec<String>,
+    root_before_commit: String,
+    root_after_commit: String,
+}
+
+#[test]
+fn the_reference_commit_proof_roots_are_the_ones_built_here() {
+    let fixtures: Vec<CommitProof> =
+        serde_json::from_str(include_str!("fixtures/mst/commit-proof-fixtures.json"))
+            .expect("the fixture parses");
+    assert_eq!(fixtures.len(), 6);
+
+    for fixture in fixtures {
+        let value: Cid = fixture.leaf_value.parse().expect("a CID");
+        let mut blocks = BlockMap::new();
+
+        let mut tree = Mst::empty();
+        for key in &fixture.keys {
+            tree = tree.add(&blocks, key, value).expect("adds");
+        }
+        let (before, tree_blocks) = tree.unstored_blocks(&blocks).expect("hashes");
+        blocks.merge(tree_blocks);
+        assert_eq!(
+            before.to_string(),
+            fixture.root_before_commit,
+            "{} before",
+            fixture.comment
+        );
+
+        // Every operation of the commit lands before the root is taken, which
+        // is what makes a merge and a split in the same commit reachable.
+        for key in &fixture.dels {
+            tree = tree.delete(&blocks, key).expect("deletes");
+        }
+        for key in &fixture.adds {
+            tree = tree.add(&blocks, key, value).expect("adds");
+        }
+        let (after, tree_blocks) = tree.unstored_blocks(&blocks).expect("hashes");
+        blocks.merge(tree_blocks);
+        assert_eq!(
+            after.to_string(),
+            fixture.root_after_commit,
+            "{} after",
+            fixture.comment
+        );
+    }
+}
