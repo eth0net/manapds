@@ -555,3 +555,65 @@ fn updates_and_deletes_move_the_root() {
     );
     assert_eq!(repo.verify(&key.public_key()), Ok(()));
 }
+
+/// A node whose only content is the subtree to its left.
+fn chain(child: Ipld) -> Ipld {
+    Ipld::Map(BTreeMap::from([
+        ("e".to_owned(), Ipld::List(Vec::new())),
+        ("l".to_owned(), child),
+    ]))
+}
+
+/// A node reaching the same subtree twice, once to the left and once past its
+/// one record.
+fn forked(child: Cid, value: Cid) -> Ipld {
+    Ipld::Map(BTreeMap::from([
+        ("l".to_owned(), Ipld::Link(child)),
+        (
+            "e".to_owned(),
+            Ipld::List(vec![Ipld::Map(BTreeMap::from([
+                ("p".to_owned(), Ipld::Integer(0)),
+                (
+                    "k".to_owned(),
+                    Ipld::Bytes(b"com.example.record/3jqfcqzm4fc2j".to_vec()),
+                ),
+                ("v".to_owned(), Ipld::Link(value)),
+                ("t".to_owned(), Ipld::Link(child)),
+            ]))]),
+        ),
+    ]))
+}
+
+#[test]
+fn a_tree_deeper_than_its_keys_allow_is_refused() {
+    let mut blocks = BlockMap::new();
+    let mut cid = blocks.add(&chain(Ipld::Null)).expect("a node");
+    for _ in 0..300 {
+        cid = blocks.add(&chain(Ipld::Link(cid))).expect("a node");
+    }
+
+    let error = Mst::load(cid)
+        .leaves(&blocks)
+        .expect_err("a chain no key could have built");
+    assert_eq!(
+        error,
+        Error::MalformedNode("a tree deeper than its keys allow")
+    );
+}
+
+#[test]
+fn a_tree_that_reaches_the_same_node_twice_is_refused() {
+    let mut blocks = BlockMap::new();
+    let value = blocks.add(&post("a record to point at")).expect("a record");
+    let mut cid = blocks.add(&chain(Ipld::Null)).expect("a node");
+    // Each level doubles the work of walking it, so twenty-four of them is
+    // sixteen million leaves out of a file this size.
+    for _ in 0..24 {
+        cid = blocks.add(&forked(cid, value)).expect("a node");
+    }
+
+    let error = Mst::load(cid)
+        .leaves(&blocks)
+        .expect_err("a file that unfolds into more tree than it holds");
+    assert_eq!(error, Error::MalformedNode("a node under itself"));
+}

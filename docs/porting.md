@@ -114,3 +114,16 @@ from the internet. Upstream also trusts a configured list of public addresses,
 for the entryway in front of a hosted deployment. Nothing here runs behind an
 entryway, so the list is the private ranges and loopback, and a proxy elsewhere
 would have to be reached over a private network to be believed.
+
+### A stored tree is refused rather than walked
+
+Upstream follows whatever a node says its children are: no depth limit, and no
+record of where the walk has already been. Here a traversal counts its levels
+and the nodes it has read, and refuses a tree deeper than a key's hash could
+put it or one that reaches the same node twice.
+
+Neither can happen in a tree built by the rules, and both are a few lines to
+build by hand. The second is the one that matters: nodes pointing at each other
+double the walk per level, so a few kilobytes unfold into millions of leaves,
+which no limit on the size of a file can catch. The cost is a ceiling of 256
+levels on a rule that cannot reach past 128.
