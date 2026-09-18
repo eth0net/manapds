@@ -240,31 +240,50 @@ pub async fn global(
 /// the header itself.
 #[must_use]
 pub fn caller(peer: IpAddr, headers: &HeaderMap) -> IpAddr {
+    let peer = canonical(peer);
     if !internal(peer) {
         return peer;
     }
-    let forwarded: Vec<IpAddr> = headers
+    headers
         .get_all(FORWARDED)
         .iter()
         .filter_map(|value| value.to_str().ok())
         .flat_map(|value| value.split(','))
         .filter_map(|part| part.trim().parse().ok())
-        .collect();
-    forwarded
-        .into_iter()
-        .rev()
-        .find(|address| !internal(*address))
+        .map(canonical)
+        .rfind(|address| !internal(*address))
         .unwrap_or(peer)
 }
 
-/// An address no packet from the internet carries as its source.
+/// The one spelling of an address, so that a caller arriving as `::ffff:1.2.3.4`
+/// and the same caller arriving as `1.2.3.4` are held to one budget.
+fn canonical(address: IpAddr) -> IpAddr {
+    match address {
+        IpAddr::V6(address) => address
+            .to_ipv4_mapped()
+            .map_or(IpAddr::V6(address), IpAddr::V4),
+        address @ IpAddr::V4(_) => address,
+    }
+}
+
+/// An address no packet from the internet carries as its source, which is what
+/// makes a proxy claiming to speak for someone else worth believing.
 fn internal(address: IpAddr) -> bool {
     match address {
         IpAddr::V4(address) => {
-            address.is_loopback() || address.is_private() || address.is_link_local()
+            address.is_loopback()
+                || address.is_private()
+                || address.is_link_local()
+                || address.is_unspecified()
+                // Carrier-grade NAT, which is what several hosting front-ends
+                // put in front of a server.
+                || address.octets()[0] == 100 && address.octets()[1] & 0xc0 == 64
         }
         IpAddr::V6(address) => {
-            address.is_loopback() || unique_local(address) || link_local(address)
+            address.is_loopback()
+                || address.is_unspecified()
+                || unique_local(address)
+                || link_local(address)
         }
     }
 }

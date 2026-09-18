@@ -354,6 +354,27 @@ fn a_caller_cannot_name_someone_else_to_spend_the_budget() {
 }
 
 #[test]
+fn a_proxy_is_believed_however_its_address_is_spelled() {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("x-forwarded-for", "9.9.9.9".parse().expect("a header"));
+
+    // The same loopback, written the way a dual-stack socket reports it.
+    let mapped: SocketAddr = "[::ffff:127.0.0.1]:9".parse().expect("an address");
+    assert_eq!(limit::caller(mapped.ip(), &headers).to_string(), "9.9.9.9");
+
+    // Carrier-grade NAT, which is what a hosting front-end arrives from.
+    let cgnat: SocketAddr = "100.64.0.1:9".parse().expect("an address");
+    assert_eq!(limit::caller(cgnat.ip(), &headers).to_string(), "9.9.9.9");
+
+    // And one caller reaching us both ways is still one caller.
+    let straight: SocketAddr = "[::ffff:8.8.8.8]:9".parse().expect("an address");
+    assert_eq!(
+        limit::caller(straight.ip(), &axum::http::HeaderMap::new()).to_string(),
+        "8.8.8.8"
+    );
+}
+
+#[test]
 fn a_chain_of_proxies_is_walked_back_to_the_first_one_outside() {
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(

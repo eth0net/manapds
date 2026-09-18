@@ -117,6 +117,11 @@ for the entryway in front of a hosted deployment. Nothing here runs behind an
 entryway, so the list is the private ranges and loopback, and a proxy elsewhere
 would have to be reached over a private network to be believed.
 
+Carrier-grade NAT counts here and does not upstream, and an address arriving as
+an IPv4-mapped IPv6 one is read as the address it maps to. Both are what a
+hosting front-end actually turns up as, and missing either puts every caller
+behind it on one budget.
+
 ### A stored tree is refused rather than walked
 
 Upstream follows whatever a node says its children are: no depth limit, and no
