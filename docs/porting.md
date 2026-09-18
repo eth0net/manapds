@@ -143,3 +143,37 @@ build by hand. The second is the one that matters: nodes pointing at each other
 double the walk per level, so a few kilobytes unfold into millions of leaves,
 which no limit on the size of a file can catch. The cost is a ceiling of 256
 levels on a rule that cannot reach past 128.
+
+### A budget is spent before the request is understood
+
+Upstream counts a call against the global budget inside the handler, after the
+parameters and the credentials have been checked, so a request refused for
+either costs the caller nothing. Here the count happens as the request arrives.
+
+Both charge the same one point. The difference is what a failure costs, and a
+refused request still costs this server a parse, a signature check and a
+socket. Charging for it is also what stops an unauthenticated flood being free.
+Rate limit headers therefore appear on a 400 and a 401 too, where upstream
+sends none.
+
+### Blocks come out of a CAR in CID order
+
+Upstream holds a block map in insertion order and writes it out that way, which
+puts the root commit last in a file describing a commit. Here the map is sorted
+by CID, so the same repository produces the same bytes whatever order the
+blocks were added in.
+
+No consumer depends on either: the header names the roots, and a reader loads
+the whole file into a map. The one thing insertion order would buy is comparing
+this server's output byte for byte against the reference's for the same
+repository, which is worth revisiting if that test is ever wanted.
+
+### A did:key holds a compressed point or it is not read
+
+Upstream hands whatever follows the multicodec prefix to its curve library,
+which also accepts the 65-byte uncompressed form. Here the length has to be 33.
+
+Both the did:key method and atproto specify the compressed point, and nothing
+in the network emits anything else, so this refuses only what was already
+malformed. The reason to be strict rather than generous is that accepting both
+would give one key two spellings, and therefore one account two DIDs.
