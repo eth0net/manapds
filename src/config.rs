@@ -35,7 +35,9 @@ pub struct Config {
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("{0} is not a number: {1}")]
-    NotANumber(&'static str, ParseIntError),
+    NotANumber(&'static str, #[source] ParseIntError),
+    #[error("{0} is not true or false")]
+    NotABoolean(&'static str),
     #[error("{0} has to be set")]
     Missing(&'static str),
 }
@@ -48,8 +50,8 @@ impl Config {
     ///
     /// # Errors
     ///
-    /// If a variable that has to be a number isn't one, or `PDS_JWT_SECRET` is
-    /// unset.
+    /// If a variable that has to be a number or a boolean isn't one, or
+    /// `PDS_JWT_SECRET` is unset.
     pub fn from_env() -> Result<Self, ConfigError> {
         let hostname = string("PDS_HOSTNAME").unwrap_or_else(|| "localhost".to_owned());
 
@@ -61,12 +63,12 @@ impl Config {
             data_directory: string("PDS_DATA_DIRECTORY")
                 .map_or_else(|| PathBuf::from("data"), PathBuf::from),
             jwt_secret: string("PDS_JWT_SECRET").ok_or(ConfigError::Missing("PDS_JWT_SECRET"))?,
-            invite_required: boolean("PDS_INVITE_REQUIRED").unwrap_or(true),
+            invite_required: boolean("PDS_INVITE_REQUIRED")?.unwrap_or(true),
             blob_upload_limit: number("PDS_BLOB_UPLOAD_LIMIT")?.unwrap_or(5 * 1024 * 1024),
             privacy_policy_url: string("PDS_PRIVACY_POLICY_URL"),
             terms_of_service_url: string("PDS_TERMS_OF_SERVICE_URL"),
             contact_email: string("PDS_CONTACT_EMAIL_ADDRESS"),
-            rate_limits: boolean("PDS_RATE_LIMITS_ENABLED").unwrap_or(false),
+            rate_limits: boolean("PDS_RATE_LIMITS_ENABLED")?.unwrap_or(false),
             rate_limit_bypass_key: string("PDS_RATE_LIMIT_BYPASS_KEY"),
             // The reference takes CIDR here and keeps only the address, so a
             // range written out is read as the one address it starts at.
@@ -95,8 +97,16 @@ fn list(key: &str) -> Option<Vec<String>> {
     })
 }
 
-fn boolean(key: &str) -> Option<bool> {
-    string(key).map(|value| value == "true" || value == "1")
+/// Upstream reads an unrecognized value as unset and falls back to the
+/// default. Here it is an error: a misspelled flag that quietly means the
+/// opposite of what was written is worse than a server that will not start.
+fn boolean(key: &'static str) -> Result<Option<bool>, ConfigError> {
+    match string(key).as_deref() {
+        None => Ok(None),
+        Some("true" | "1") => Ok(Some(true)),
+        Some("false" | "0") => Ok(Some(false)),
+        Some(_) => Err(ConfigError::NotABoolean(key)),
+    }
 }
 
 fn number<T: std::str::FromStr<Err = ParseIntError>>(
