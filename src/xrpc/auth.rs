@@ -53,9 +53,6 @@ pub enum Scope {
 }
 
 impl Scope {
-    /// Only a full session.
-    pub const FULL: [Self; 1] = [Self::Access];
-
     /// A full session, or an app password trusted with more than posting.
     pub const PRIVILEGED: [Self; 2] = [Self::Access, Self::PrivilegedAppPassword];
 
@@ -76,8 +73,13 @@ impl Scope {
     }
 }
 
+/// A scope string this server does not issue.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("not a scope this server issues")]
+pub struct UnknownScope;
+
 impl FromStr for Scope {
-    type Err = ();
+    type Err = UnknownScope;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
@@ -87,9 +89,21 @@ impl FromStr for Scope {
             "com.atproto.appPassPrivileged" => Ok(Self::PrivilegedAppPassword),
             "com.atproto.signupQueued" => Ok(Self::SignupQueued),
             "com.atproto.takendown" => Ok(Self::TakenDown),
-            _ => Err(()),
+            _ => Err(UnknownScope),
         }
     }
+}
+
+/// Whether a refresh token past its expiry is still read.
+///
+/// A client that has been away longer than the token lives still has to be
+/// able to end its session, which is the one thing an expired one may do.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Expired {
+    /// Refuse it, which is what exchanging one for a new session does.
+    Refuse,
+    /// Read it anyway.
+    Allow,
 }
 
 impl std::fmt::Display for Scope {
@@ -176,7 +190,7 @@ impl Tokens {
     /// If it is not a token this server signed, has expired, or carries a
     /// scope not in the list.
     pub fn verify_access(&self, token: &str, scopes: &[Scope]) -> Result<Access, Error> {
-        let claims = self.verify(token, "at+jwt", scopes, false)?;
+        let claims = self.verify(token, "at+jwt", scopes, Expired::Refuse)?;
         Ok(Access {
             did: did(&claims.sub)?,
             scope: scope(&claims.scope)?,
@@ -185,14 +199,11 @@ impl Tokens {
 
     /// Reads a refresh token back.
     ///
-    /// `expired` lets one through past its expiry, which is how a session is
-    /// revoked by a client that has been away longer than the token lives.
-    ///
     /// # Errors
     ///
     /// If it is not a token this server signed, carries another scope, or has
     /// no `jti` to find the stored session by.
-    pub fn verify_refresh(&self, token: &str, expired: bool) -> Result<Refresh, Error> {
+    pub fn verify_refresh(&self, token: &str, expired: Expired) -> Result<Refresh, Error> {
         let claims = self.verify(token, "refresh+jwt", &[Scope::Refresh], expired)?;
         let id = claims.jti.ok_or_else(|| {
             Error::auth_required("Unexpected missing refresh token id").named("MissingTokenId")
@@ -236,7 +247,7 @@ impl Tokens {
         token: &str,
         typ: &str,
         scopes: &[Scope],
-        expired: bool,
+        expired: Expired,
     ) -> Result<Claims, Error> {
         let (signed, signature) = token.rsplit_once('.').ok_or_else(unverifiable)?;
         let (header, payload) = signed.split_once('.').ok_or_else(unverifiable)?;
@@ -255,7 +266,7 @@ impl Tokens {
             .map_err(|_| unverifiable())?;
 
         let claims: Claims = decode(payload)?;
-        if !expired && claims.exp <= Timestamp::now().as_second() {
+        if expired == Expired::Refuse && claims.exp <= Timestamp::now().as_second() {
             return Err(Error::invalid_request("Token has expired").named("ExpiredToken"));
         }
         if claims.aud != *self.audience {
@@ -470,7 +481,7 @@ fn did(sub: &str) -> Result<Did, Error> {
 }
 
 fn scope(value: &str) -> Result<Scope, Error> {
-    value.parse().map_err(|()| malformed())
+    value.parse().map_err(|UnknownScope| malformed())
 }
 
 fn unverifiable() -> Error {

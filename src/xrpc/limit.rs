@@ -135,14 +135,9 @@ impl Limiter {
 }
 
 impl Reading {
-    /// The refusal a spent budget answers with.
-    #[must_use]
-    pub fn error(self) -> Error {
-        Error::new(Status::RateLimitExceeded)
-    }
-
-    /// Tells the caller what it has left, in the headers the standard draft
-    /// names.
+    /// Tells the caller what it has left. The names are the draft standard's;
+    /// the reset is a unix timestamp, which is what the reference sends rather
+    /// than the seconds-from-now the draft asks for.
     pub fn write(self, headers: &mut HeaderMap) {
         let mut set = |name: HeaderName, value: String| {
             if let Ok(value) = HeaderValue::from_str(&value) {
@@ -228,7 +223,7 @@ pub async fn global(
 
     let reading = limits.global.consume(&caller.to_string(), 1);
     let mut response = if reading.exceeded {
-        reading.error().into_response()
+        Error::new(Status::RateLimitExceeded).into_response()
     } else {
         next.run(request).await
     };

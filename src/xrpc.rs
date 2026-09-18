@@ -146,12 +146,6 @@ impl Error {
         Self::new(Status::AuthenticationRequired).saying(message)
     }
 
-    /// Credentials that do not reach what was asked for.
-    #[must_use]
-    pub fn forbidden(message: impl Into<String>) -> Self {
-        Self::new(Status::Forbidden).saying(message)
-    }
-
     /// A fault on this side. The message is logged rather than answered with,
     /// so it can say what actually happened.
     #[must_use]

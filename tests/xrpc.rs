@@ -13,7 +13,7 @@ use axum::{
 use manapds::config::{Config, Secret};
 use manapds::server;
 use manapds::syntax::Did;
-use manapds::xrpc::auth::{Access, Authorization, Credential, Scope, Tokens};
+use manapds::xrpc::auth::{Access, Authorization, Credential, Expired, Scope, Tokens};
 use manapds::xrpc::limit::{self, Limiter};
 use manapds::xrpc::{Error, Status};
 use tower::ServiceExt;
@@ -171,7 +171,7 @@ fn a_refresh_token_carries_the_id_the_session_is_stored_under() {
     let tokens = tokens();
     let token = tokens.refresh(&account(), "a-stored-session");
     let refresh = tokens
-        .verify_refresh(&token, false)
+        .verify_refresh(&token, Expired::Refuse)
         .expect("the token verifies");
     assert_eq!(refresh.did, account());
     assert_eq!(refresh.id, "a-stored-session");
@@ -182,7 +182,7 @@ fn neither_kind_of_token_can_be_spent_as_the_other() {
     let tokens = tokens();
     let access = tokens.access(&account(), Scope::Access);
     let refresh = tokens.refresh(&account(), "a-stored-session");
-    assert!(tokens.verify_refresh(&access, false).is_err());
+    assert!(tokens.verify_refresh(&access, Expired::Refuse).is_err());
     assert!(tokens.verify_access(&refresh, &Scope::STANDARD).is_err());
 }
 
@@ -215,6 +215,43 @@ fn an_app_password_does_not_reach_what_a_full_session_does() {
         .verify_access(&token, &Scope::PRIVILEGED)
         .expect_err("an app password is not privileged");
     assert_eq!(error.message(), "Bad token scope");
+}
+
+#[test]
+fn a_refresh_token_past_its_expiry_can_still_end_its_session() {
+    let tokens = tokens();
+    let token = tokens.refresh(&account(), "a-stored-session");
+
+    // Nothing here mints an expired refresh token, so this pins the choice
+    // rather than the clock: refusing is what exchanging one does.
+    assert!(tokens.verify_refresh(&token, Expired::Refuse).is_ok());
+    assert!(tokens.verify_refresh(&token, Expired::Allow).is_ok());
+
+    let stale = forge(
+        "refresh+jwt",
+        &serde_json::json!({
+            "scope": "com.atproto.refresh",
+            "sub": account().as_str(),
+            "aud": "did:web:pds.example.com",
+            "jti": "a-stored-session",
+            "iat": 1_600_000_000,
+            "exp": 1_600_000_001,
+        }),
+    );
+    assert_eq!(
+        tokens
+            .verify_refresh(&stale, Expired::Refuse)
+            .expect_err("too late to exchange")
+            .name(),
+        "ExpiredToken"
+    );
+    assert_eq!(
+        tokens
+            .verify_refresh(&stale, Expired::Allow)
+            .expect("late is still this session")
+            .id,
+        "a-stored-session"
+    );
 }
 
 #[test]
