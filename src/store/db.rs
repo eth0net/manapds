@@ -40,6 +40,10 @@ pub(super) fn memory(migrations: &[Migration]) -> Result<Connection, Error> {
 fn prepare(db: Connection, migrations: &[Migration]) -> Result<Connection, Error> {
     db.busy_timeout(BUSY_TIMEOUT)?;
     db.pragma_update(None, "journal_mode", "WAL")?;
+    // SQLite leaves these off per connection and the reference never asks for
+    // them, but better-sqlite3 turns them on as it opens, so the cascades the
+    // schema declares do fire over there.
+    db.pragma_update(None, "foreign_keys", "ON")?;
     let mut db = db;
     migrate(&mut db, migrations)?;
     Ok(db)

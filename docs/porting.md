@@ -72,6 +72,15 @@ Ten bits are reserved for it and upstream randomizes five of them. Filling the
 field costs nothing and pushes out the point where two servers minting in the
 same microsecond land on the same TID.
 
+### The foreign keys the schema declares are enforced
+
+SQLite leaves them off per connection and the reference sets no pragma for
+them, but it opens its databases through better-sqlite3, which turns them on
+as it connects. So upstream's cascades fire and a schema matched byte for byte
+would still have behaved differently here. The pragma goes on at open for the
+same reason the schema is copied: it is the shape the other server left the
+data in.
+
 ### SQLite is left to do its own waiting
 
 Upstream opens every connection with no busy timeout and retries around the
