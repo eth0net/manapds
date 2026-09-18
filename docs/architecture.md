@@ -30,6 +30,11 @@ Whoever runs the server can be let past, by a key in a header or by address.
 That is what makes a bulk import possible without turning the budgets off for
 everyone.
 
+Every repository read is blocking SQLite, so a handler does the whole
+operation inside one blocking task rather than holding a store across an await.
+That is why the store trait needs no `Sync` bound: an account's connection is
+moved into the task that uses it and moved back, never shared.
+
 ## Storage is split three ways
 
 - **One SQLite file per account**, holding that account's repository blocks,

@@ -1,5 +1,6 @@
 //! Blocks: dag-cbor bytes and the CID that addresses them.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use ipld_core::cid::{Cid, multihash::Multihash};
@@ -50,7 +51,10 @@ pub trait Store {
     /// # Errors
     ///
     /// If nothing is stored there, or the store cannot be reached.
-    fn get(&self, cid: &Cid) -> Result<Vec<u8>, Error>;
+    /// A store holding the bytes already lends them; one that has to fetch
+    /// them hands them over. Either way the tree reads a great many nodes and
+    /// keeps none of them.
+    fn get(&self, cid: &Cid) -> Result<Cow<'_, [u8]>, Error>;
 
     /// Whether a block is already stored, which decides if writing it again
     /// would be wasted.
@@ -123,8 +127,11 @@ impl BlockMap {
 }
 
 impl Store for BlockMap {
-    fn get(&self, cid: &Cid) -> Result<Vec<u8>, Error> {
-        self.0.get(cid).cloned().ok_or(Error::MissingBlock(*cid))
+    fn get(&self, cid: &Cid) -> Result<Cow<'_, [u8]>, Error> {
+        self.0
+            .get(cid)
+            .map(|bytes| Cow::Borrowed(bytes.as_slice()))
+            .ok_or(Error::MissingBlock(*cid))
     }
 
     fn contains(&self, cid: &Cid) -> Result<bool, Error> {

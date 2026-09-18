@@ -27,7 +27,10 @@ fn reads_what_the_reference_wrote() {
         assert_eq!(blocks.len(), fixture.blocks.len());
         for block in &fixture.blocks {
             let cid: Cid = block.cid.parse().expect("a CID");
-            assert_eq!(blocks.get(&cid), Ok(base64(&block.bytes)));
+            assert_eq!(
+                blocks.get(&cid).as_deref(),
+                Ok(base64(&block.bytes).as_slice())
+            );
         }
     }
 }

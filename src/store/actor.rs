@@ -154,15 +154,16 @@ impl Actor {
 }
 
 impl Store for Actor {
-    fn get(&self, cid: &Cid) -> Result<Vec<u8>, crate::repo::Error> {
+    fn get(&self, cid: &Cid) -> Result<std::borrow::Cow<'_, [u8]>, crate::repo::Error> {
         self.db
             .query_row(
                 r#"select "content" from "repo_block" where "cid" = ?1"#,
                 params![cid.to_string()],
-                |row| row.get(0),
+                |row| row.get::<_, Vec<u8>>(0),
             )
             .optional()
-            .map_err(|error| crate::repo::Error::Store(error.to_string()))?
+            .map_err(|error| unreachable(&error))?
+            .map(std::borrow::Cow::Owned)
             .ok_or(crate::repo::Error::MissingBlock(*cid))
     }
 
@@ -175,6 +176,19 @@ impl Store for Actor {
             )
             .optional()
             .map(|found| found.unwrap_or(false))
-            .map_err(|error| crate::repo::Error::Store(error.to_string()))
+            .map_err(|error| unreachable(&error))
     }
+}
+
+/// A database that would not answer. Whether waiting would help is the one
+/// thing a caller needs from this, since the answer decides between telling a
+/// client to come back and telling it something is broken.
+fn unreachable(error: &rusqlite::Error) -> crate::repo::Error {
+    if matches!(
+        error.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    ) {
+        return crate::repo::Error::StoreBusy;
+    }
+    crate::repo::Error::Store(error.to_string())
 }

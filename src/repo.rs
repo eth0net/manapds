@@ -50,6 +50,9 @@ pub enum Error {
     /// Whatever the blocks are kept in would not answer.
     #[error("store: {0}")]
     Store(String),
+    /// The same, but waiting is what would help.
+    #[error("store is busy")]
+    StoreBusy,
     /// A revision with nothing above it left in the field.
     #[error("no revision follows {0}")]
     NoRevisionAfter(Tid),
