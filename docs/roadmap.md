@@ -33,6 +33,14 @@ start this and have a client sign in and read something back, and a version
 number before then would be marking a library nobody can run. The README has to
 say how to start it by the same commit, or the tag claims more than it delivers.
 
+Three things are owed to steps that have not started. `getRepo` may not be
+served before the per-method budgets exist, or the one exemption in the global
+budget becomes a hole. `createAccount` needs `reserved_keys/` and the `did-op`
+file beside an actor's key, since both are part of reading a directory the
+reference left behind. And whatever first verifies a service token has to allow
+a malleable signature on that path alone — upstream issues them, account
+commits stay strict, and conflating the two would loosen the wrong one.
+
 Rate limits land with step 6 rather than later, at the reference's numbers:
 `applyWrites` capped at 200 operations, and the hourly and daily point budgets
 that decide how long a large import takes. An importer tuned against limits

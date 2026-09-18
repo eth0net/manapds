@@ -28,6 +28,9 @@ const GLOBAL_WINDOW: Duration = Duration::from_mins(5);
 
 /// A sync path large enough that one call would eat a shared budget, so it
 /// is left to the budget its own method holds.
+// todo(per-method budgets): upstream pairs this exemption with 6000 points per
+// five minutes on the method itself. Serving getRepo before that exists would
+// leave the most expensive read here the only one nothing counts.
 const UNBUDGETED: &str = "/xrpc/com.atproto.sync.getRepo";
 
 /// The header a caller with the bypass key sends it in.
