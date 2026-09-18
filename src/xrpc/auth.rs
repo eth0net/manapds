@@ -120,25 +120,28 @@ pub struct Refresh {
 /// as its audience.
 #[derive(Clone)]
 pub struct Tokens {
-    key: Vec<u8>,
-    audience: String,
+    key: Arc<[u8]>,
+    audience: Arc<str>,
 }
 
 impl std::fmt::Debug for Tokens {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("Tokens")
-            .field("audience", &self.audience)
+            .field("audience", &&*self.audience)
             .finish_non_exhaustive()
     }
 }
 
 impl Tokens {
     /// Holds the secret and the DID tokens are minted for.
-    pub fn new(secret: impl Into<Vec<u8>>, audience: impl Into<String>) -> Self {
+    ///
+    /// Cloned once per authenticated request, so both are shared rather than
+    /// copied: the secret has no business being scattered across the heap.
+    pub fn new(secret: impl AsRef<[u8]>, audience: impl AsRef<str>) -> Self {
         Self {
-            key: secret.into(),
-            audience: audience.into(),
+            key: Arc::from(secret.as_ref()),
+            audience: Arc::from(audience.as_ref()),
         }
     }
 
@@ -212,7 +215,7 @@ impl Tokens {
         let claims = Claims {
             scope: scope.to_string(),
             sub: did.as_str().to_owned(),
-            aud: self.audience.clone(),
+            aud: self.audience.to_string(),
             iat: now.as_second(),
             exp: (now + lifetime).as_second(),
             jti,
@@ -257,7 +260,7 @@ impl Tokens {
         }
         // A service auth token proves something else entirely, and this server
         // signs both kinds, so one must never be read as the other.
-        if claims.lxm.is_some() || claims.cnf.is_some() || claims.aud != self.audience {
+        if claims.lxm.is_some() || claims.cnf.is_some() || claims.aud != *self.audience {
             return Err(malformed());
         }
         if !scopes.contains(&scope(&claims.scope)?) {
