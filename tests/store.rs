@@ -586,3 +586,82 @@ fn nothing_under_the_data_directory_is_open_to_anyone_else() {
     };
     assert_eq!(mode(home.path().join("data").as_path()), 0o700);
 }
+
+/// Builds a database where the reference left one: schema at 004, ledger
+/// stamped to match, and whatever rows the caller wants in it.
+fn account_database_at_004(path: &Path, rows: &str) {
+    let schema = include_str!("fixtures/schema/account-004.sql");
+    let db = Connection::open(path).expect("opens");
+    // The fixture is sorted for comparing, so the indexes come before the
+    // tables they are on.
+    for kind in ["CREATE TABLE", "CREATE INDEX", "CREATE UNIQUE INDEX"] {
+        for line in schema.lines().filter(|line| line.starts_with(kind)) {
+            db.execute_batch(&format!("{line};")).expect("the schema");
+        }
+    }
+    db.execute_batch(
+        r#"create table if not exists "kysely_migration" ("name" varchar(255) not null primary key, "timestamp" varchar(255) not null);
+           insert into "kysely_migration" ("name", "timestamp") values
+             ('001', ''), ('002', ''), ('003', ''), ('004', '');"#,
+    )
+    .expect("the ledger");
+    db.execute_batch(rows).expect("the rows");
+}
+
+#[test]
+fn the_migration_that_replaces_device_sessions_carries_the_right_ones() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let path = home.path().join("account.sqlite");
+    let long_ago = "2020-01-01T00:00:00.000Z";
+    let recent = format!("{:.3}", jiff::Timestamp::now());
+
+    account_database_at_004(
+        &path,
+        &format!(
+            r#"
+            insert into "account" ("did", "email", "passwordScrypt", "invitesDisabled") values
+              ('did:plc:kept', 'kept@example.com', 'x', 0),
+              ('did:plc:forgotten', 'forgotten@example.com', 'x', 0);
+            insert into "device" ("id", "sessionId", "ipAddress", "lastSeenAt") values
+              ('dev-1', 's1', '1.2.3.4', '{recent}'),
+              ('dev-2', 's2', '1.2.3.4', '{recent}'),
+              ('dev-3', 's3', '1.2.3.4', '{recent}'),
+              ('dev-4', 's4', '1.2.3.4', '{recent}');
+            insert into "device_account" ("did", "deviceId", "authenticatedAt", "remember", "authorizedClients") values
+              ('did:plc:kept', 'dev-1', '{recent}', 1, '[]'),
+              ('did:plc:gone', 'dev-2', '{recent}', 1, '[]'),
+              ('did:plc:forgotten', 'dev-3', '{recent}', 0, '[]'),
+              ('did:plc:forgotten', 'dev-4', '{long_ago}', 0, '[]');
+            "#
+        ),
+    );
+
+    Accounts::open(&path).expect("migrates the rest of the way");
+
+    let db = Connection::open(&path).expect("opens");
+    let carried: Vec<String> = db
+        .prepare(r#"select "did" || '/' || "deviceId" from "account_device" order by "deviceId""#)
+        .expect("a statement")
+        .query_map([], |row| row.get(0))
+        .expect("rows")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    // Only the remembered session of an account still here: the one belonging
+    // to nobody would not satisfy the foreign key the new table carries.
+    assert_eq!(carried, ["did:plc:kept/dev-1"]);
+
+    let left: Vec<String> = db
+        .prepare(r#"select "deviceId" from "device_account" order by "deviceId""#)
+        .expect("a statement")
+        .query_map([], |row| row.get(0))
+        .expect("rows")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    // The session nobody asked to remember is gone once it is an hour old.
+    assert_eq!(left, ["dev-1", "dev-2", "dev-3"]);
+
+    // And a database taken over at 004 ends up shaped like one built here
+    // from nothing, which the route through 005 could otherwise miss.
+    drop(db);
+    assert_eq!(schema(&path), reference_schema("account"));
+}

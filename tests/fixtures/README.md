@@ -29,7 +29,8 @@ block matches and not merely its shape. Regenerating it means encoding
 codec.
 
 `schema/` is what each of the reference's four databases looks like once its
-own migrator has run: `sqlite3 <db> .schema`, sorted, with `sqlite_sequence`
+own migrator has run, plus `account-004.sql`, which is where that migrator
+stops one short of the migration that moves data rather than only tables: `sqlite3 <db> .schema`, sorted, with `sqlite_sequence`
 dropped because SQLite writes that one itself. Regenerating it means running
 those migrations, which needs `kysely` and `better-sqlite3` and a copy of
 `packages/pds/src/*/db/migrations/`; the account set also imports two runtime
