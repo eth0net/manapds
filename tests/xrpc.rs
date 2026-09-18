@@ -587,3 +587,199 @@ fn a_basic_header_that_will_not_decode_is_no_credential_at_all() {
         Authorization(None)
     );
 }
+
+#[test]
+fn a_budget_comes_back_when_its_window_has_passed() {
+    let limiter = Limiter::new(1, std::time::Duration::from_millis(40));
+    assert!(!limiter.consume("1.2.3.4", 1).exceeded);
+    assert!(limiter.consume("1.2.3.4", 1).exceeded);
+
+    std::thread::sleep(std::time::Duration::from_millis(60));
+    let reading = limiter.consume("1.2.3.4", 1);
+    assert!(!reading.exceeded, "the window refilled");
+    assert_eq!(reading.spent, 1, "and it started again from nothing");
+}
+
+#[tokio::test]
+async fn a_caller_past_its_budget_is_refused_and_told_when_to_return() {
+    let mut config = config();
+    config.rate_limits = true;
+    let router = server::router(config);
+
+    let call = async || {
+        let mut request = Request::builder()
+            .uri("/xrpc/com.atproto.server.describeServer")
+            .body(Body::empty())
+            .expect("a request");
+        request.extensions_mut().insert(ConnectInfo(
+            "1.2.3.4:9".parse::<SocketAddr>().expect("an address"),
+        ));
+        router.clone().oneshot(request).await.expect("an answer")
+    };
+
+    // The global budget is 3000 points per five minutes, one point a call.
+    for _ in 0..3000 {
+        assert_eq!(call().await.status(), StatusCode::OK);
+    }
+
+    let refused = call().await;
+    assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(refused.headers().contains_key("retry-after"));
+    assert_eq!(
+        refused
+            .headers()
+            .get("ratelimit-remaining")
+            .and_then(|value| value.to_str().ok()),
+        Some("0")
+    );
+
+    let body = axum::body::to_bytes(refused.into_body(), 64 * 1024)
+        .await
+        .expect("a body");
+    let body = String::from_utf8(body.to_vec()).expect("text");
+    assert!(body.contains("RateLimitExceeded"), "{body}");
+
+    // Another caller still has its own.
+    let mut request = Request::builder()
+        .uri("/xrpc/com.atproto.server.describeServer")
+        .body(Body::empty())
+        .expect("a request");
+    request.extensions_mut().insert(ConnectInfo(
+        "5.6.7.8:9".parse::<SocketAddr>().expect("an address"),
+    ));
+    let other = router.clone().oneshot(request).await.expect("an answer");
+    assert_eq!(other.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn the_one_path_with_its_own_budget_is_not_counted_here() {
+    let mut config = config();
+    config.rate_limits = true;
+    let router = server::router(config);
+
+    let mut request = Request::builder()
+        .uri("/xrpc/com.atproto.sync.getRepo")
+        .body(Body::empty())
+        .expect("a request");
+    request.extensions_mut().insert(ConnectInfo(
+        "1.2.3.4:9".parse::<SocketAddr>().expect("an address"),
+    ));
+
+    let response = router.oneshot(request).await.expect("an answer");
+    assert!(response.headers().get("ratelimit-limit").is_none());
+}
+
+#[test]
+fn every_status_is_named_the_way_the_lexicons_name_it() {
+    // Transcribed from ResponseType and ResponseTypeStrings in
+    // packages/xrpc/src/types.ts. Clients branch on the middle column.
+    let table = [
+        (
+            Status::InvalidRequest,
+            400,
+            "InvalidRequest",
+            "Invalid Request",
+        ),
+        (
+            Status::AuthenticationRequired,
+            401,
+            "AuthenticationRequired",
+            "Authentication Required",
+        ),
+        (Status::Forbidden, 403, "Forbidden", "Forbidden"),
+        (
+            Status::XrpcNotSupported,
+            404,
+            "XRPCNotSupported",
+            "XRPC Not Supported",
+        ),
+        (
+            Status::NotAcceptable,
+            406,
+            "NotAcceptable",
+            "Not Acceptable",
+        ),
+        (
+            Status::PayloadTooLarge,
+            413,
+            "PayloadTooLarge",
+            "Payload Too Large",
+        ),
+        (
+            Status::UnsupportedMediaType,
+            415,
+            "UnsupportedMediaType",
+            "Unsupported Media Type",
+        ),
+        (
+            Status::RateLimitExceeded,
+            429,
+            "RateLimitExceeded",
+            "Rate Limit Exceeded",
+        ),
+        (
+            Status::InternalServerError,
+            500,
+            "InternalServerError",
+            "Internal Server Error",
+        ),
+        (
+            Status::MethodNotImplemented,
+            501,
+            "MethodNotImplemented",
+            "Method Not Implemented",
+        ),
+        (
+            Status::UpstreamFailure,
+            502,
+            "UpstreamFailure",
+            "Upstream Failure",
+        ),
+        (
+            Status::NotEnoughResources,
+            503,
+            "NotEnoughResources",
+            "Not Enough Resources",
+        ),
+        (
+            Status::UpstreamTimeout,
+            504,
+            "UpstreamTimeout",
+            "Upstream Timeout",
+        ),
+    ];
+
+    for (status, code, name, description) in table {
+        assert_eq!(status.code().as_u16(), code, "{name}");
+        assert_eq!(status.name(), name);
+        assert_eq!(status.description(), description, "{name}");
+    }
+}
+
+#[tokio::test]
+async fn describe_server_answers_the_fields_its_lexicon_declares() {
+    let mut config = config();
+    config.contact_email = Some("hello@pds.example.com".to_owned());
+    let router = server::router(config);
+
+    let (status, body) = call(
+        &router,
+        "GET",
+        "/xrpc/com.atproto.server.describeServer",
+        "1.2.3.4:9",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let answer: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(answer["did"], "did:web:pds.example.com");
+    assert_eq!(answer["availableUserDomains"][0], ".pds.example.com");
+    assert_eq!(answer["inviteCodeRequired"], true);
+    assert_eq!(answer["blobUploadLimit"], 5 * 1024 * 1024);
+    assert_eq!(answer["contact"]["email"], "hello@pds.example.com");
+
+    // What is unset is absent rather than null, which is what the lexicon's
+    // optional fields mean.
+    assert!(answer["links"].get("privacyPolicy").is_none(), "{body}");
+    assert!(answer["links"].get("termsOfService").is_none(), "{body}");
+}

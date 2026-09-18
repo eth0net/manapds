@@ -14,6 +14,7 @@ struct SignatureFixture {
     public_key_did: String,
     signature_base64: String,
     valid_signature: bool,
+    tags: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -42,12 +43,22 @@ fn signatures() {
         let key = PublicKey::from_str(&fixture.public_key_did).expect("a did:key");
         let message = base64(&fixture.message_base64);
         let signature = base64(&fixture.signature_base64);
+        let result = key.verify(&message, &signature);
         assert_eq!(
-            key.verify(&message, &signature).is_ok(),
+            result.is_ok(),
             fixture.valid_signature,
             "{}",
             fixture.comment,
         );
+
+        // Which way it is wrong, not only that it is: a DER signature read as
+        // a high-S one would pass the check above.
+        let expected = match fixture.tags.first().map(String::as_str) {
+            Some("high-s") => Some(Error::HighS),
+            Some("der-encoded") => Some(Error::MalformedSignature),
+            _ => None,
+        };
+        assert_eq!(result.err(), expected, "{}", fixture.comment);
     }
 }
 

@@ -58,6 +58,32 @@ fn at_uri_round_trips() {
 }
 
 #[test]
+fn an_at_uri_comes_apart_into_the_pieces_it_names() {
+    let uri =
+        AtUri::from_str("at://alice.test/app.bsky.feed.post/3jui7kd54zh2y").expect("an AT-URI");
+    assert_eq!(uri.authority().to_string(), "alice.test");
+    assert_eq!(
+        uri.collection().map(ToString::to_string).as_deref(),
+        Some("app.bsky.feed.post")
+    );
+    assert_eq!(
+        uri.rkey().map(ToString::to_string).as_deref(),
+        Some("3jui7kd54zh2y")
+    );
+    assert_eq!(uri.fragment(), None);
+
+    // A bare authority has neither, and a fragment is kept without its hash so
+    // that it reads as the JSON pointer it is.
+    let repo = AtUri::from_str("at://did:plc:4cjoyc3cgpal7gnrpzyjhnv3").expect("an AT-URI");
+    assert_eq!(repo.collection(), None);
+    assert_eq!(repo.rkey(), None);
+
+    let field = AtUri::from_str("at://alice.test/app.bsky.feed.post/3jui7kd54zh2y#/text")
+        .expect("an AT-URI");
+    assert_eq!(field.fragment(), Some("/text"));
+}
+
+#[test]
 fn tid_from_parts() {
     // The reference pads the clock id to two digits and the timestamp not at
     // all, so it agrees only above a timestamp of 32^10.
