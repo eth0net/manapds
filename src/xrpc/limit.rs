@@ -16,7 +16,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use crate::config::Config;
+use crate::config::{Config, Secret};
 
 use super::{Error, Status};
 
@@ -176,7 +176,7 @@ impl Reading {
 #[derive(Debug)]
 pub struct Limits {
     global: Limiter,
-    bypass_key: Option<String>,
+    bypass_key: Option<Secret>,
     bypass_ips: Vec<IpAddr>,
 }
 
@@ -200,7 +200,7 @@ impl Limits {
             return true;
         }
         match (&self.bypass_key, headers.get(BYPASS)) {
-            (Some(key), Some(offered)) => offered.as_bytes() == key.as_bytes(),
+            (Some(key), Some(offered)) => offered.as_bytes() == key.reveal().as_bytes(),
             _ => false,
         }
     }

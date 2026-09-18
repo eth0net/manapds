@@ -71,3 +71,16 @@ fn a_server_told_nothing_holds_callers_to_no_budget_and_asks_for_an_invite() {
     assert_eq!(config.hostname, "localhost");
     assert_eq!(config.port, 2583);
 }
+
+#[test]
+fn a_secret_does_not_print_itself() {
+    let config = with(&[
+        ("PDS_JWT_SECRET", "the one thing worth stealing"),
+        ("PDS_RATE_LIMITS_ENABLED", "true"),
+    ])
+    .expect("a configuration");
+
+    let printed = format!("{config:?}");
+    assert!(!printed.contains("worth stealing"), "{printed}");
+    assert_eq!(config.jwt_secret.reveal(), "the one thing worth stealing");
+}

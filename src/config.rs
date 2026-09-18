@@ -4,6 +4,29 @@ use std::{env, net::IpAddr, num::ParseIntError, path::PathBuf};
 
 use thiserror::Error;
 
+/// A configured value that has no business reaching a log.
+#[derive(Clone, Eq, PartialEq)]
+pub struct Secret(String);
+
+impl Secret {
+    /// Holds a value, so that printing the thing around it cannot spill it.
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// The value itself, at the one point that has to have it.
+    #[must_use]
+    pub fn reveal(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("<secret>")
+    }
+}
+
 /// Everything the server needs to start.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -15,7 +38,7 @@ pub struct Config {
     pub data_directory: PathBuf,
     /// What every session token is signed under. Losing it signs every client
     /// out; changing it on a running server does the same.
-    pub jwt_secret: String,
+    pub jwt_secret: Secret,
     /// Suffixes an account may take a handle under, each with its leading dot.
     pub handle_domains: Vec<String>,
     pub invite_required: bool,
@@ -27,7 +50,7 @@ pub struct Config {
     /// off.
     pub rate_limits: bool,
     /// A key a caller sends to be let past those budgets.
-    pub rate_limit_bypass_key: Option<String>,
+    pub rate_limit_bypass_key: Option<Secret>,
     /// Addresses let past them without a key.
     pub rate_limit_bypass_ips: Vec<IpAddr>,
 }
@@ -62,14 +85,16 @@ impl Config {
             port: number("PDS_PORT")?.unwrap_or(2583),
             data_directory: string("PDS_DATA_DIRECTORY")
                 .map_or_else(|| PathBuf::from("data"), PathBuf::from),
-            jwt_secret: string("PDS_JWT_SECRET").ok_or(ConfigError::Missing("PDS_JWT_SECRET"))?,
+            jwt_secret: string("PDS_JWT_SECRET")
+                .map(Secret::new)
+                .ok_or(ConfigError::Missing("PDS_JWT_SECRET"))?,
             invite_required: boolean("PDS_INVITE_REQUIRED")?.unwrap_or(true),
             blob_upload_limit: number("PDS_BLOB_UPLOAD_LIMIT")?.unwrap_or(5 * 1024 * 1024),
             privacy_policy_url: string("PDS_PRIVACY_POLICY_URL"),
             terms_of_service_url: string("PDS_TERMS_OF_SERVICE_URL"),
             contact_email: string("PDS_CONTACT_EMAIL_ADDRESS"),
             rate_limits: boolean("PDS_RATE_LIMITS_ENABLED")?.unwrap_or(false),
-            rate_limit_bypass_key: string("PDS_RATE_LIMIT_BYPASS_KEY"),
+            rate_limit_bypass_key: string("PDS_RATE_LIMIT_BYPASS_KEY").map(Secret::new),
             // The reference takes CIDR here and keeps only the address, so a
             // range written out is read as the one address it starts at.
             rate_limit_bypass_ips: list("PDS_RATE_LIMIT_BYPASS_IPS")

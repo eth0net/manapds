@@ -10,7 +10,7 @@ use axum::{
     extract::ConnectInfo,
     http::{Request, StatusCode, header},
 };
-use manapds::config::Config;
+use manapds::config::{Config, Secret};
 use manapds::server;
 use manapds::syntax::Did;
 use manapds::xrpc::auth::{Access, Authorization, Credential, Scope, Tokens};
@@ -32,7 +32,7 @@ fn config() -> Config {
         port: 0,
         service_did: "did:web:pds.example.com".to_owned(),
         data_directory: "data".into(),
-        jwt_secret: "a secret".to_owned(),
+        jwt_secret: Secret::new("a secret"),
         handle_domains: vec![".pds.example.com".to_owned()],
         invite_required: true,
         blob_upload_limit: 5 * 1024 * 1024,
@@ -367,7 +367,7 @@ fn a_chain_of_proxies_is_walked_back_to_the_first_one_outside() {
 async fn a_caller_holding_the_bypass_key_is_not_counted() {
     let mut config = config();
     config.rate_limits = true;
-    config.rate_limit_bypass_key = Some("let me through".to_owned());
+    config.rate_limit_bypass_key = Some(Secret::new("let me through"));
     let router = server::router(config);
 
     let mut request = Request::builder()

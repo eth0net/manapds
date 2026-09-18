@@ -30,7 +30,7 @@ impl Context {
     /// Builds what the handlers share out of the configuration.
     #[must_use]
     pub fn new(config: Config) -> Self {
-        let tokens = Tokens::new(config.jwt_secret.clone(), config.service_did.clone());
+        let tokens = Tokens::new(config.jwt_secret.reveal(), config.service_did.clone());
         Self {
             config: Arc::new(config),
             tokens,
