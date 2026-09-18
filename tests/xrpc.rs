@@ -13,7 +13,7 @@ use axum::{
 use manapds::config::Config;
 use manapds::server;
 use manapds::syntax::Did;
-use manapds::xrpc::auth::{Authorization, Credential, Scope, Tokens};
+use manapds::xrpc::auth::{Access, Authorization, Credential, Scope, Tokens};
 use manapds::xrpc::limit::{self, Limiter};
 use manapds::xrpc::{Error, Status};
 use tower::ServiceExt;
@@ -407,4 +407,59 @@ async fn a_browser_is_told_it_may_call_from_anywhere() {
     };
     assert_eq!(allowed("access-control-allow-origin").as_deref(), Some("*"));
     assert_eq!(allowed("access-control-max-age").as_deref(), Some("86400"));
+}
+
+#[tokio::test]
+async fn an_answer_that_depended_on_the_caller_says_so() {
+    // A route of the test's own, since nothing served yet reads credentials.
+    let router = Router::new()
+        .route(
+            "/xrpc/com.example.mine",
+            axum::routing::get(|_: Access| async { "yours" }),
+        )
+        .route(
+            "/xrpc/com.example.anyones",
+            axum::routing::get(|| async { "everyone's" }),
+        )
+        .with_state(server::Context::new(config()))
+        .layer(axum::middleware::from_fn(manapds::xrpc::auth::private));
+
+    let call = async |path: &str, header: Option<String>| {
+        let mut request = Request::builder().uri(path);
+        if let Some(header) = header {
+            request = request.header(axum::http::header::AUTHORIZATION, header);
+        }
+        router
+            .clone()
+            .oneshot(request.body(Body::empty()).expect("a request"))
+            .await
+            .expect("an answer")
+    };
+
+    let token = tokens().access(&account(), Scope::Access);
+    let mine = call("/xrpc/com.example.mine", Some(format!("Bearer {token}"))).await;
+    assert_eq!(mine.status(), StatusCode::OK);
+    assert_eq!(
+        mine.headers().get(axum::http::header::CACHE_CONTROL),
+        Some(&axum::http::HeaderValue::from_static("private"))
+    );
+    assert_eq!(
+        mine.headers().get(axum::http::header::VARY),
+        Some(&axum::http::HeaderValue::from_static("Authorization"))
+    );
+
+    // Refusing to answer still depended on the credential offered.
+    let refused = call("/xrpc/com.example.mine", None).await;
+    assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+    assert!(refused.headers().contains_key(axum::http::header::VARY));
+
+    // A public answer is the same for everyone and may be shared as such.
+    let anyones = call("/xrpc/com.example.anyones", None).await;
+    assert_eq!(anyones.status(), StatusCode::OK);
+    assert!(!anyones.headers().contains_key(axum::http::header::VARY));
+    assert!(
+        !anyones
+            .headers()
+            .contains_key(axum::http::header::CACHE_CONTROL)
+    );
 }

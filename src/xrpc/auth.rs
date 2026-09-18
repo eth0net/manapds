@@ -7,10 +7,14 @@
 //! refresh token or the other way about.
 
 use std::str::FromStr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::{
-    extract::{FromRef, FromRequestParts},
-    http::{HeaderMap, header, request::Parts},
+    extract::{FromRef, FromRequestParts, Request},
+    http::{HeaderMap, HeaderValue, header, request::Parts},
+    middleware::Next,
+    response::Response,
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as BASE64};
 use hmac::{Hmac, KeyInit, Mac};
@@ -358,6 +362,9 @@ impl<S: Sync> FromRequestParts<S> for Authorization {
         parts: &mut Parts,
         _state: &S,
     ) -> impl Future<Output = Result<Self, Error>> {
+        if let Some(Read(read)) = parts.extensions.get::<Read>() {
+            read.store(true, Ordering::Relaxed);
+        }
         std::future::ready(Self::from_headers(&parts.headers))
     }
 }
@@ -375,6 +382,29 @@ where
             .ok_or_else(|| Error::auth_required("").named("AuthMissing"))?;
         Tokens::from_ref(state).verify_access(token, &Scope::STANDARD)
     }
+}
+
+/// Set on a request so that reading its credentials can be noticed after the
+/// handler has finished with it.
+#[derive(Clone, Debug)]
+struct Read(Arc<AtomicBool>);
+
+/// Marks every response that depended on who was asking, so that nothing
+/// between here and the client hands one account's answer to another.
+///
+/// The mark is set where the credential is read rather than where the route is
+/// declared, so a method that authenticates cannot be added without it.
+pub async fn private(mut request: Request, next: Next) -> Response {
+    let read = Arc::new(AtomicBool::new(false));
+    request.extensions_mut().insert(Read(Arc::clone(&read)));
+
+    let mut response = next.run(request).await;
+    if read.load(Ordering::Relaxed) {
+        let headers = response.headers_mut();
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("private"));
+        headers.append(header::VARY, HeaderValue::from_static("Authorization"));
+    }
+    response
 }
 
 #[derive(Debug, Deserialize, Serialize)]

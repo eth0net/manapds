@@ -63,7 +63,8 @@ pub fn router(config: Config) -> Router {
             xrpc::query(describe_server),
         )
         .fallback(xrpc::fallback)
-        .with_state(Context::new(config));
+        .with_state(Context::new(config))
+        .layer(middleware::from_fn(xrpc::auth::private));
 
     // CORS goes outside the budget so that a browser is told why it was
     // refused rather than being told nothing at all.
