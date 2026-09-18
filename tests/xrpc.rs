@@ -505,3 +505,85 @@ async fn an_answer_that_depended_on_the_caller_says_so() {
             .contains_key(axum::http::header::CACHE_CONTROL)
     );
 }
+
+/// Mints a token this server would not, so the checks on the way back in can
+/// be reached from outside it.
+fn forge(typ: &str, claims: &serde_json::Value) -> String {
+    use base64::Engine as _;
+    use hmac::Mac as _;
+
+    let encoder = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let header = encoder.encode(serde_json::json!({"alg": "HS256", "typ": typ}).to_string());
+    let signed = format!("{header}.{}", encoder.encode(claims.to_string()));
+
+    let mut mac = <hmac::Hmac<sha2::Sha256> as hmac::KeyInit>::new_from_slice(b"a secret")
+        .expect("a key of any length");
+    mac.update(signed.as_bytes());
+    format!("{signed}.{}", encoder.encode(mac.finalize().into_bytes()))
+}
+
+/// The claims of a session this server would have issued.
+fn session() -> serde_json::Value {
+    serde_json::json!({
+        "scope": "com.atproto.access",
+        "sub": account().as_str(),
+        "aud": "did:web:pds.example.com",
+        "iat": 1_700_000_000,
+        "exp": 4_100_000_000i64,
+    })
+}
+
+#[test]
+fn a_token_proving_something_else_is_not_a_session() {
+    let tokens = tokens();
+    for claim in ["lxm", "cnf"] {
+        let mut claims = session();
+        claims[claim] = serde_json::json!("com.atproto.repo.createRecord");
+        let error = tokens
+            .verify_access(&forge("at+jwt", &claims), &Scope::STANDARD)
+            .expect_err("service auth is not a session");
+        assert_eq!(error.message(), "Malformed token", "{claim}");
+    }
+
+    // The same claims without either are a session, so the refusal above is
+    // the claim and not the forging.
+    assert!(
+        tokens
+            .verify_access(&forge("at+jwt", &session()), &Scope::STANDARD)
+            .is_ok()
+    );
+}
+
+#[test]
+fn a_scope_this_server_never_issued_is_a_scope_problem() {
+    let mut claims = session();
+    claims["scope"] = serde_json::json!("com.atproto.somethingElse");
+    let error = tokens()
+        .verify_access(&forge("at+jwt", &claims), &Scope::STANDARD)
+        .expect_err("no such scope");
+    assert_eq!(error.message(), "Bad token scope");
+}
+
+#[test]
+fn a_token_for_another_service_reads_as_one_we_cannot_verify() {
+    let mut claims = session();
+    claims["aud"] = serde_json::json!("did:web:elsewhere.example.com");
+    let error = tokens()
+        .verify_access(&forge("at+jwt", &claims), &Scope::STANDARD)
+        .expect_err("not our audience");
+    assert_eq!(error.message(), "Token could not be verified");
+}
+
+#[test]
+fn a_basic_header_that_will_not_decode_is_no_credential_at_all() {
+    // Upstream falls through to "nothing was offered" rather than answering a
+    // different status, so an admin endpoint gives one answer either way.
+    assert_eq!(
+        Authorization::parse(Some("Basic not-base64!!")).expect("no credential"),
+        Authorization(None)
+    );
+    assert_eq!(
+        Authorization::parse(Some("Basic bm9jb2xvbg==")).expect("no credential"),
+        Authorization(None)
+    );
+}

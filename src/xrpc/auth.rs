@@ -258,12 +258,19 @@ impl Tokens {
         if !expired && claims.exp <= Timestamp::now().as_second() {
             return Err(Error::invalid_request("Token has expired").named("ExpiredToken"));
         }
+        if claims.aud != *self.audience {
+            return Err(unverifiable());
+        }
         // A service auth token proves something else entirely, and this server
         // signs both kinds, so one must never be read as the other.
-        if claims.lxm.is_some() || claims.cnf.is_some() || claims.aud != *self.audience {
+        if claims.lxm.is_some() || claims.cnf.is_some() {
             return Err(malformed());
         }
-        if !scopes.contains(&scope(&claims.scope)?) {
+        if !claims
+            .scope
+            .parse()
+            .is_ok_and(|scope| scopes.contains(&scope))
+        {
             return Err(Error::invalid_request("Bad token scope").named("InvalidToken"));
         }
         Ok(claims)
@@ -320,7 +327,7 @@ impl Authorization {
         let credential = match scheme.to_ascii_uppercase().as_str() {
             "BEARER" => Credential::Bearer(token.to_owned()),
             "DPOP" => Credential::Dpop(token.to_owned()),
-            "BASIC" => basic(token)?,
+            "BASIC" => return Ok(Self(basic(token))),
             _ => {
                 return Err(Error::invalid_request(format!(
                     "Unsupported authorization type: {scheme}"
@@ -440,19 +447,19 @@ fn decode<T: for<'a> Deserialize<'a>>(part: &str) -> Result<T, Error> {
     serde_json::from_slice(&bytes).map_err(|_| malformed())
 }
 
-fn basic(token: &str) -> Result<Credential, Error> {
+/// Reads a `Basic` credential, or nothing if it will not decode.
+///
+/// Nothing rather than a refusal, so that an unreadable header reaches the
+/// same "no credentials" answer as an absent one instead of a different
+/// status.
+fn basic(token: &str) -> Option<Credential> {
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(token)
         .ok()
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-        .ok_or_else(|| {
-            Error::invalid_request("Malformed authorization header").named("InvalidToken")
-        })?;
+        .and_then(|bytes| String::from_utf8(bytes).ok())?;
     // Split at the first colon, since only the username is forbidden one.
-    let (username, password) = decoded.split_once(':').ok_or_else(|| {
-        Error::invalid_request("Malformed authorization header").named("InvalidToken")
-    })?;
-    Ok(Credential::Basic {
+    let (username, password) = decoded.split_once(':')?;
+    Some(Credential::Basic {
         username: username.to_owned(),
         password: password.to_owned(),
     })
