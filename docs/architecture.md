@@ -52,6 +52,11 @@ transaction that has to find every row.
 The reference implementation splits the same way, so the shapes are worth
 reading across where a table is unclear.
 
+The data directory needs a POSIX filesystem. An account's files sit under its
+DID, a DID has colons in it, and Windows will not have a colon in a path
+component — so this runs where the reference runs and not on Windows, which
+could not have written that layout either.
+
 Blobs are files on disk, addressed by CID under a per-account directory. A
 blob is immutable and content-addressed, so there is nothing a database gives
 it but overhead.
