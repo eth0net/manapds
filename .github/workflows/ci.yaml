@@ -53,7 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # Reads typos.toml, so the repo's `locale` applies here too.
-      - uses: crate-ci/typos@v1.50.1
+      - uses: crate-ci/typos@v1.50.2
 
   deny:
     name: supply chain
