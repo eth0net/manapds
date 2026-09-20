@@ -37,8 +37,10 @@ say how to start it by the same commit, or the tag claims more than it delivers.
 
 An operator runs this as a container, so the image is part of the work rather
 than packaging bolted on at the end, and `serve` and `secret` are both shaped
-around an entrypoint that takes a command. What it still owes is publishing:
-a tag should push to ghcr, and nothing does.
+around an entrypoint that takes a command. Both architectures are built on
+their own runner and published to ghcr, `edge` from main and the three release
+names from a `v` tag — the second half of which nothing has exercised, since
+the first tag waits for step 6.
 
 Moving an account belongs on that command line too. Both halves are promised
 already, the endpoints below and the tool that reads a rewritten directory back,

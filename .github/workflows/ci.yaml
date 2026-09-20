@@ -55,16 +55,6 @@ jobs:
       # Reads typos.toml, so the repo's `locale` applies here too.
       - uses: crate-ci/typos@v1.50.2
 
-  image:
-    name: image
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - run: docker build --tag manapds:ci .
-      # Proves the entrypoint takes a command, which is how an operator reaches
-      # anything the image does other than serve.
-      - run: test "$(docker run --rm manapds:ci secret | wc -c)" -eq 33
-
   deny:
     name: supply chain
     runs-on: ubuntu-latest

@@ -1,0 +1,96 @@
+name: image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+# One run per ref at a time, since two of them would be overwriting the same
+# per-architecture tags while the other's manifest reads them.
+concurrency:
+  group: image-${{ github.ref }}
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  build:
+    name: build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # A runner each rather than one of them under QEMU. Both are free on
+          # a public repository, and emulating a release build costs minutes
+          # where this costs seconds.
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build --tag manapds .
+      # Proves the entrypoint takes a command, which is how an operator reaches
+      # anything the image does other than serve.
+      - run: test "$(docker run --rm manapds secret | wc -c)" -eq 33
+
+      - uses: docker/login-action@v4
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Named for the commit, because which release names this ends up under is
+      # the manifest's decision rather than one an architecture makes alone.
+      - name: push
+        if: github.event_name != 'pull_request'
+        env:
+          ARCH: ${{ matrix.arch }}
+          SHA: ${{ github.sha }}
+        run: |
+          docker tag manapds "$IMAGE:sha-$SHA-$ARCH"
+          docker push "$IMAGE:sha-$SHA-$ARCH"
+
+  manifest:
+    name: manifest
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # `latest` and the minor tag follow releases only, so an operator who
+      # pinned either never wakes up on a commit nobody reviewed. Anything that
+      # is not plain X.Y.Z is a prerelease and gets its own name and no more.
+      - name: manifest
+        env:
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [[ "$REF" == refs/tags/v* ]]; then
+            version="${REF#refs/tags/v}"
+            if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              tags=("$version" "${version%.*}" latest)
+            else
+              tags=("$version")
+            fi
+          else
+            tags=(edge "sha-$SHA")
+          fi
+
+          args=()
+          for tag in "${tags[@]}"; do args+=(--tag "$IMAGE:$tag"); done
+          docker buildx imagetools create "${args[@]}" \
+            "$IMAGE:sha-$SHA-amd64" "$IMAGE:sha-$SHA-arm64"
+          docker buildx imagetools inspect "$IMAGE:${tags[0]}"
