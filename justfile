@@ -41,4 +41,4 @@ deny:
 # run the server, reading configuration from the environment
 [group('dev')]
 run:
-    cargo run
+    cargo run -- serve

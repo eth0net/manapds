@@ -20,7 +20,7 @@ and [`docs/`](docs/architecture.md) carries the reasoning.
 Rust stable, and nothing else — no runtime, no database server.
 
 ```sh
-PDS_JWT_SECRET=... cargo run
+PDS_JWT_SECRET=... cargo run -- serve
 ```
 
 Configuration is environment variables under the same names the reference

@@ -17,6 +17,7 @@ publish = false
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "tracing"] }
 base64 = { version = "0.23", default-features = false, features = ["std"] }
 bs58 = "0.5.1"
+clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 hmac = "0.13"
 ipld-core = { version = "0.4.3", features = ["serde"] }
 jiff = { version = "0.2.37", default-features = false, features = ["std"] }

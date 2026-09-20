@@ -1,12 +1,34 @@
+use std::error::Error;
 use std::net::{Ipv4Addr, SocketAddr};
 
 use axum::ServiceExt;
+use clap::{Parser, Subcommand};
 use manapds::{config::Config, server};
 use tokio::{net::TcpListener, signal};
 use tracing_subscriber::{EnvFilter, fmt};
 
+/// An atproto personal data server.
+#[derive(Debug, Parser)]
+#[command(version, about)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Serve, reading the configuration from the environment.
+    Serve,
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    match Cli::parse().command {
+        Command::Serve => serve(),
+    }
+}
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn serve() -> Result<(), Box<dyn Error>> {
     fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
