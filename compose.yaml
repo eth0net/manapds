@@ -1,0 +1,19 @@
+# A server, and nothing else. TLS belongs to whatever sits in front: the
+# hostname has to answer HTTPS on a real certificate before any client will
+# resolve a handle here.
+services:
+  manapds:
+    container_name: manapds
+    image: ghcr.io/eth0net/manapds:edge
+    restart: unless-stopped
+    ports:
+      - "2583:2583"
+    volumes:
+      - manapds:/data
+    # Named for the reference server's file, since the variables are the same
+    # and an existing one starts this.
+    env_file:
+      - pds.env
+
+volumes:
+  manapds:

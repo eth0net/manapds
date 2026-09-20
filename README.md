@@ -24,13 +24,21 @@ PDS_JWT_SECRET=$(cargo run -- secret) cargo run -- serve
 ```
 
 Or as the container, which is how a server that is not this one gets run.
-Nothing is published yet, so the image is still built here:
+`compose.yaml` holds the same thing for `docker compose up -d`:
 
 ```sh
-docker build --tag manapds .
-docker run --rm manapds secret
-docker run --env-file pds.env --volume manapds:/data --publish 2583:2583 manapds
+docker run --rm ghcr.io/eth0net/manapds:edge secret
+docker run --env-file pds.env --volume manapds:/data --publish 2583:2583 \
+  ghcr.io/eth0net/manapds:edge
 ```
+
+Images are `linux/amd64` and `linux/arm64`. `edge` is the tip of main, which is
+the only tag there is until the first release; after that a release is
+`X.Y.Z`, `X.Y` and `latest`, and only those three are worth pinning. Nothing
+updates itself — [watchtower's fork](https://github.com/nicholas-fedor/watchtower)
+or [diun](https://github.com/crazy-max/diun) will do it or tell you about it,
+and following `X.Y` is the point at which that is a safe thing to leave running
+overnight.
 
 Configuration is environment variables under the same names the reference
 server uses, so an existing `pds.env` works unedited. The secret sessions are
