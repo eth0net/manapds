@@ -41,7 +41,7 @@ fn a_server_will_not_start_without_a_secret_to_sign_sessions_under() {
 #[test]
 fn a_flag_that_is_neither_true_nor_false_stops_the_server() {
     let error = with(&[
-        ("PDS_JWT_SECRET", "a secret"),
+        ("PDS_JWT_SECRET", "long enough to not be guessed"),
         ("PDS_INVITE_REQUIRED", "yes"),
     ])
     .expect_err("yes is not a boolean");
@@ -55,7 +55,7 @@ fn a_flag_that_is_neither_true_nor_false_stops_the_server() {
 fn both_spellings_of_each_boolean_are_read() {
     for (value, expected) in [("true", true), ("1", true), ("false", false), ("0", false)] {
         let config = with(&[
-            ("PDS_JWT_SECRET", "a secret"),
+            ("PDS_JWT_SECRET", "long enough to not be guessed"),
             ("PDS_INVITE_REQUIRED", value),
         ])
         .expect("a configuration");
@@ -65,7 +65,8 @@ fn both_spellings_of_each_boolean_are_read() {
 
 #[test]
 fn a_server_told_nothing_holds_callers_to_no_budget_and_asks_for_an_invite() {
-    let config = with(&[("PDS_JWT_SECRET", "a secret")]).expect("a configuration");
+    let config =
+        with(&[("PDS_JWT_SECRET", "long enough to not be guessed")]).expect("a configuration");
     assert!(config.invite_required);
     assert!(!config.rate_limits);
     assert_eq!(config.hostname, "localhost");
@@ -83,4 +84,30 @@ fn a_secret_does_not_print_itself() {
     let printed = format!("{config:?}");
     assert!(!printed.contains("worth stealing"), "{printed}");
     assert_eq!(config.jwt_secret.reveal(), "the one thing worth stealing");
+}
+
+#[test]
+fn a_secret_short_enough_to_be_found_by_trying_stops_the_server() {
+    let error = with(&[("PDS_JWT_SECRET", "hunter2")]).expect_err("a password, not a key");
+    assert!(
+        matches!(error, ConfigError::TooShort("PDS_JWT_SECRET", 24)),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("manapds secret"),
+        "the message has to name the fix: {error}"
+    );
+}
+
+#[test]
+fn a_generated_secret_clears_the_floor_it_is_measured_against() {
+    let generated = manapds::config::Secret::generate();
+    let config = with(&[("PDS_JWT_SECRET", generated.reveal())]).expect("a configuration");
+    assert_eq!(config.jwt_secret, generated);
+
+    // And two of them differ, so the bytes are read rather than invented.
+    assert_ne!(
+        manapds::config::Secret::generate(),
+        manapds::config::Secret::generate()
+    );
 }

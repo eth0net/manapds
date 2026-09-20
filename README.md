@@ -20,13 +20,15 @@ and [`docs/`](docs/architecture.md) carries the reasoning.
 Rust stable, and nothing else — no runtime, no database server.
 
 ```sh
-PDS_JWT_SECRET=... cargo run -- serve
+PDS_JWT_SECRET=$(cargo run -- secret) cargo run -- serve
 ```
 
 Configuration is environment variables under the same names the reference
 server uses, so an existing `pds.env` works unedited. The secret sessions are
 signed under is the one variable with no default, since inventing one at each
-startup would sign every client out on every restart.
+startup would sign every client out on every restart. It has to be at least 24
+characters, and changing it later signs everyone out once, so put the generated
+one somewhere before it scrolls away.
 
 ## Layout
 

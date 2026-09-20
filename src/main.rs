@@ -1,9 +1,13 @@
 use std::error::Error;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::process::ExitCode;
 
 use axum::ServiceExt;
 use clap::{Parser, Subcommand};
-use manapds::{config::Config, server};
+use manapds::{
+    config::{Config, Secret},
+    server,
+};
 use tokio::{net::TcpListener, signal};
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -19,12 +23,26 @@ struct Cli {
 enum Command {
     /// Serve, reading the configuration from the environment.
     Serve,
+    /// Write a secret fit for `PDS_JWT_SECRET`.
+    Secret,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    match Cli::parse().command {
+fn main() -> ExitCode {
+    let outcome = match Cli::parse().command {
         Command::Serve => serve(),
+        Command::Secret => {
+            println!("{}", Secret::generate().reveal());
+            Ok(())
+        }
+    };
+
+    // Returning the error instead would print it through `Debug`, which turns
+    // the sentence naming the fix back into the struct behind it.
+    if let Err(error) = outcome {
+        eprintln!("manapds: {error}");
+        return ExitCode::FAILURE;
     }
+    ExitCode::SUCCESS
 }
 
 #[tokio::main]

@@ -1,8 +1,15 @@
 //! Server configuration, read from the environment.
 
-use std::{env, net::IpAddr, num::ParseIntError, path::PathBuf};
+use std::{env, fmt::Write as _, net::IpAddr, num::ParseIntError, path::PathBuf};
 
 use thiserror::Error;
+
+/// The shortest secret this server will start under.
+///
+/// 128 bits written as base64 is 24 characters and as hex is 32, so the floor
+/// is the shorter spelling. Length is all that can be checked: a long phrase
+/// someone thought of still falls to a word list.
+const SECRET_LENGTH: usize = 24;
 
 /// A configured value that has no business reaching a log.
 #[derive(Clone, Eq, PartialEq)]
@@ -18,6 +25,17 @@ impl Secret {
     #[must_use]
     pub fn reveal(&self) -> &str {
         &self.0
+    }
+
+    /// A fresh one, at the length the reference installer writes.
+    #[must_use]
+    pub fn generate() -> Self {
+        let mut bytes = [0u8; 16];
+        rand::fill(&mut bytes);
+        Self(bytes.iter().fold(String::new(), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        }))
     }
 }
 
@@ -63,6 +81,8 @@ pub enum ConfigError {
     NotABoolean(&'static str),
     #[error("{0} has to be set")]
     Missing(&'static str),
+    #[error("{0} has to be at least {1} characters, and random: `manapds secret` writes one")]
+    TooShort(&'static str, usize),
 }
 
 impl Config {
@@ -85,9 +105,7 @@ impl Config {
             port: number("PDS_PORT")?.unwrap_or(2583),
             data_directory: string("PDS_DATA_DIRECTORY")
                 .map_or_else(|| PathBuf::from("data"), PathBuf::from),
-            jwt_secret: string("PDS_JWT_SECRET")
-                .map(Secret::new)
-                .ok_or(ConfigError::Missing("PDS_JWT_SECRET"))?,
+            jwt_secret: secret("PDS_JWT_SECRET")?,
             invite_required: boolean("PDS_INVITE_REQUIRED")?.unwrap_or(true),
             blob_upload_limit: number("PDS_BLOB_UPLOAD_LIMIT")?.unwrap_or(5 * 1024 * 1024),
             privacy_policy_url: string("PDS_PRIVACY_POLICY_URL"),
@@ -111,6 +129,17 @@ impl Config {
 /// key and no value reads.
 fn string(key: &str) -> Option<String> {
     env::var(key).ok().filter(|value| !value.is_empty())
+}
+
+/// A secret short enough to be found by trying is refused at startup, since
+/// every session on the server is signed under this one and a holder of any
+/// token can look for it offline.
+fn secret(key: &'static str) -> Result<Secret, ConfigError> {
+    let value = string(key).ok_or(ConfigError::Missing(key))?;
+    if value.chars().count() < SECRET_LENGTH {
+        return Err(ConfigError::TooShort(key, SECRET_LENGTH));
+    }
+    Ok(Secret::new(value))
 }
 
 fn list(key: &str) -> Option<Vec<String>> {

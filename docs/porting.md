@@ -124,6 +124,20 @@ neither. Each budget stops taking new keys at a hundred thousand, says so once
 in the log, and goes on counting everyone it had already seen. Refusing the
 requests it cannot count would hand an attacker the outage instead.
 
+### A secret too short to survive guessing is refused
+
+Upstream checks that `PDS_JWT_SECRET` is set and nothing further, and leaves
+the strength of it to the installer, which writes sixteen random bytes as hex.
+Here a value under 24 characters stops the server, that being 128 bits in the
+shorter of the two spellings anyone generates.
+
+Sessions are signed with HMAC, so the same string verifies and mints. Anyone
+holding a token issued by the server can therefore hunt for it offline at
+whatever rate their hardware manages, and a hit forges a session for every
+account rather than their own. Length is the only property worth testing from
+here: a passphrase long enough to pass is still weak, and no measure of
+entropy over a couple of dozen characters would say so reliably.
+
 ### Only a private address may name someone else
 
 Both servers read `X-Forwarded-For` only from a caller that could not have come
