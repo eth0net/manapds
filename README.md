@@ -23,6 +23,15 @@ Rust stable, and nothing else — no runtime, no database server.
 PDS_JWT_SECRET=$(cargo run -- secret) cargo run -- serve
 ```
 
+Or as the container, which is how a server that is not this one gets run.
+Nothing is published yet, so the image is still built here:
+
+```sh
+docker build --tag manapds .
+docker run --rm manapds secret
+docker run --env-file pds.env --volume manapds:/data --publish 2583:2583 manapds
+```
+
 Configuration is environment variables under the same names the reference
 server uses, so an existing `pds.env` works unedited. The secret sessions are
 signed under is the one variable with no default, since inventing one at each

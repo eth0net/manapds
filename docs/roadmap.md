@@ -33,6 +33,18 @@ start this and have a client sign in and read something back, and a version
 number before then would be marking a library nobody can run. The README has to
 say how to start it by the same commit, or the tag claims more than it delivers.
 
+## The image
+
+An operator runs this as a container, so the image is part of the work rather
+than packaging bolted on at the end, and `serve` and `secret` are both shaped
+around an entrypoint that takes a command. What it still owes is publishing:
+a tag should push to ghcr, and nothing does.
+
+Moving an account belongs on that command line too. Both halves are promised
+already, the endpoints below and the tool that reads a rewritten directory back,
+and neither is something a running server can be asked for — one of them has to
+open the files while nothing else is holding them.
+
 Three things are owed to steps that have not started. `getRepo` may not be
 served before the per-method budgets exist, or the one exemption in the global
 budget becomes a hole. `createAccount` needs `reserved_keys/` and the `did-op`
