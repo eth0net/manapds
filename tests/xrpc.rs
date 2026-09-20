@@ -820,3 +820,20 @@ async fn describe_server_answers_the_fields_its_lexicon_declares() {
     assert!(answer["links"].get("privacyPolicy").is_none(), "{body}");
     assert!(answer["links"].get("termsOfService").is_none(), "{body}");
 }
+
+#[test]
+fn one_line_spends_one_budget_however_many_addresses_it_holds() {
+    let rotated = |address: &str| limit::budget(address.parse().expect("an address"));
+
+    // A residential line or a VPS is given a /64, so an address it has not
+    // used yet is not a caller we have not seen.
+    assert_eq!(
+        rotated("2001:db8:1:2::1"),
+        rotated("2001:db8:1:2:dead:beef::")
+    );
+    assert_ne!(rotated("2001:db8:1:2::1"), rotated("2001:db8:1:3::1"));
+
+    // IPv4 is scarce enough that neighbors are not the same customer.
+    assert_ne!(rotated("9.9.9.9"), rotated("9.9.9.10"));
+    assert_eq!(rotated("9.9.9.9"), "9.9.9.9");
+}

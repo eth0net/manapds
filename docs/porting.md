@@ -131,6 +131,19 @@ an IPv4-mapped IPv6 one is read as the address it maps to. Both are what a
 hosting front-end actually turns up as, and missing either puts every caller
 behind it on one budget.
 
+### An IPv6 caller shares a budget with its network
+
+Upstream counts each address on its own. A subscriber line or a virtual server
+is handed a whole /64 though, and moving between the addresses in one costs
+nothing, so every request can arrive from somewhere unseen: the budget never
+binds, and the table of who has spent what grows for as long as the flood
+lasts. Here the last 64 bits go before the count.
+
+IPv4 is left alone, where addresses are scarce enough to be handed out singly
+and a prefix would put strangers together. What the v6 rule costs is that a
+household behind one allocation shares, which is what NAT has always done to v4
+regardless.
+
 ### A stored tree is refused rather than walked
 
 Upstream follows whatever a node says its children are: no depth limit, and no

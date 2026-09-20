@@ -221,7 +221,7 @@ pub async fn global(
         return next.run(request).await;
     }
 
-    let reading = limits.global.consume(&caller.to_string(), 1);
+    let reading = limits.global.consume(&budget(caller), 1);
     let mut response = if reading.exceeded {
         Error::new(Status::RateLimitExceeded).into_response()
     } else {
@@ -251,6 +251,22 @@ pub fn caller(peer: IpAddr, headers: &HeaderMap) -> IpAddr {
         .map(canonical)
         .rfind(|address| !internal(*address))
         .unwrap_or(peer)
+}
+
+/// Which budget a caller spends from.
+///
+/// An IPv6 caller is counted with its `/64`, since one line holds the whole
+/// range and can move through it for free.
+#[must_use]
+pub fn budget(caller: IpAddr) -> String {
+    match caller {
+        IpAddr::V4(address) => address.to_string(),
+        IpAddr::V6(address) => {
+            let mut octets = address.octets();
+            octets[8..].fill(0);
+            format!("{}/64", Ipv6Addr::from(octets))
+        }
+    }
 }
 
 /// The one spelling of an address, so that a caller arriving as `::ffff:1.2.3.4`
