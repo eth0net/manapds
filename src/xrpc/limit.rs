@@ -26,6 +26,14 @@ const GLOBAL_POINTS: u32 = 3000;
 /// The window that budget refills on.
 const GLOBAL_WINDOW: Duration = Duration::from_mins(5);
 
+/// How many keys one budget will hold before it stops taking new ones.
+///
+/// Reached only under an attack no other rule caught, since a caller is
+/// already counted with its network, so the choice is between bounded memory
+/// and counting the flood. Bounded wins: a table that grows until the process
+/// dies takes every account down with it.
+const KEYS: usize = 100_000;
+
 /// A sync path large enough that one call would eat a shared budget, so it
 /// is left to the budget its own method holds.
 // todo(per-method budgets): upstream pairs this exemption with 6000 points per
@@ -52,6 +60,7 @@ pub struct Limiter {
 struct Counts {
     windows: HashMap<String, Window>,
     swept: Instant,
+    full: bool,
 }
 
 #[derive(Debug)]
@@ -87,6 +96,7 @@ impl Limiter {
             spent: Mutex::new(Counts {
                 windows: HashMap::new(),
                 swept: Instant::now(),
+                full: false,
             }),
         }
     }
@@ -104,6 +114,25 @@ impl Limiter {
         if now.duration_since(counts.swept) >= self.window {
             counts.windows.retain(|_, window| window.until > now);
             counts.swept = now;
+            counts.full = false;
+        }
+
+        if counts.windows.len() >= KEYS && !counts.windows.contains_key(key) {
+            if !counts.full {
+                counts.full = true;
+                tracing::warn!(
+                    keys = KEYS,
+                    "budget is holding all the keys it will, and is counting nobody new"
+                );
+            }
+            return Reading {
+                limit: self.points,
+                window: self.window,
+                spent: 0,
+                remaining: self.points,
+                resets_in: self.window,
+                exceeded: false,
+            };
         }
 
         let window = counts

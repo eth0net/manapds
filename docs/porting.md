@@ -118,6 +118,12 @@ the cost falls entirely on running a second instance, where each would allow a
 full budget and a proof spent on one would be fresh to the other. The limits to
 configure are the ones a single instance should allow.
 
+Holding them in this process also makes their size ours to bound, where Redis
+has both a ceiling and a rule for what it drops first and a `HashMap` has
+neither. Each budget stops taking new keys at a hundred thousand, says so once
+in the log, and goes on counting everyone it had already seen. Refusing the
+requests it cannot count would hand an attacker the outage instead.
+
 ### Only a private address may name someone else
 
 Both servers read `X-Forwarded-For` only from a caller that could not have come

@@ -837,3 +837,20 @@ fn one_line_spends_one_budget_however_many_addresses_it_holds() {
     assert_ne!(rotated("9.9.9.9"), rotated("9.9.9.10"));
     assert_eq!(rotated("9.9.9.9"), "9.9.9.9");
 }
+
+#[test]
+fn a_budget_holding_every_key_it_will_counts_nobody_new() {
+    let limiter = Limiter::new(1, std::time::Duration::from_mins(5));
+    for key in 0..100_000 {
+        assert!(!limiter.consume(&key.to_string(), 1).exceeded);
+    }
+
+    // The table is full, so an arrival nothing has seen goes uncounted rather
+    // than costing memory the process cannot get back.
+    let reading = limiter.consume("one too many", 1);
+    assert_eq!(reading.spent, 0);
+    assert!(!reading.exceeded);
+
+    // A key already in there is still held to its budget.
+    assert!(limiter.consume("0", 1).exceeded);
+}
