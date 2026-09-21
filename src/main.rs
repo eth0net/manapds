@@ -6,6 +6,7 @@ use axum::ServiceExt;
 use clap::{Parser, Subcommand};
 use manapds::{
     config::{Config, Secret},
+    crypto::{self, Algorithm, Keypair},
     server,
 };
 use tokio::{net::TcpListener, signal};
@@ -25,6 +26,11 @@ enum Command {
     Serve,
     /// Write a secret fit for `PDS_JWT_SECRET`.
     Secret,
+    /// Write a key fit for `PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX`.
+    ///
+    /// Every account this server creates is anchored to it, and no copy of it
+    /// is kept anywhere else.
+    RotationKey,
 }
 
 fn main() -> ExitCode {
@@ -32,6 +38,13 @@ fn main() -> ExitCode {
         Command::Serve => serve(),
         Command::Secret => {
             println!("{}", Secret::generate().reveal());
+            Ok(())
+        }
+        Command::RotationKey => {
+            println!(
+                "{}",
+                crypto::hex(&Keypair::generate(Algorithm::Secp256k1).to_bytes())
+            );
             Ok(())
         }
     };

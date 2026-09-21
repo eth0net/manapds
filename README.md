@@ -20,7 +20,10 @@ and [`docs/`](docs/architecture.md) carries the reasoning.
 Rust stable, and nothing else — no runtime, no database server.
 
 ```sh
-PDS_JWT_SECRET=$(cargo run -- secret) cargo run -- serve
+export PDS_JWT_SECRET=$(cargo run -- secret)
+export PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX=$(cargo run -- rotation-key)
+export PDS_ADMIN_PASSWORD=whatever-you-like
+cargo run -- serve
 ```
 
 Or as the container, which is how a server that is not this one gets run.
@@ -28,6 +31,7 @@ Or as the container, which is how a server that is not this one gets run.
 
 ```sh
 docker run --rm ghcr.io/eth0net/manapds:edge secret
+docker run --rm ghcr.io/eth0net/manapds:edge rotation-key
 docker run --env-file pds.env --volume manapds:/data --publish 2583:2583 \
   ghcr.io/eth0net/manapds:edge
 ```
@@ -41,11 +45,13 @@ and following `X.Y` is the point at which that is a safe thing to leave running
 overnight.
 
 Configuration is environment variables under the same names the reference
-server uses, so an existing `pds.env` works unedited. The secret sessions are
-signed under is the one variable with no default, since inventing one at each
-startup would sign every client out on every restart. It has to be at least 24
-characters, and changing it later signs everyone out once, so put the generated
-one somewhere before it scrolls away.
+server uses, so an existing `pds.env` works unedited. Three have no default and
+none of them can be invented at startup: `PDS_JWT_SECRET` signs sessions, so a
+new one each time would sign every client out; `PDS_ADMIN_PASSWORD` is what the
+admin endpoints check; and `PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX` is the
+only key that can ever update the identity of an account created here, so
+losing it strands every one of them. The secret has to be at least 24
+characters. Keep all three somewhere before they scroll away.
 
 ## Layout
 

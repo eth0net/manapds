@@ -27,6 +27,18 @@ pub fn hex(bytes: &[u8]) -> String {
     })
 }
 
+/// The bytes a hex string spells, or nothing if it does not spell any.
+#[must_use]
+pub fn unhex(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&text[at..at + 2], 16).ok())
+        .collect()
+}
+
 /// The curves atproto allows.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Algorithm {

@@ -11,6 +11,7 @@ use axum::{
     http::{Request, StatusCode, header},
 };
 use manapds::config::{Config, Secret};
+use manapds::crypto::{Algorithm, Keypair};
 use manapds::server;
 use manapds::syntax::Did;
 use manapds::xrpc::auth::{Access, Authorization, Credential, Expired, Scope, Tokens};
@@ -34,6 +35,10 @@ fn config() -> Config {
         service_did: "did:web:pds.example.com".to_owned(),
         data_directory: "data".into(),
         jwt_secret: Secret::new("a secret"),
+        admin_password: Secret::new("admin"),
+        plc_rotation_key: Keypair::generate(Algorithm::Secp256k1),
+        plc_url: "https://plc.example.com".to_owned(),
+        recovery_key: None,
         handle_domains: vec![".pds.example.com".to_owned()],
         invite_required: true,
         blob_upload_limit: 5 * 1024 * 1024,

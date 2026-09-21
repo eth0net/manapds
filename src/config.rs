@@ -4,6 +4,8 @@ use std::{env, net::IpAddr, num::ParseIntError, path::PathBuf};
 
 use thiserror::Error;
 
+use crate::crypto::{Algorithm, Keypair, PublicKey};
+
 /// The shortest secret this server will start under.
 ///
 /// 128 bits written as base64 is 24 characters and as hex is 32, so the floor
@@ -54,6 +56,17 @@ pub struct Config {
     /// What every session token is signed under. Losing it signs every client
     /// out; changing it on a running server does the same.
     pub jwt_secret: Secret,
+    /// What the admin endpoints authenticate with.
+    pub admin_password: Secret,
+    /// The key every PLC operation this server signs is signed with. One for
+    /// the server rather than one per account: losing it strands every
+    /// account created here.
+    pub plc_rotation_key: Keypair,
+    /// Where those operations are sent.
+    pub plc_url: String,
+    /// A key that outranks the rotation key, written into every account this
+    /// server creates so that whoever holds it can take one back.
+    pub recovery_key: Option<PublicKey>,
     /// Suffixes an account may take a handle under, each with its leading dot.
     pub handle_domains: Vec<String>,
     pub invite_required: bool,
@@ -80,6 +93,10 @@ pub enum ConfigError {
     Missing(&'static str),
     #[error("{0} has to be at least {1} characters, and random: `manapds secret` writes one")]
     TooShort(&'static str, usize),
+    #[error("{0} is not a key: `manapds rotation-key` writes one")]
+    NotAKey(&'static str),
+    #[error("{0} is not a did:key, which is how the holder of that key publishes it")]
+    NotADidKey(&'static str),
 }
 
 impl Config {
@@ -103,6 +120,19 @@ impl Config {
             data_directory: string("PDS_DATA_DIRECTORY")
                 .map_or_else(|| PathBuf::from("data"), PathBuf::from),
             jwt_secret: secret("PDS_JWT_SECRET")?,
+            // No floor on this one. It is only ever guessed against a running
+            // server, and a server being taken over arrives with whatever it
+            // was already using.
+            admin_password: string("PDS_ADMIN_PASSWORD")
+                .map(Secret::new)
+                .ok_or(ConfigError::Missing("PDS_ADMIN_PASSWORD"))?,
+            plc_rotation_key: rotation_key("PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX")?,
+            plc_url: string("PDS_DID_PLC_URL")
+                .unwrap_or_else(|| "https://plc.directory".to_owned()),
+            recovery_key: string("PDS_RECOVERY_DID_KEY")
+                .map(|value| value.parse())
+                .transpose()
+                .map_err(|_| ConfigError::NotADidKey("PDS_RECOVERY_DID_KEY"))?,
             invite_required: boolean("PDS_INVITE_REQUIRED")?.unwrap_or(true),
             blob_upload_limit: number("PDS_BLOB_UPLOAD_LIMIT")?.unwrap_or(5 * 1024 * 1024),
             privacy_policy_url: string("PDS_PRIVACY_POLICY_URL"),
@@ -119,6 +149,17 @@ impl Config {
                 .collect(),
             hostname,
         })
+    }
+
+    /// Where clients reach this server, which is what an account's document
+    /// says about where its repository is.
+    #[must_use]
+    pub fn public_url(&self) -> String {
+        if self.hostname == "localhost" {
+            format!("http://localhost:{}", self.port)
+        } else {
+            format!("https://{}", self.hostname)
+        }
     }
 }
 
@@ -137,6 +178,14 @@ fn secret(key: &'static str) -> Result<Secret, ConfigError> {
         return Err(ConfigError::TooShort(key, SECRET_LENGTH));
     }
     Ok(Secret::new(value))
+}
+
+/// The rotation key, which the reference takes as the raw scalar in hex and
+/// always on secp256k1.
+fn rotation_key(key: &'static str) -> Result<Keypair, ConfigError> {
+    let value = string(key).ok_or(ConfigError::Missing(key))?;
+    let bytes = crate::crypto::unhex(&value).ok_or(ConfigError::NotAKey(key))?;
+    Keypair::from_bytes(Algorithm::Secp256k1, &bytes).map_err(|_| ConfigError::NotAKey(key))
 }
 
 fn list(key: &str) -> Option<Vec<String>> {
