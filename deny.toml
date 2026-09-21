@@ -43,6 +43,12 @@ allow = [
     # unicode-ident, under every proc macro in the tree. The Unicode license
     # covers the character tables it embeds, not the code.
     "Unicode-3.0",
+    # ring and untrusted, which are what rustls does its arithmetic in, and so
+    # are under anything here that speaks TLS. ISC is MIT with fewer words.
+    "ISC",
+    # webpki-roots, which is Mozilla's list of certificate authorities rather
+    # than code. The license is the one that list is published under.
+    "CDLA-Permissive-2.0",
 ]
 
 [bans]
@@ -59,6 +65,12 @@ wildcards = "deny"
 # goes when it releases against syn 3.
 [[bans.skip]]
 crate = "syn@2"
+
+# ring is the only crate here still on getrandom 0.2, and it is the one place
+# nothing can be aligned: rand is on 0.4 and ring has no release against it.
+# The entry goes when ring makes one.
+[[bans.skip]]
+crate = "getrandom@0.2"
 
 [sources]
 # Everything comes from crates.io. A git or alternate-registry dependency is a

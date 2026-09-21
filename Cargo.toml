@@ -17,8 +17,13 @@ publish = false
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "tracing"] }
 base64 = { version = "0.23", default-features = false, features = ["std"] }
 bs58 = "0.5.1"
+bytes = "1.12.1"
 clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 hmac = "0.13"
+http-body-util = "0.1.5"
+hyper = { version = "1.11.1", default-features = false, features = ["client", "http1"] }
+hyper-rustls = { version = "0.27.10", default-features = false, features = ["http1", "ring", "webpki-roots"] }
+hyper-util = { version = "0.1.20", default-features = false, features = ["client-legacy", "http1", "tokio"] }
 ipld-core = { version = "0.4.3", features = ["serde"] }
 jiff = { version = "0.2.37", default-features = false, features = ["std"] }
 k256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std"] }
@@ -32,7 +37,7 @@ serde_ipld_dagcbor = "0.7.0"
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 thiserror = "2.0.20"
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal", "time"] }
 tower-http = { version = "0.7", features = ["cors", "normalize-path", "trace"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

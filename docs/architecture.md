@@ -19,6 +19,18 @@ Handlers stay thin. A handler validates input, names the account it acts for,
 and calls into the store; the interesting code is the repository layer and the
 account layer, both testable without a socket.
 
+## Talking out
+
+The server calls out for two things: registering an identifier at the PLC
+directory, and later resolving one somebody else minted. Both go through hyper
+with rustls on top, rather than a client library — the connection stack is
+already linked in for the server side, so what a higher-level client would add
+is a second copy of it.
+
+The certificate authorities are the compiled-in Mozilla set. A server behind a
+proxy that reissues certificates therefore has nothing to point at, which is
+the cost of not reading a store the container would have to be given.
+
 ## Budgets
 
 Every caller gets a fixed number of points per window, counted in this process
