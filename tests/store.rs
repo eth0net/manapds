@@ -6,7 +6,8 @@ use std::path::Path;
 use manapds::crypto::{Algorithm, Keypair};
 use manapds::repo::{Ipld, Repo, Store, Write};
 use manapds::store::{
-    Account, Accounts, Actor, DidCache, Directory, Error, Event, Root, Sequencer, Session,
+    Account, Accounts, Actor, AppPassword, DidCache, Directory, Error, Event, Root, Sequencer,
+    Session,
 };
 use manapds::store::{blobs, keys};
 use manapds::syntax::{Did, Nsid, RecordKey, TidClock};
@@ -528,6 +529,94 @@ fn a_code_that_was_disabled_or_taken_down_with_its_account_is_not_available() {
     db.execute(r#"update "actor" set "takedownRef" = 'held'"#, [])
         .expect("writes");
     assert!(!accounts.invite_available("held").expect("reads"));
+}
+
+#[test]
+fn an_app_password_is_found_by_its_hash_and_revoked_by_its_name() {
+    let mut accounts = Accounts::memory().expect("opens");
+    accounts
+        .create(&registration("alice.example.com", "alice@example.com"))
+        .expect("creates");
+    let password = AppPassword {
+        name: "phone".to_owned(),
+        privileged: false,
+    };
+    accounts
+        .create_app_password(&account(), &password, "a hash")
+        .expect("writes");
+
+    assert_eq!(
+        accounts.app_password(&account(), "a hash").expect("reads"),
+        Some(password.clone())
+    );
+    assert_eq!(
+        accounts
+            .app_password(&account(), "another hash")
+            .expect("reads"),
+        None
+    );
+
+    let held = accounts.app_passwords(&account()).expect("reads");
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].0, password);
+
+    // A session opened with it goes when it does, which is the only way a
+    // client holding one is shut out.
+    accounts
+        .store_session(&Session {
+            app_password: Some(password),
+            ..session("phone session", "2027-01-01T00:00:00Z")
+        })
+        .expect("stores");
+    assert!(
+        accounts
+            .revoke_app_password(&account(), "phone")
+            .expect("revokes")
+    );
+    assert_eq!(accounts.session("phone session").expect("reads"), None);
+    assert!(
+        accounts
+            .app_passwords(&account())
+            .expect("reads")
+            .is_empty()
+    );
+    assert!(
+        !accounts
+            .revoke_app_password(&account(), "phone")
+            .expect("revokes")
+    );
+}
+
+#[test]
+fn a_session_carries_what_its_app_password_may_do_now() {
+    let mut accounts = Accounts::memory().expect("opens");
+    accounts
+        .create(&registration("alice.example.com", "alice@example.com"))
+        .expect("creates");
+    let password = AppPassword {
+        name: "phone".to_owned(),
+        privileged: true,
+    };
+    accounts
+        .create_app_password(&account(), &password, "a hash")
+        .expect("writes");
+    accounts
+        .store_session(&Session {
+            app_password: Some(AppPassword {
+                name: "phone".to_owned(),
+                privileged: false,
+            }),
+            ..session("phone session", "2027-01-01T00:00:00Z")
+        })
+        .expect("stores");
+
+    // The row holds only the name, so what it reaches is read from the
+    // password rather than from whatever was true when the session opened.
+    let held = accounts
+        .session("phone session")
+        .expect("reads")
+        .expect("held");
+    assert_eq!(held.app_password, Some(password));
 }
 
 #[test]

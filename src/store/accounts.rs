@@ -388,6 +388,106 @@ impl Accounts {
         )
     }
 
+    /// Writes an app password, under the hash a session will be looked up by.
+    ///
+    /// # Errors
+    ///
+    /// If the account already has one by that name, or the write fails.
+    pub fn create_app_password(
+        &self,
+        did: &Did,
+        password: &AppPassword,
+        hash: &str,
+    ) -> Result<(), Error> {
+        self.db.execute(
+            r#"insert into "app_password"
+               ("did", "name", "passwordScrypt", "createdAt", "privileged")
+               values (?1, ?2, ?3, ?4, ?5)"#,
+            params![
+                did.as_str(),
+                password.name,
+                hash,
+                stamp(Timestamp::now()),
+                i64::from(password.privileged),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// The app password with this hash, which is how one is checked: they are
+    /// salted with the account, so the hash is the lookup.
+    ///
+    /// # Errors
+    ///
+    /// If the read fails.
+    pub fn app_password(&self, did: &Did, hash: &str) -> Result<Option<AppPassword>, Error> {
+        Ok(self
+            .db
+            .query_row(
+                r#"select "name", "privileged" from "app_password"
+                   where "did" = ?1 and "passwordScrypt" = ?2"#,
+                params![did.as_str(), hash],
+                |row| {
+                    Ok(AppPassword {
+                        name: row.get(0)?,
+                        privileged: row.get::<_, i64>(1)? == 1,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    /// Every app password an account holds, newest first.
+    ///
+    /// # Errors
+    ///
+    /// If a row holds a timestamp nothing here writes.
+    pub fn app_passwords(&self, did: &Did) -> Result<Vec<(AppPassword, Timestamp)>, Error> {
+        self.db
+            .prepare(
+                r#"select "name", "privileged", "createdAt" from "app_password"
+                   where "did" = ?1 order by "createdAt" desc"#,
+            )?
+            .query_map(params![did.as_str()], |row| {
+                Ok((
+                    AppPassword {
+                        name: row.get(0)?,
+                        privileged: row.get::<_, i64>(1)? == 1,
+                    },
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .map(|row| {
+                let (password, created_at) = row?;
+                Ok((
+                    password,
+                    created_at
+                        .parse()
+                        .map_err(|_| Error::Malformed("a stored timestamp that is not one"))?,
+                ))
+            })
+            .collect()
+    }
+
+    /// Takes an app password away, along with the sessions opened with it.
+    ///
+    /// # Errors
+    ///
+    /// If the write fails.
+    pub fn revoke_app_password(&mut self, did: &Did, name: &str) -> Result<bool, Error> {
+        let transaction = self.db.transaction()?;
+        let deleted = transaction.execute(
+            r#"delete from "app_password" where "did" = ?1 and "name" = ?2"#,
+            params![did.as_str(), name],
+        )?;
+        transaction.execute(
+            r#"delete from "refresh_token" where "did" = ?1 and "appPasswordName" = ?2"#,
+            params![did.as_str(), name],
+        )?;
+        transaction.commit()?;
+        Ok(deleted > 0)
+    }
+
     /// Writes invite codes, all for one account and all with the same number
     /// of uses.
     ///
