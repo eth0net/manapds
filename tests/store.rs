@@ -6,7 +6,7 @@ use std::path::Path;
 use manapds::crypto::{Algorithm, Keypair};
 use manapds::repo::{Ipld, Repo, Store, Write};
 use manapds::store::{
-    Account, Accounts, Actor, DidCache, Directory, Error, Event, Root, Sequencer,
+    Account, Accounts, Actor, DidCache, Directory, Error, Event, Root, Sequencer, Session,
 };
 use manapds::store::{blobs, keys};
 use manapds::syntax::{Did, Nsid, RecordKey, TidClock};
@@ -365,6 +365,104 @@ fn an_email_is_taken_whatever_case_it_is_given_in() {
     let mut clash = registration("bob.example.com", "ALICE@example.com");
     clash.did = "did:plc:zzzzzzzzzzzzzzzzzzzzzzzz".parse().expect("a DID");
     assert!(accounts.create(&clash).is_err());
+}
+
+fn session(id: &str, expires_at: &str) -> Session {
+    Session {
+        id: id.to_owned(),
+        did: account(),
+        expires_at: expires_at.parse().expect("a timestamp"),
+        next_id: None,
+        app_password: None,
+    }
+}
+
+#[test]
+fn a_session_reads_back_until_it_is_revoked() {
+    let mut accounts = Accounts::memory().expect("opens");
+    accounts
+        .create(&registration("alice.example.com", "alice@example.com"))
+        .expect("creates");
+    let opened = session("first", "2026-12-01T00:00:00Z");
+    accounts.store_session(&opened).expect("stores");
+
+    assert_eq!(accounts.session("first").expect("reads"), Some(opened));
+    assert_eq!(accounts.session("second").expect("reads"), None);
+    assert!(accounts.revoke_session("first").expect("revokes"));
+    assert!(!accounts.revoke_session("first").expect("revokes"));
+    assert_eq!(accounts.session("first").expect("reads"), None);
+}
+
+#[test]
+fn storing_a_session_again_leaves_the_one_already_there() {
+    let mut accounts = Accounts::memory().expect("opens");
+    accounts
+        .create(&registration("alice.example.com", "alice@example.com"))
+        .expect("creates");
+    let opened = session("first", "2026-12-01T00:00:00Z");
+    accounts.store_session(&opened).expect("stores");
+    accounts
+        .store_session(&session("first", "2027-12-01T00:00:00Z"))
+        .expect("stores");
+
+    assert_eq!(accounts.session("first").expect("reads"), Some(opened));
+}
+
+#[test]
+fn a_session_names_one_successor_and_refuses_a_second() {
+    let mut accounts = Accounts::memory().expect("opens");
+    accounts
+        .create(&registration("alice.example.com", "alice@example.com"))
+        .expect("creates");
+    accounts
+        .store_session(&session("first", "2026-12-01T00:00:00Z"))
+        .expect("stores");
+    let grace: jiff::Timestamp = "2026-09-01T02:00:00Z".parse().expect("a timestamp");
+
+    assert!(
+        accounts
+            .hold_session("first", grace, "second")
+            .expect("holds")
+    );
+    // The same exchange arriving twice is answered with the same session.
+    assert!(
+        accounts
+            .hold_session("first", grace, "second")
+            .expect("holds")
+    );
+    assert!(
+        !accounts
+            .hold_session("first", grace, "third")
+            .expect("holds")
+    );
+
+    let held = accounts.session("first").expect("reads").expect("held");
+    assert_eq!(held.next_id.as_deref(), Some("second"));
+    assert_eq!(held.expires_at, grace);
+}
+
+#[test]
+fn only_the_sessions_that_have_run_out_are_cleared() {
+    let mut accounts = Accounts::memory().expect("opens");
+    accounts
+        .create(&registration("alice.example.com", "alice@example.com"))
+        .expect("creates");
+    accounts
+        .store_session(&session("old", "2026-01-01T00:00:00Z"))
+        .expect("stores");
+    accounts
+        .store_session(&session("current", "2027-01-01T00:00:00Z"))
+        .expect("stores");
+    let now: jiff::Timestamp = "2026-09-01T00:00:00Z".parse().expect("a timestamp");
+
+    assert_eq!(
+        accounts.expire_sessions(&account(), now).expect("clears"),
+        1
+    );
+    assert_eq!(accounts.session("old").expect("reads"), None);
+    assert!(accounts.session("current").expect("reads").is_some());
+    assert_eq!(accounts.revoke_sessions(&account()).expect("revokes"), 1);
+    assert_eq!(accounts.session("current").expect("reads"), None);
 }
 
 #[test]

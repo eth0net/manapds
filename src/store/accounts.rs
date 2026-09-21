@@ -5,6 +5,7 @@
 //! database has to be the shape the reference left it in whichever server
 //! opens it next.
 
+use jiff::Timestamp;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::syntax::{Did, Handle};
@@ -133,6 +134,30 @@ pub struct Account {
     pub password_scrypt: String,
 }
 
+/// An app password, by what it is called and what it is trusted with.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppPassword {
+    /// What the account called it when it asked for one.
+    pub name: String,
+    /// Whether it reaches more than posting.
+    pub privileged: bool,
+}
+
+/// A session, held open by the refresh token this row is keyed on.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Session {
+    /// The `jti` the refresh token carries.
+    pub id: String,
+    /// Whose session it is.
+    pub did: Did,
+    /// When the token stops being exchangeable.
+    pub expires_at: Timestamp,
+    /// The id the next exchange will hand out, once one has been asked for.
+    pub next_id: Option<String>,
+    /// The app password the session was opened with, if a password was not.
+    pub app_password: Option<AppPassword>,
+}
+
 /// The accounts this server holds.
 #[derive(Debug)]
 pub struct Accounts {
@@ -219,6 +244,136 @@ impl Accounts {
         )
     }
 
+    /// Writes a session, leaving any row already under that id alone.
+    ///
+    /// # Errors
+    ///
+    /// If the write fails.
+    pub fn store_session(&self, session: &Session) -> Result<(), Error> {
+        self.db.execute(
+            r#"insert or ignore into "refresh_token" ("id", "did", "expiresAt", "appPasswordName")
+               values (?1, ?2, ?3, ?4)"#,
+            params![
+                session.id,
+                session.did.as_str(),
+                stamp(session.expires_at),
+                session.app_password.as_ref().map(|password| &password.name),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// The session a refresh token names, carrying what its app password may
+    /// do now rather than what it could when the session opened.
+    ///
+    /// # Errors
+    ///
+    /// If a row holds a DID or a timestamp nothing here writes.
+    pub fn session(&self, id: &str) -> Result<Option<Session>, Error> {
+        let row: Option<SessionRow> = self
+            .db
+            .query_row(
+                r#"select "refresh_token"."did", "refresh_token"."expiresAt",
+                          "refresh_token"."nextId", "refresh_token"."appPasswordName",
+                          "app_password"."privileged"
+                   from "refresh_token"
+                   left join "app_password"
+                     on "app_password"."did" = "refresh_token"."did"
+                    and "app_password"."name" = "refresh_token"."appPasswordName"
+                   where "refresh_token"."id" = ?1"#,
+                params![id],
+                |row| {
+                    Ok(SessionRow {
+                        did: row.get(0)?,
+                        expires_at: row.get(1)?,
+                        next_id: row.get(2)?,
+                        name: row.get(3)?,
+                        privileged: row.get(4)?,
+                    })
+                },
+            )
+            .optional()?;
+
+        row.map(|row| {
+            Ok(Session {
+                id: id.to_owned(),
+                did: row
+                    .did
+                    .parse()
+                    .map_err(|_| Error::Malformed("a stored DID that is not one"))?,
+                expires_at: row
+                    .expires_at
+                    .parse()
+                    .map_err(|_| Error::Malformed("a stored timestamp that is not one"))?,
+                next_id: row.next_id,
+                app_password: row.name.map(|name| AppPassword {
+                    name,
+                    privileged: row.privileged == Some(1),
+                }),
+            })
+        })
+        .transpose()
+    }
+
+    /// Shortens a session to the grace period it has left and names what
+    /// replaces it, so that a client retrying an exchange is handed the same
+    /// session rather than a second one.
+    ///
+    /// Answers false when another exchange got there first under a different
+    /// successor, which is the caller's signal to read the row again.
+    ///
+    /// # Errors
+    ///
+    /// If the write fails.
+    pub fn hold_session(&self, id: &str, until: Timestamp, next: &str) -> Result<bool, Error> {
+        let updated = self.db.execute(
+            r#"update "refresh_token" set "expiresAt" = ?2, "nextId" = ?3
+               where "id" = ?1 and ("nextId" is null or "nextId" = ?3)"#,
+            params![id, stamp(until), next],
+        )?;
+        Ok(updated > 0)
+    }
+
+    /// Ends one session.
+    ///
+    /// # Errors
+    ///
+    /// If the write fails.
+    pub fn revoke_session(&self, id: &str) -> Result<bool, Error> {
+        let deleted = self.db.execute(
+            r#"delete from "refresh_token" where "id" = ?1"#,
+            params![id],
+        )?;
+        Ok(deleted > 0)
+    }
+
+    /// Ends every session an account has, which is what a password change is
+    /// for.
+    ///
+    /// # Errors
+    ///
+    /// If the write fails.
+    pub fn revoke_sessions(&self, did: &Did) -> Result<usize, Error> {
+        Ok(self.db.execute(
+            r#"delete from "refresh_token" where "did" = ?1"#,
+            params![did.as_str()],
+        )?)
+    }
+
+    /// Clears out what has already run out. Housekeeping rather than
+    /// revocation: an expired token is refused whether or not its row is
+    /// still there.
+    ///
+    /// # Errors
+    ///
+    /// If the write fails.
+    pub fn expire_sessions(&self, did: &Did, now: Timestamp) -> Result<usize, Error> {
+        Ok(self.db.execute(
+            r#"delete from "refresh_token" where "did" = ?1 and "expiresAt" <= ?2"#,
+            params![did.as_str(), stamp(now)],
+        )?)
+    }
+
     fn query(&self, sql: &str, value: &str) -> Result<Option<Account>, Error> {
         let row: Option<(String, Option<String>, String, String)> = self
             .db
@@ -242,4 +397,19 @@ impl Accounts {
         })
         .transpose()
     }
+}
+
+/// One row of the session join, before any of it is read as more than text.
+struct SessionRow {
+    did: String,
+    expires_at: String,
+    next_id: Option<String>,
+    name: Option<String>,
+    privileged: Option<i64>,
+}
+
+/// Milliseconds and a `Z`, which is what the other server writes and what
+/// makes a text column sort as time.
+fn stamp(at: Timestamp) -> String {
+    format!("{at:.3}")
 }

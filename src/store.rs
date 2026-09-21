@@ -42,7 +42,7 @@ mod did_cache;
 pub mod keys;
 mod sequencer;
 
-pub use accounts::{Account, Accounts};
+pub use accounts::{Account, Accounts, AppPassword, Session};
 pub use actor::{Actor, Root};
 pub use blobs::Blobs;
 pub use did_cache::{Cached, DidCache};
