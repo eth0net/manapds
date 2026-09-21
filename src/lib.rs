@@ -4,6 +4,7 @@
 
 pub mod config;
 pub mod crypto;
+pub mod plc;
 pub mod repo;
 pub mod server;
 pub mod store;

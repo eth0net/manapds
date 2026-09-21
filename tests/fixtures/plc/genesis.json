@@ -1,0 +1,28 @@
+{
+  "did": "did:plc:mav423b24thku7ezkx7yaray",
+  "signingKey": "did:key:zQ3shokFTS3brHcDQrn82RUDfCZESWL1ZdCEJwekUDPQiYBme",
+  "rotationKey": "did:key:zQ3shPskqAh6LCubaUvKZfoddMNTxC8yk27xWBrpxpGXs2Mof",
+  "rotationScalar": "3ca4e2b7f5a2d2ee37e0e7b0bb1ef1b90a2d4a1d5c7b98dcbd8e9f0a1b2c3d4e",
+  "handle": "alice.test",
+  "pds": "https://pds.test",
+  "operation": {
+    "type": "plc_operation",
+    "verificationMethods": {
+      "atproto": "did:key:zQ3shokFTS3brHcDQrn82RUDfCZESWL1ZdCEJwekUDPQiYBme"
+    },
+    "rotationKeys": [
+      "did:key:zQ3shPskqAh6LCubaUvKZfoddMNTxC8yk27xWBrpxpGXs2Mof"
+    ],
+    "alsoKnownAs": [
+      "at://alice.test"
+    ],
+    "services": {
+      "atproto_pds": {
+        "type": "AtprotoPersonalDataServer",
+        "endpoint": "https://pds.test"
+      }
+    },
+    "prev": null,
+    "sig": "I03qbyPndzmhcpDXSYZpRgVRvjqCY9a7nhdWLW2OpaJz_Q6ZbqmPKeKB6LD6epZed3xfavbHRMDyYsSZrVMRgw"
+  }
+}

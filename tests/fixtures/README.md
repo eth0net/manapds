@@ -20,13 +20,18 @@ commit are pinned regardless, and two of the six apply an add and a delete
 together, which is the only published vector that reaches a merge and a split
 inside one commit.
 
-`commit/` is the one fixture here that upstream does not publish: a signed
-commit block, built by `@ipld/dag-cbor` and `@atproto/crypto` rather than by
-anything in this repository. Both sides sign deterministically, so the whole
-block matches and not merely its shape. Regenerating it means encoding
+`commit/` is a fixture upstream does not publish: a signed commit block, built
+by `@ipld/dag-cbor` and `@atproto/crypto` rather than by anything in this
+repository. Both sides sign deterministically, so the whole block matches and
+not merely its shape. Regenerating it means encoding
 `{did, version, data, rev, prev}`, signing that with the K-256 scalar from
 `crypto/`, encoding the result and taking a CIDv1 over it with the dag-cbor
 codec.
+
+`plc/` is another: a genesis operation built by `@did-plc/lib`, from the K-256
+scalar in `crypto/` and a second scalar the file carries so the rotation key is
+reproducible too. Regenerating it means calling `createOp` with those two keys,
+the handle and the endpoint recorded beside them.
 
 `schema/` is what each of the reference's four databases looks like once its
 own migrator has run, plus `account-004.sql`, which is where that migrator
