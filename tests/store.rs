@@ -312,7 +312,7 @@ fn registration(handle: &str, email: &str) -> Account {
 }
 
 #[test]
-fn an_account_reads_back_by_did_or_handle() {
+fn an_account_reads_back_by_did_handle_or_email() {
     let mut accounts = Accounts::memory().expect("opens");
     let registered = registration("alice.example.com", "alice@example.com");
     accounts.create(&registered).expect("creates");
@@ -333,6 +333,15 @@ fn an_account_reads_back_by_did_or_handle() {
             .expect("reads"),
         None
     );
+    // Signing in takes either, and the email is matched the way the index
+    // holds it rather than the way it is typed.
+    assert!(
+        accounts
+            .by_email("ALICE@example.com")
+            .expect("reads")
+            .is_some()
+    );
+    assert_eq!(accounts.by_email("bob@example.com").expect("reads"), None);
 }
 
 #[test]
@@ -463,6 +472,62 @@ fn only_the_sessions_that_have_run_out_are_cleared() {
     assert!(accounts.session("current").expect("reads").is_some());
     assert_eq!(accounts.revoke_sessions(&account()).expect("revokes"), 1);
     assert_eq!(accounts.session("current").expect("reads"), None);
+}
+
+#[test]
+fn an_invite_code_is_spent_until_it_runs_out() {
+    let mut accounts = Accounts::memory().expect("opens");
+    accounts
+        .create(&registration("alice.example.com", "alice@example.com"))
+        .expect("creates");
+    accounts
+        .create_invites(&["code-one".to_owned()], &account(), "admin", 2)
+        .expect("writes");
+
+    assert!(accounts.invite_available("code-one").expect("reads"));
+    assert!(!accounts.invite_available("code-two").expect("reads"));
+
+    let first: Did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa".parse().expect("a DID");
+    let second: Did = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb".parse().expect("a DID");
+    accounts.spend_invite("code-one", &first).expect("spends");
+    assert!(accounts.invite_available("code-one").expect("reads"));
+    accounts.spend_invite("code-one", &second).expect("spends");
+    assert!(!accounts.invite_available("code-one").expect("reads"));
+
+    // One account cannot spend the same code twice, which the key enforces
+    // rather than the count.
+    assert!(accounts.spend_invite("code-one", &first).is_err());
+}
+
+#[test]
+fn a_code_that_was_disabled_or_taken_down_with_its_account_is_not_available() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let path = home.path().join("account.sqlite");
+    let mut accounts = Accounts::open(&path).expect("opens");
+    accounts
+        .create(&registration("alice.example.com", "alice@example.com"))
+        .expect("creates");
+    accounts
+        .create_invites(
+            &["disabled".to_owned(), "held".to_owned()],
+            &account(),
+            "admin",
+            1,
+        )
+        .expect("writes");
+    let db = Connection::open(&path).expect("opens");
+
+    db.execute(
+        r#"update "invite_code" set "disabled" = 1 where "code" = 'disabled'"#,
+        [],
+    )
+    .expect("writes");
+    assert!(!accounts.invite_available("disabled").expect("reads"));
+
+    assert!(accounts.invite_available("held").expect("reads"));
+    db.execute(r#"update "actor" set "takedownRef" = 'held'"#, [])
+        .expect("writes");
+    assert!(!accounts.invite_available("held").expect("reads"));
 }
 
 #[test]

@@ -110,8 +110,8 @@ const MIGRATIONS: [db::Migration; 7] = [
     ("003", |tx| Ok(tx.execute_batch(PRIVILEGED_APP_PASSWORDS)?)),
     ("004", |tx| Ok(tx.execute_batch(OAUTH)?)),
     ("005", |tx| {
-        let hour_ago = jiff::Timestamp::now() - jiff::SignedDuration::from_hours(1);
-        tx.execute(FORGET_UNREMEMBERED, params![format!("{hour_ago:.3}")])?;
+        let hour_ago = Timestamp::now() - jiff::SignedDuration::from_hours(1);
+        tx.execute(FORGET_UNREMEMBERED, params![stamp(hour_ago)])?;
         tx.execute_batch(ACCOUNT_DEVICE)?;
         tx.execute(CARRY_DEVICES, [])?;
         tx.execute_batch(AUTHORIZED_CLIENT)?;
@@ -204,7 +204,7 @@ impl Accounts {
             params![
                 account.did.as_str(),
                 account.handle.as_ref().map(Handle::as_str),
-                format!("{:.3}", jiff::Timestamp::now())
+                stamp(Timestamp::now())
             ],
         )?;
         transaction.execute(
@@ -372,6 +372,84 @@ impl Accounts {
             r#"delete from "refresh_token" where "did" = ?1 and "expiresAt" <= ?2"#,
             params![did.as_str(), stamp(now)],
         )?)
+    }
+
+    /// The account this email belongs to, whatever case it is asked in.
+    ///
+    /// # Errors
+    ///
+    /// If a row holds a DID or handle nothing here writes.
+    pub fn by_email(&self, email: &str) -> Result<Option<Account>, Error> {
+        self.query(
+            r#"select "actor"."did", "actor"."handle", "account"."email", "account"."passwordScrypt"
+               from "actor" join "account" on "account"."did" = "actor"."did"
+               where lower("account"."email") = lower(?1)"#,
+            email,
+        )
+    }
+
+    /// Writes invite codes, all for one account and all with the same number
+    /// of uses.
+    ///
+    /// # Errors
+    ///
+    /// If a code is already there, or the write fails.
+    pub fn create_invites(
+        &mut self,
+        codes: &[String],
+        for_account: &Did,
+        created_by: &str,
+        uses: u32,
+    ) -> Result<(), Error> {
+        let now = stamp(Timestamp::now());
+        let transaction = self.db.transaction()?;
+        for code in codes {
+            transaction.execute(
+                r#"insert into "invite_code"
+                   ("code", "availableUses", "disabled", "forAccount", "createdBy", "createdAt")
+                   values (?1, ?2, 0, ?3, ?4, ?5)"#,
+                params![code, uses, for_account.as_str(), created_by, now],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Whether a code can still be spent: it exists, was not disabled, has a
+    /// use left, and belongs to an account that has not been taken down.
+    ///
+    /// # Errors
+    ///
+    /// If the read fails.
+    pub fn invite_available(&self, code: &str) -> Result<bool, Error> {
+        Ok(self
+            .db
+            .query_row(
+                r#"select 1 from "invite_code"
+               left join "actor" on "actor"."did" = "invite_code"."forAccount"
+               where "invite_code"."code" = ?1
+                 and "invite_code"."disabled" = 0
+                 and "actor"."takedownRef" is null
+                 and "invite_code"."availableUses" >
+                     (select count(*) from "invite_code_use" where "code" = ?1)"#,
+                params![code],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
+    /// Spends one use of a code.
+    ///
+    /// # Errors
+    ///
+    /// If the account has already used that code, or the write fails.
+    pub fn spend_invite(&self, code: &str, did: &Did) -> Result<(), Error> {
+        self.db.execute(
+            r#"insert into "invite_code_use" ("code", "usedBy", "usedAt") values (?1, ?2, ?3)"#,
+            params![code, did.as_str(), stamp(Timestamp::now())],
+        )?;
+        Ok(())
     }
 
     fn query(&self, sql: &str, value: &str) -> Result<Option<Account>, Error> {
