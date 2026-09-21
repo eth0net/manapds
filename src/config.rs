@@ -1,6 +1,6 @@
 //! Server configuration, read from the environment.
 
-use std::{env, fmt::Write as _, net::IpAddr, num::ParseIntError, path::PathBuf};
+use std::{env, net::IpAddr, num::ParseIntError, path::PathBuf};
 
 use thiserror::Error;
 
@@ -32,10 +32,7 @@ impl Secret {
     pub fn generate() -> Self {
         let mut bytes = [0u8; 16];
         rand::fill(&mut bytes);
-        Self(bytes.iter().fold(String::new(), |mut hex, byte| {
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        }))
+        Self(crate::crypto::hex(&bytes))
     }
 }
 

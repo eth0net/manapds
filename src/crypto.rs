@@ -16,6 +16,17 @@ const P256_PREFIX: [u8; 2] = [0x80, 0x24];
 /// A compressed SEC1 point: the sign byte and one coordinate.
 const POINT_LEN: usize = 33;
 
+/// Bytes as lowercase hex, which is how a key in the environment and a salt in
+/// the account database are both written.
+#[must_use]
+pub fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut written, byte| {
+        let _ = write!(written, "{byte:02x}");
+        written
+    })
+}
+
 /// The curves atproto allows.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Algorithm {
