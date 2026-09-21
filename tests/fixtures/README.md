@@ -33,6 +33,12 @@ scalar in `crypto/` and a second scalar the file carries so the rotation key is
 reproducible too. Regenerating it means calling `createOp` with those two keys,
 the handle and the endpoint recorded beside them.
 
+`password/` is node's `crypto.scrypt` with every parameter left at its
+default, which is the one thing about how the reference stores a password that
+its source does not state. Regenerating it means hashing the two passwords in
+the file under the salts beside them, one of which is the first sixteen bytes
+of the sha-256 of a DID.
+
 `schema/` is what each of the reference's four databases looks like once its
 own migrator has run, plus `account-004.sql`, which is where that migrator
 stops one short of the migration that moves data rather than only tables: `sqlite3 <db> .schema`, sorted, with `sqlite_sequence`

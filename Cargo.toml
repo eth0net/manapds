@@ -25,6 +25,7 @@ k256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std
 p256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std"] }
 rand = "0.10.2"
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+scrypt = { version = "0.12.0", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_bytes = "0.11.19"
 serde_ipld_dagcbor = "0.7.0"

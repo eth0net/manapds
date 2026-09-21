@@ -1,0 +1,12 @@
+{
+  "account": {
+    "password": "correct horse battery staple",
+    "salt": "5c7f1a3bd90e4c62a8f0b17d3e9c4521",
+    "stored": "5c7f1a3bd90e4c62a8f0b17d3e9c4521:d52582a41f2b2321109da8e223d13b194691d5fd3ed17c70cb169387922f293351e856850cc98da8d5196ce42d337e64fd5cd70a2bc6ef8b31ea2cc500bd9d95"
+  },
+  "app": {
+    "did": "did:plc:mav423b24thku7ezkx7yaray",
+    "password": "abcd-efgh-ijkl-mnop",
+    "stored": "5ee3ab376ecec3942d3c565137fe81d7:22083e87c59cf35562a5edfce5173b9e37f2af445db3a95d4aae752b7a450913b8e894badc4688433d55d1b1fba689d5462ec295b3cd61bb48b1233da1b799b5"
+  }
+}
