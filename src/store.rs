@@ -26,6 +26,10 @@ pub enum Error {
     /// A database migrated past what this server can read.
     #[error("schema is at {0}, which is newer than this server")]
     TooNew(String),
+    /// An invite code that cannot be spent, refused inside the write that
+    /// would have spent it.
+    #[error("invite code is not available")]
+    InviteUnavailable,
     /// A blob whose bytes are not what its CID says.
     #[error("{0} is not the CID of the bytes under it")]
     WrongCid(ipld_core::cid::Cid),
@@ -42,7 +46,7 @@ mod did_cache;
 pub mod keys;
 mod sequencer;
 
-pub use accounts::{Account, Accounts, AppPassword, Session};
+pub use accounts::{Account, Accounts, AppPassword, Registration, Session};
 pub use actor::{Actor, Root};
 pub use blobs::Blobs;
 pub use did_cache::{Cached, DidCache};

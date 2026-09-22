@@ -1,8 +1,10 @@
 //! The account layer, against what the reference stores for the same inputs.
 
 use manapds::account::{self, handle, password};
+use manapds::crypto::{Algorithm, Keypair};
+use manapds::repo::Repo;
 use manapds::store;
-use manapds::syntax::Did;
+use manapds::syntax::{Did, TidClock};
 use manapds::xrpc::auth::{Expired, Scope, Tokens};
 use serde::Deserialize;
 
@@ -152,16 +154,28 @@ fn the_domain_itself_is_this_server_even_though_no_account_holds_it() {
     assert_eq!(rules.service_domain(&handle("pds.test")), None);
 }
 
+/// The secret every test signs its tokens under.
+const SECRET: &str = "a secret long enough to not be guessed";
+
+fn tokens() -> Tokens {
+    Tokens::new(SECRET, "did:web:pds.test")
+}
+
 /// An account on a server holding nothing else, with one app password.
 fn manager() -> (account::Manager, Did) {
     let did: Did = "did:plc:mav423b24thku7ezkx7yaray".parse().expect("a DID");
     let mut accounts = store::Accounts::memory().expect("a database");
     accounts
-        .create(&store::Account {
-            did: did.clone(),
-            handle: Some("alice.pds.test".parse().expect("a handle")),
-            email: "Alice@Example.com".to_owned(),
-            password_scrypt: password::hash("correct horse battery staple"),
+        .create(&store::Registration {
+            account: store::Account {
+                did: did.clone(),
+                handle: Some("alice.pds.test".parse().expect("a handle")),
+                email: "Alice@Example.com".to_owned(),
+                password_scrypt: password::hash("correct horse battery staple"),
+            },
+            root: root(),
+            invite: None,
+            session: None,
         })
         .expect("an account");
     accounts
@@ -175,8 +189,22 @@ fn manager() -> (account::Manager, Did) {
         )
         .expect("an app password");
 
-    let tokens = Tokens::new("a secret long enough to not be guessed", "did:web:pds.test");
-    (account::Manager::new(accounts, tokens), did)
+    (account::Manager::new(accounts, tokens()), did)
+}
+
+/// Where a repository starts, which an account cannot be written without.
+fn root() -> store::Root {
+    let key = Keypair::generate(Algorithm::Secp256k1);
+    let (repo, _) = Repo::create(
+        "did:plc:mav423b24thku7ezkx7yaray".parse().expect("a DID"),
+        &key,
+        &mut TidClock::new(),
+    )
+    .expect("a repository");
+    store::Root {
+        cid: repo.cid(),
+        rev: repo.rev().clone(),
+    }
 }
 
 #[tokio::test]
@@ -230,7 +258,7 @@ async fn an_app_password_opens_a_session_that_may_do_less() {
     let credentials = manager
         .open_session(&did, Some(app_password))
         .expect("a session");
-    let tokens = Tokens::new("a secret long enough to not be guessed", "did:web:pds.test");
+    let tokens = tokens();
     assert!(
         tokens
             .verify_access(&credentials.access, &[Scope::AppPassword])
@@ -247,7 +275,7 @@ async fn an_app_password_opens_a_session_that_may_do_less() {
 #[test]
 fn a_session_is_exchanged_for_the_next_one_and_the_old_token_stops_working() {
     let (manager, did) = manager();
-    let tokens = Tokens::new("a secret long enough to not be guessed", "did:web:pds.test");
+    let tokens = tokens();
     let opened = manager.open_session(&did, None).expect("a session");
     let id = |token: &str| {
         tokens
@@ -274,7 +302,7 @@ fn a_session_is_exchanged_for_the_next_one_and_the_old_token_stops_working() {
 #[test]
 fn a_revoked_session_cannot_be_exchanged_for_anything() {
     let (manager, did) = manager();
-    let tokens = Tokens::new("a secret long enough to not be guessed", "did:web:pds.test");
+    let tokens = tokens();
     let opened = manager.open_session(&did, None).expect("a session");
     let id = tokens
         .verify_refresh(&opened.refresh, Expired::Refuse)

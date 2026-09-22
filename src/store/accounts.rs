@@ -158,6 +158,21 @@ pub struct Session {
     pub app_password: Option<AppPassword>,
 }
 
+/// Everything written the moment an account exists: who it is, where its
+/// repository starts, the invite it came in on, and the session it leaves
+/// with.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Registration {
+    /// The account itself.
+    pub account: Account,
+    /// The commit its repository was created at.
+    pub root: super::Root,
+    /// The code spent to get in, where one was needed.
+    pub invite: Option<String>,
+    /// The session the caller is handed back.
+    pub session: Option<Session>,
+}
+
 /// The accounts this server holds.
 #[derive(Debug)]
 pub struct Accounts {
@@ -189,22 +204,40 @@ impl Accounts {
         })
     }
 
-    /// Writes a new account, or fails if the handle or the email is taken.
+    /// Writes a new account and everything that comes with it, or none of it.
+    ///
+    /// The invite is checked here rather than before, so that two signups
+    /// cannot both spend the last use of one code.
     ///
     /// Handles and emails are unique without regard to case, which is the
     /// index's doing rather than this function's.
     ///
     /// # Errors
     ///
-    /// If either is already in use, or the write fails.
-    pub fn create(&mut self, account: &Account) -> Result<(), Error> {
+    /// If the handle or email is already in use, the code cannot be spent, or
+    /// the write fails.
+    pub fn create(&mut self, registration: &Registration) -> Result<(), Error> {
+        let account = &registration.account;
+        let now = stamp(Timestamp::now());
         let transaction = self.db.transaction()?;
+
+        if let Some(code) = &registration.invite {
+            if !available(&transaction, code)? {
+                return Err(Error::InviteUnavailable);
+            }
+            transaction.execute(
+                r#"insert into "invite_code_use" ("code", "usedBy", "usedAt")
+                   values (?1, ?2, ?3)"#,
+                params![code, account.did.as_str(), now],
+            )?;
+        }
+
         transaction.execute(
             r#"insert into "actor" ("did", "handle", "createdAt") values (?1, ?2, ?3)"#,
             params![
                 account.did.as_str(),
                 account.handle.as_ref().map(Handle::as_str),
-                stamp(Timestamp::now())
+                now
             ],
         )?;
         transaction.execute(
@@ -212,6 +245,52 @@ impl Accounts {
                values (?1, ?2, ?3, 0)"#,
             params![account.did.as_str(), account.email, account.password_scrypt],
         )?;
+        transaction.execute(
+            r#"insert into "repo_root" ("did", "cid", "rev", "indexedAt") values (?1, ?2, ?3, ?4)
+               on conflict("did") do update set "cid" = ?2, "rev" = ?3"#,
+            params![
+                account.did.as_str(),
+                registration.root.cid.to_string(),
+                registration.root.rev.as_str(),
+                now
+            ],
+        )?;
+        if let Some(session) = &registration.session {
+            store_session(&transaction, session)?;
+        }
+
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Takes an account and everything hanging off it back out, which is what
+    /// undoing a half-finished signup means.
+    ///
+    /// # Errors
+    ///
+    /// If the write fails.
+    pub fn delete(&mut self, did: &Did) -> Result<(), Error> {
+        let transaction = self.db.transaction()?;
+        for table in [
+            "refresh_token",
+            "app_password",
+            "invite_code_use",
+            "repo_root",
+            "account",
+            "actor",
+        ] {
+            // The column naming the account is `usedBy` in one table and `did`
+            // in the rest.
+            let column = if table == "invite_code_use" {
+                "usedBy"
+            } else {
+                "did"
+            };
+            transaction.execute(
+                &format!(r#"delete from "{table}" where "{column}" = ?1"#),
+                params![did.as_str()],
+            )?;
+        }
         transaction.commit()?;
         Ok(())
     }
@@ -250,17 +329,7 @@ impl Accounts {
     ///
     /// If the write fails.
     pub fn store_session(&self, session: &Session) -> Result<(), Error> {
-        self.db.execute(
-            r#"insert or ignore into "refresh_token" ("id", "did", "expiresAt", "appPasswordName")
-               values (?1, ?2, ?3, ?4)"#,
-            params![
-                session.id,
-                session.did.as_str(),
-                stamp(session.expires_at),
-                session.app_password.as_ref().map(|password| &password.name),
-            ],
-        )?;
-        Ok(())
+        store_session(&self.db, session)
     }
 
     /// The session a refresh token names, carrying what its app password may
@@ -522,21 +591,7 @@ impl Accounts {
     ///
     /// If the read fails.
     pub fn invite_available(&self, code: &str) -> Result<bool, Error> {
-        Ok(self
-            .db
-            .query_row(
-                r#"select 1 from "invite_code"
-               left join "actor" on "actor"."did" = "invite_code"."forAccount"
-               where "invite_code"."code" = ?1
-                 and "invite_code"."disabled" = 0
-                 and "actor"."takedownRef" is null
-                 and "invite_code"."availableUses" >
-                     (select count(*) from "invite_code_use" where "code" = ?1)"#,
-                params![code],
-                |_| Ok(()),
-            )
-            .optional()?
-            .is_some())
+        available(&self.db, code)
     }
 
     /// Spends one use of a code.
@@ -575,6 +630,41 @@ impl Accounts {
         })
         .transpose()
     }
+}
+
+/// Written both on its own and as part of a registration, so the statement has
+/// one owner.
+fn store_session(db: &Connection, session: &Session) -> Result<(), Error> {
+    db.execute(
+        r#"insert or ignore into "refresh_token" ("id", "did", "expiresAt", "appPasswordName")
+           values (?1, ?2, ?3, ?4)"#,
+        params![
+            session.id,
+            session.did.as_str(),
+            stamp(session.expires_at),
+            session.app_password.as_ref().map(|password| &password.name),
+        ],
+    )?;
+    Ok(())
+}
+
+/// Whether a code can still be spent: it exists, was not disabled, has a use
+/// left, and belongs to an account that has not been taken down.
+fn available(db: &Connection, code: &str) -> Result<bool, Error> {
+    Ok(db
+        .query_row(
+            r#"select 1 from "invite_code"
+               left join "actor" on "actor"."did" = "invite_code"."forAccount"
+               where "invite_code"."code" = ?1
+                 and "invite_code"."disabled" = 0
+                 and "actor"."takedownRef" is null
+                 and "invite_code"."availableUses" >
+                     (select count(*) from "invite_code_use" where "code" = ?1)"#,
+            params![code],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }
 
 /// One row of the session join, before any of it is read as more than text.

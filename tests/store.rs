@@ -6,8 +6,8 @@ use std::path::Path;
 use manapds::crypto::{Algorithm, Keypair};
 use manapds::repo::{Ipld, Repo, Store, Write};
 use manapds::store::{
-    Account, Accounts, Actor, AppPassword, DidCache, Directory, Error, Event, Root, Sequencer,
-    Session,
+    Account, Accounts, Actor, AppPassword, DidCache, Directory, Error, Event, Registration, Root,
+    Sequencer, Session,
 };
 use manapds::store::{blobs, keys};
 use manapds::syntax::{Did, Nsid, RecordKey, TidClock};
@@ -303,12 +303,28 @@ fn the_log_keeps_its_numbering_across_a_reopen() {
     );
 }
 
-fn registration(handle: &str, email: &str) -> Account {
-    Account {
-        did: account(),
-        handle: Some(handle.parse().expect("a handle")),
-        email: email.to_owned(),
-        password_scrypt: "not a real hash".to_owned(),
+/// Where a repository starts, which every account is written with.
+fn root() -> Root {
+    let mut clock = TidClock::new();
+    let key = Keypair::generate(Algorithm::Secp256k1);
+    let (repo, _) = Repo::create(account(), &key, &mut clock).expect("creates");
+    Root {
+        cid: repo.cid(),
+        rev: repo.rev().clone(),
+    }
+}
+
+fn registration(handle: &str, email: &str) -> Registration {
+    Registration {
+        account: Account {
+            did: account(),
+            handle: Some(handle.parse().expect("a handle")),
+            email: email.to_owned(),
+            password_scrypt: "not a real hash".to_owned(),
+        },
+        root: root(),
+        invite: None,
+        session: None,
     }
 }
 
@@ -320,13 +336,13 @@ fn an_account_reads_back_by_did_handle_or_email() {
 
     assert_eq!(
         accounts.by_did(&account()).expect("reads"),
-        Some(registered.clone())
+        Some(registered.account.clone())
     );
     assert_eq!(
         accounts
             .by_handle(&"alice.example.com".parse().expect("a handle"))
             .expect("reads"),
-        Some(registered)
+        Some(registered.account)
     );
     assert_eq!(
         accounts
@@ -355,7 +371,7 @@ fn a_handle_is_taken_whatever_case_it_is_asked_in() {
     // The unique index is over lower("handle"), so this is the schema
     // refusing rather than the query.
     let mut clash = registration("ALICE.example.com", "other@example.com");
-    clash.did = "did:plc:zzzzzzzzzzzzzzzzzzzzzzzz".parse().expect("a DID");
+    clash.account.did = "did:plc:zzzzzzzzzzzzzzzzzzzzzzzz".parse().expect("a DID");
     assert!(accounts.create(&clash).is_err());
 
     let found = accounts
@@ -373,7 +389,7 @@ fn an_email_is_taken_whatever_case_it_is_given_in() {
         .expect("creates");
 
     let mut clash = registration("bob.example.com", "ALICE@example.com");
-    clash.did = "did:plc:zzzzzzzzzzzzzzzzzzzzzzzz".parse().expect("a DID");
+    clash.account.did = "did:plc:zzzzzzzzzzzzzzzzzzzzzzzz".parse().expect("a DID");
     assert!(accounts.create(&clash).is_err());
 }
 
@@ -916,4 +932,76 @@ fn the_migration_that_replaces_device_sessions_carries_the_right_ones() {
     // from nothing, which the route through 005 could otherwise miss.
     drop(db);
     assert_eq!(schema(&path), reference_schema("account"));
+}
+
+#[test]
+fn an_account_comes_in_on_its_code_and_leaves_with_its_session() {
+    let mut accounts = Accounts::memory().expect("opens");
+    let inviter = "did:plc:zzzzzzzzzzzzzzzzzzzzzzzz".parse().expect("a DID");
+    accounts
+        .create_invites(&["pds-test-aaaaa-bbbbb".to_owned()], &inviter, "admin", 1)
+        .expect("writes the code");
+
+    let mut registered = registration("alice.example.com", "alice@example.com");
+    registered.invite = Some("pds-test-aaaaa-bbbbb".to_owned());
+    registered.session = Some(session("a session", "2030-01-01T00:00:00.000Z"));
+    accounts.create(&registered).expect("creates");
+
+    assert!(
+        !accounts
+            .invite_available("pds-test-aaaaa-bbbbb")
+            .expect("reads")
+    );
+    assert!(accounts.session("a session").expect("reads").is_some());
+    assert_eq!(
+        accounts.by_did(&account()).expect("reads"),
+        Some(registered.account)
+    );
+}
+
+#[test]
+fn a_code_with_nothing_left_takes_the_account_down_with_it() {
+    let mut accounts = Accounts::memory().expect("opens");
+
+    let mut registered = registration("alice.example.com", "alice@example.com");
+    registered.invite = Some("pds-test-aaaaa-bbbbb".to_owned());
+    assert!(matches!(
+        accounts.create(&registered),
+        Err(Error::InviteUnavailable)
+    ));
+
+    // The code was checked inside the write, so nothing else in it landed
+    // either.
+    assert_eq!(accounts.by_did(&account()).expect("reads"), None);
+}
+
+#[test]
+fn deleting_an_account_takes_everything_hanging_off_it() {
+    let mut accounts = Accounts::memory().expect("opens");
+    let mut registered = registration("alice.example.com", "alice@example.com");
+    registered.session = Some(session("a session", "2030-01-01T00:00:00.000Z"));
+    accounts.create(&registered).expect("creates");
+    accounts
+        .create_app_password(
+            &account(),
+            &AppPassword {
+                name: "phone".to_owned(),
+                privileged: false,
+            },
+            "not a real hash",
+        )
+        .expect("writes");
+
+    accounts.delete(&account()).expect("deletes");
+
+    assert_eq!(accounts.by_did(&account()).expect("reads"), None);
+    assert_eq!(accounts.session("a session").expect("reads"), None);
+    assert!(
+        accounts
+            .app_passwords(&account())
+            .expect("reads")
+            .is_empty()
+    );
+    // And the handle is free again, which is the point of undoing a signup.
+    accounts.create(&registered).expect("creates again");
 }
