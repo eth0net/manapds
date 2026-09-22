@@ -333,3 +333,34 @@ async fn codes_are_written_in_bulk_for_the_accounts_named() {
         2
     );
 }
+
+#[tokio::test]
+async fn an_account_signs_in_with_what_it_signed_up_with() {
+    let (router, _data, _seen) = server(false).await;
+
+    let (status, created) = call(
+        &router,
+        "POST",
+        "com.atproto.server.createAccount",
+        Some(signup("alice.pds.test")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+
+    for identifier in ["alice.pds.test", "alice@example.com"] {
+        let (status, body) = call(
+            &router,
+            "POST",
+            "com.atproto.server.createSession",
+            Some(json!({
+                "identifier": identifier,
+                "password": "correct horse battery staple",
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{identifier}: {body}");
+        assert_eq!(body["did"], created["did"], "{identifier}");
+        // A second session rather than the one signing up left with.
+        assert_ne!(body["refreshJwt"], created["refreshJwt"], "{identifier}");
+    }
+}
