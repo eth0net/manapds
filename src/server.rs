@@ -16,7 +16,9 @@ use tower_http::{
     trace::TraceLayer,
 };
 
+mod identity;
 mod session;
+mod signup;
 
 use crate::account;
 use crate::config::Config;
@@ -120,6 +122,14 @@ fn routes(context: Context) -> Router {
         .route(
             "/xrpc/com.atproto.server.describeServer",
             xrpc::query(describe_server),
+        )
+        .route(
+            "/xrpc/com.atproto.identity.resolveHandle",
+            xrpc::query(identity::resolve_handle),
+        )
+        .route(
+            "/xrpc/com.atproto.server.createAccount",
+            xrpc::procedure(signup::create),
         )
         .route(
             "/xrpc/com.atproto.server.createSession",
