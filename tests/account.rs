@@ -1,12 +1,18 @@
 //! The account layer, against what the reference stores for the same inputs.
 
-use manapds::account::{self, handle, password};
+use std::net::Ipv4Addr;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+use manapds::account::{self, email, handle, password};
+use manapds::config::{Config, Secret};
 use manapds::crypto::{Algorithm, Keypair};
 use manapds::repo::Repo;
 use manapds::store;
 use manapds::syntax::{Did, TidClock};
 use manapds::xrpc::auth::{Expired, Scope, Tokens};
 use serde::Deserialize;
+use tempfile::TempDir;
 
 #[derive(Debug, Deserialize)]
 struct Fixture {
@@ -154,6 +160,30 @@ fn the_domain_itself_is_this_server_even_though_no_account_holds_it() {
     assert_eq!(rules.service_domain(&handle("pds.test")), None);
 }
 
+/// A server with nothing on it, writing under a directory of its own.
+fn config(data: &Path, plc: &str) -> Config {
+    Config {
+        hostname: "pds.test".to_owned(),
+        port: 443,
+        service_did: "did:web:pds.test".to_owned(),
+        data_directory: data.to_path_buf(),
+        jwt_secret: Secret::new(SECRET),
+        admin_password: Secret::new("admin"),
+        plc_rotation_key: Keypair::generate(Algorithm::Secp256k1),
+        plc_url: plc.to_owned(),
+        recovery_key: None,
+        handle_domains: vec![".pds.test".to_owned()],
+        invite_required: false,
+        blob_upload_limit: 5 * 1024 * 1024,
+        privacy_policy_url: None,
+        terms_of_service_url: None,
+        contact_email: None,
+        rate_limits: false,
+        rate_limit_bypass_key: None,
+        rate_limit_bypass_ips: Vec::new(),
+    }
+}
+
 /// The secret every test signs its tokens under.
 const SECRET: &str = "a secret long enough to not be guessed";
 
@@ -161,9 +191,40 @@ fn tokens() -> Tokens {
     Tokens::new(SECRET, "did:web:pds.test")
 }
 
+/// What a directory was sent: the path and the body, in order.
+type Seen = Arc<Mutex<Vec<(String, String)>>>;
+
+/// A directory on a port of its own, which takes whatever it is sent.
+async fn directory() -> (String, Seen) {
+    let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&seen);
+    let router = axum::Router::new().fallback(move |uri: axum::http::Uri, body: String| {
+        let recorded = Arc::clone(&recorded);
+        async move {
+            recorded
+                .lock()
+                .expect("nothing panicked while holding it")
+                .push((uri.path().to_owned(), body));
+            ""
+        }
+    });
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("a port");
+    let url = format!(
+        "http://127.0.0.1:{}",
+        listener.local_addr().expect("an address").port()
+    );
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    (url, seen)
+}
+
 /// An account on a server holding nothing else, with one app password.
-fn manager() -> (account::Manager, Did) {
+fn manager() -> (account::Manager, Did, TempDir) {
     let did: Did = "did:plc:mav423b24thku7ezkx7yaray".parse().expect("a DID");
+    let data = tempfile::tempdir().expect("a directory");
     let mut accounts = store::Accounts::memory().expect("a database");
     accounts
         .create(&store::Registration {
@@ -189,7 +250,8 @@ fn manager() -> (account::Manager, Did) {
         )
         .expect("an app password");
 
-    (account::Manager::new(accounts, tokens()), did)
+    let config = Arc::new(config(data.path(), "http://127.0.0.1:1"));
+    (account::Manager::new(config, accounts, tokens()), did, data)
 }
 
 /// Where a repository starts, which an account cannot be written without.
@@ -209,7 +271,7 @@ fn root() -> store::Root {
 
 #[tokio::test]
 async fn an_identifier_is_whichever_of_three_things_it_looks_like() {
-    let (manager, did) = manager();
+    let (manager, did, _data) = manager();
 
     for identifier in [
         "alice.pds.test",
@@ -228,7 +290,7 @@ async fn an_identifier_is_whichever_of_three_things_it_looks_like() {
 
 #[tokio::test]
 async fn a_password_that_is_not_the_password_says_nothing_else() {
-    let (manager, _) = manager();
+    let (manager, _, _data) = manager();
 
     for (identifier, password) in [
         ("alice.pds.test", "not the password"),
@@ -246,7 +308,7 @@ async fn a_password_that_is_not_the_password_says_nothing_else() {
 
 #[tokio::test]
 async fn an_app_password_opens_a_session_that_may_do_less() {
-    let (manager, did) = manager();
+    let (manager, did, _data) = manager();
 
     let login = manager
         .login("alice.pds.test", "abcd-efgh-ijkl-mnop")
@@ -274,7 +336,7 @@ async fn an_app_password_opens_a_session_that_may_do_less() {
 
 #[test]
 fn a_session_is_exchanged_for_the_next_one_and_the_old_token_stops_working() {
-    let (manager, did) = manager();
+    let (manager, did, _data) = manager();
     let tokens = tokens();
     let opened = manager.open_session(&did, None).expect("a session");
     let id = |token: &str| {
@@ -301,7 +363,7 @@ fn a_session_is_exchanged_for_the_next_one_and_the_old_token_stops_working() {
 
 #[test]
 fn a_revoked_session_cannot_be_exchanged_for_anything() {
-    let (manager, did) = manager();
+    let (manager, did, _data) = manager();
     let tokens = tokens();
     let opened = manager.open_session(&did, None).expect("a session");
     let id = tokens
@@ -317,9 +379,215 @@ fn a_revoked_session_cannot_be_exchanged_for_anything() {
 
 #[test]
 fn changing_what_signs_in_ends_every_session_at_once() {
-    let (manager, did) = manager();
+    let (manager, did, _data) = manager();
     manager.open_session(&did, None).expect("a session");
     manager.open_session(&did, None).expect("another");
 
     assert_eq!(manager.revoke_sessions(&did).expect("no failure"), 2);
+}
+
+/// A server nobody has signed up to yet, and the directory it registers at.
+async fn empty(invite_required: bool) -> (account::Manager, TempDir, Seen) {
+    let (url, seen) = directory().await;
+    let data = tempfile::tempdir().expect("a directory");
+    let mut config = config(data.path(), &url);
+    config.invite_required = invite_required;
+    let accounts = store::Accounts::memory().expect("a database");
+    (
+        account::Manager::new(Arc::new(config), accounts, tokens()),
+        data,
+        seen,
+    )
+}
+
+fn signup(handle: &str) -> account::Signup {
+    account::Signup {
+        handle: handle.to_owned(),
+        email: "alice@example.com".to_owned(),
+        password: "correct horse battery staple".to_owned(),
+        invite: None,
+        recovery_key: None,
+    }
+}
+
+#[tokio::test]
+async fn signing_up_writes_an_identity_a_repository_and_a_session() {
+    let (manager, data, seen) = empty(false).await;
+
+    let created = manager
+        .create(&signup("alice.pds.test"))
+        .await
+        .expect("an account");
+    assert_eq!(created.handle.as_str(), "alice.pds.test");
+    assert!(created.did.as_str().starts_with("did:plc:"));
+
+    // The account reads back, and the session it was handed opens.
+    let account = manager
+        .account(&created.did)
+        .expect("reads")
+        .expect("an account");
+    assert_eq!(account.email, "alice@example.com");
+    let id = tokens()
+        .verify_refresh(&created.credentials.refresh, Expired::Refuse)
+        .expect("a refresh token")
+        .id;
+    assert!(manager.refresh_session(&id).expect("no failure").is_some());
+
+    // Its key and its repository are on disk under the shard the DID hashes
+    // to, rather than beside every other account.
+    let directory = store::Directory::new(data.path());
+    assert!(directory.actor_key(&created.did).exists());
+    assert!(directory.actor_store(&created.did).exists());
+
+    // And the directory was told, under the identifier the operation minted.
+    let sent = seen.lock().expect("nothing panicked").clone();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].0, format!("/{}", created.did));
+    assert!(sent[0].1.contains("alice.pds.test"), "{}", sent[0].1);
+}
+
+#[tokio::test]
+async fn a_signup_the_directory_will_not_take_leaves_nothing_behind() {
+    let data = tempfile::tempdir().expect("a directory");
+    // A port nothing answers on, which is the failure that happens after
+    // everything local has already been written.
+    let config = config(data.path(), "http://127.0.0.1:1");
+    let accounts = store::Accounts::memory().expect("a database");
+    let manager = account::Manager::new(Arc::new(config), accounts, tokens());
+
+    let error = manager
+        .create(&signup("alice.pds.test"))
+        .await
+        .expect_err("no account");
+    assert!(matches!(error, account::Error::Plc(_)), "{error}");
+
+    // Nothing is left for a second attempt to trip over.
+    assert!(
+        manager
+            .resolve(&"alice.pds.test".parse().expect("a handle"))
+            .expect("reads")
+            .is_none()
+    );
+    assert_eq!(files(data.path()), Vec::<String>::new());
+}
+
+/// Every file under a directory, however deep, by name.
+fn files(at: &Path) -> Vec<String> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(at).expect("a directory").flatten() {
+        if entry.path().is_dir() {
+            found.extend(files(&entry.path()));
+        } else {
+            found.push(entry.file_name().to_string_lossy().into_owned());
+        }
+    }
+    found
+}
+
+#[tokio::test]
+async fn a_server_that_asks_for_an_invite_spends_it_once() {
+    let (manager, _data, _seen) = empty(true).await;
+
+    let error = manager
+        .create(&signup("alice.pds.test"))
+        .await
+        .expect_err("no invite");
+    assert!(matches!(error, account::Error::InviteRequired), "{error}");
+
+    let mut asked = signup("alice.pds.test");
+    asked.invite = Some("pds-test-aaaaa-bbbbb".to_owned());
+    let error = manager.create(&asked).await.expect_err("no such code");
+    assert!(matches!(error, account::Error::Invite), "{error}");
+
+    manager
+        .invites(
+            &["pds-test-aaaaa-bbbbb".to_owned()],
+            &"did:plc:mav423b24thku7ezkx7yaray".parse().expect("a DID"),
+            "admin",
+            1,
+        )
+        .expect("writes the code");
+    manager.create(&asked).await.expect("an account");
+
+    // One use, so the next signup under it is refused.
+    let mut second = signup("bob.pds.test");
+    second.email = "bob@example.com".to_owned();
+    second.invite = Some("pds-test-aaaaa-bbbbb".to_owned());
+    let error = manager.create(&second).await.expect_err("spent");
+    assert!(matches!(error, account::Error::Invite), "{error}");
+}
+
+#[tokio::test]
+async fn a_name_or_an_address_somebody_else_holds_is_refused() {
+    let (manager, _data, _seen) = empty(false).await;
+    manager
+        .create(&signup("alice.pds.test"))
+        .await
+        .expect("an account");
+
+    let error = manager
+        .create(&signup("alice.pds.test"))
+        .await
+        .expect_err("taken");
+    assert!(matches!(error, account::Error::Taken("Handle")), "{error}");
+
+    let mut same_email = signup("bob.pds.test");
+    same_email.email = "ALICE@example.com".to_owned();
+    let error = manager.create(&same_email).await.expect_err("taken");
+    assert!(matches!(error, account::Error::Taken("Email")), "{error}");
+}
+
+#[tokio::test]
+async fn what_a_signup_asks_for_is_checked_before_anything_is_written() {
+    let (manager, _data, seen) = empty(false).await;
+
+    let mut long = signup("alice.pds.test");
+    long.password = "x".repeat(257);
+    assert!(matches!(
+        manager.create(&long).await.expect_err("too long"),
+        account::Error::PasswordTooLong
+    ));
+
+    let mut bad_email = signup("alice.pds.test");
+    bad_email.email = "not an address".to_owned();
+    assert!(matches!(
+        manager.create(&bad_email).await.expect_err("not an email"),
+        account::Error::Email
+    ));
+
+    assert!(matches!(
+        manager
+            .create(&signup("admin.pds.test"))
+            .await
+            .expect_err("reserved"),
+        account::Error::Handle(handle::Invalid::Reserved)
+    ));
+
+    // None of which reached the directory.
+    assert!(seen.lock().expect("nothing panicked").is_empty());
+}
+
+#[test]
+fn an_address_is_taken_only_if_something_could_be_sent_to_it() {
+    for address in [
+        "alice@example.com",
+        "alice.smith+tag@mail.example.co.uk",
+        "a@b.co",
+    ] {
+        assert!(email::plausible(address), "{address}");
+    }
+    for address in [
+        "not an address",
+        "alice@",
+        "@example.com",
+        "alice@example",
+        "alice@@example.com",
+        "alice@exa mple.com",
+        ".alice@example.com",
+        "alice.@example.com",
+        "al..ice@example.com",
+        "alice@-example.com",
+    ] {
+        assert!(!email::plausible(address), "{address}");
+    }
 }

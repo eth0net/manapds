@@ -3,18 +3,23 @@
 //! Everything here is reachable without a socket, so the handlers above it do
 //! nothing but read a request and name an error.
 
+pub mod email;
 pub mod handle;
 pub mod password;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use jiff::{SignedDuration, Timestamp};
 
+use crate::config::Config;
+use crate::crypto::{Algorithm, Keypair, PublicKey};
+use crate::repo::Repo;
 use crate::store;
-use crate::syntax::{AtIdentifier, Did};
+use crate::syntax::{AtIdentifier, Did, Handle, TidClock};
 use crate::xrpc::auth::{REFRESH_LIFETIME, Scope, Tokens};
+use crate::{plc, repo};
 
 /// How long a refresh token that has been exchanged stays usable, so that a
 /// client that never received the answer can ask again.
@@ -27,6 +32,10 @@ const GRACE: SignedDuration = SignedDuration::from_hours(2);
 /// something this server confirms any other way.
 const LOGIN: Duration = Duration::from_millis(350);
 
+/// The longest password this server will take. Anything above it is a client
+/// sending something that is not a password.
+const PASSWORD: usize = 256;
+
 /// What went wrong signing in.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -35,9 +44,76 @@ pub enum Error {
     /// wanted.
     #[error("Invalid identifier or password")]
     Credentials,
+    /// A handle this server will not hand out.
+    #[error("{0}")]
+    Handle(#[from] handle::Invalid),
+    /// An address nothing could be sent to.
+    #[error("This email address is not supported, please use a different email.")]
+    Email,
+    /// A password longer than anything anyone types.
+    #[error("Password too long. Maximum length is {PASSWORD} characters.")]
+    PasswordTooLong,
+    /// A handle or an email somebody else already holds.
+    #[error("{0} already taken")]
+    Taken(&'static str),
+    /// A server that only takes invited accounts, asked without one.
+    #[error("No invite code provided")]
+    InviteRequired,
+    /// A code that is not one, has been spent, or has been disabled.
+    #[error("This invite code is not available")]
+    Invite,
+    /// The directory would not register the identifier.
+    #[error("{0}")]
+    Plc(#[from] plc::Error),
+    /// The repository would not be built.
+    #[error("{0}")]
+    Repo(#[from] repo::Error),
     /// Storage would not answer.
     #[error("{0}")]
     Storage(#[from] store::Error),
+}
+
+impl Error {
+    /// The name its lexicon gives the failure, which is what a client branches
+    /// on.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Handle(invalid) => invalid.name(),
+            Self::Taken("Handle") => "HandleNotAvailable",
+            Self::InviteRequired | Self::Invite => "InvalidInviteCode",
+            Self::Credentials => "AuthenticationRequired",
+            Self::Plc(_) | Self::Repo(_) | Self::Storage(_) => "InternalServerError",
+            Self::Email | Self::PasswordTooLong | Self::Taken(_) => "InvalidRequest",
+        }
+    }
+}
+
+/// What a signup asks for.
+#[derive(Clone, Debug)]
+pub struct Signup {
+    /// The name it wants, which has to be one this server hands out.
+    pub handle: String,
+    /// Where password resets and confirmations will go.
+    pub email: String,
+    /// What it will sign in with.
+    pub password: String,
+    /// The code it came in on, where the server asks for one.
+    pub invite: Option<String>,
+    /// A key that outranks this server's, so the account can be taken back.
+    pub recovery_key: Option<PublicKey>,
+}
+
+/// An account, the moment it exists.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Created {
+    /// The identifier the genesis operation minted.
+    pub did: Did,
+    /// The name it answers to.
+    pub handle: Handle,
+    /// The session it is handed back, so signing up and signing in are one
+    /// call.
+    pub credentials: Credentials,
 }
 
 /// Who signed in, and what with.
@@ -61,18 +137,177 @@ pub struct Credentials {
 /// The accounts on this server, and the sessions open against them.
 #[derive(Debug)]
 pub struct Manager {
+    config: Arc<Config>,
+    directory: store::Directory,
     accounts: Mutex<store::Accounts>,
+    clock: Mutex<TidClock>,
+    plc: plc::Client,
+    rules: handle::Rules,
     tokens: Tokens,
 }
 
 impl Manager {
-    /// Holds an open account database and the secret sessions are signed
-    /// under.
+    /// Holds an open account database, the directory the rest of the data
+    /// sits in, and the secret sessions are signed under.
     #[must_use]
-    pub fn new(accounts: store::Accounts, tokens: Tokens) -> Self {
+    pub fn new(config: Arc<Config>, accounts: store::Accounts, tokens: Tokens) -> Self {
         Self {
+            directory: store::Directory::new(config.data_directory.clone()),
+            plc: plc::Client::new(config.plc_url.clone()),
+            rules: handle::Rules::new(&config.handle_domains),
             accounts: Mutex::new(accounts),
+            clock: Mutex::new(TidClock::new()),
             tokens,
+            config,
+        }
+    }
+
+    /// The rules this server hands handles out under.
+    #[must_use]
+    pub fn rules(&self) -> &handle::Rules {
+        &self.rules
+    }
+
+    /// Creates an account: an identifier, a key, a repository with nothing in
+    /// it, and a session to go on with.
+    ///
+    /// The directory is told last; `docs/architecture.md` has what that order
+    /// buys and what it does not.
+    ///
+    /// # Errors
+    ///
+    /// If the handle, email, password or invite will not do, either is already
+    /// held, or storage or the directory will not answer.
+    pub async fn create(&self, signup: &Signup) -> Result<Created, Error> {
+        if signup.password.len() > PASSWORD {
+            return Err(Error::PasswordTooLong);
+        }
+        if self.config.invite_required && signup.invite.is_none() {
+            return Err(Error::InviteRequired);
+        }
+        if !email::plausible(&signup.email) {
+            return Err(Error::Email);
+        }
+        let handle = self.rules.signup(&signup.handle)?;
+        self.available(&handle, signup)?;
+
+        let signing_key = Keypair::generate(Algorithm::Secp256k1);
+        // The account's own key first, then the server operator's: the
+        // directory settles a fork in favor of the earlier one.
+        let recovery: Vec<PublicKey> = [signup.recovery_key, self.config.recovery_key]
+            .into_iter()
+            .flatten()
+            .collect();
+        let operation = plc::Operation::create(
+            &handle,
+            &self.config.public_url(),
+            &signing_key.public_key(),
+            &recovery,
+            &self.config.plc_rotation_key,
+        )?;
+        let did = operation.did()?;
+
+        let outcome = self
+            .settle(&did, &handle, signup, &signing_key, &operation)
+            .await;
+        match outcome {
+            Ok(credentials) => Ok(Created {
+                did,
+                handle,
+                credentials,
+            }),
+            Err(error) => {
+                self.discard(&did);
+                Err(error)
+            }
+        }
+    }
+
+    /// Everything after the identifier is known, so that one failure path
+    /// undoes all of it.
+    async fn settle(
+        &self,
+        did: &Did,
+        handle: &Handle,
+        signup: &Signup,
+        signing_key: &Keypair,
+        operation: &plc::Operation,
+    ) -> Result<Credentials, Error> {
+        let root = self.start_repo(did, signing_key)?;
+
+        let id = token_id();
+        self.locked().create(&store::Registration {
+            account: store::Account {
+                did: did.clone(),
+                handle: Some(handle.clone()),
+                email: signup.email.clone(),
+                password_scrypt: password::hash(&signup.password),
+            },
+            root,
+            invite: signup.invite.clone(),
+            session: Some(store::Session {
+                id: id.clone(),
+                did: did.clone(),
+                expires_at: Timestamp::now() + REFRESH_LIFETIME,
+                next_id: None,
+                app_password: None,
+            }),
+        })?;
+
+        self.plc.send(did, operation).await?;
+
+        // todo: the log gets no entry for this yet, so a firehose reader built
+        // later would not see the account appear.
+        Ok(self.mint(did, None, &id))
+    }
+
+    /// Writes the account's key and its first commit.
+    fn start_repo(&self, did: &Did, signing_key: &Keypair) -> Result<store::Root, Error> {
+        store::keys::write(&self.directory.actor_key(did), signing_key)?;
+        let mut actor = store::Actor::open(&self.directory.actor_store(did), did.clone())?;
+        let (repo, blocks) = Repo::create(
+            did.clone(),
+            signing_key,
+            &mut self
+                .clock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )?;
+        let root = store::Root {
+            cid: repo.cid(),
+            rev: repo.rev().clone(),
+        };
+        actor.commit(&root, &blocks)?;
+        Ok(root)
+    }
+
+    /// Whether the code, the handle and the email are all still free.
+    fn available(&self, handle: &Handle, signup: &Signup) -> Result<(), Error> {
+        let accounts = self.locked();
+        if let Some(code) = &signup.invite
+            && !accounts.invite_available(code)?
+        {
+            return Err(Error::Invite);
+        }
+        if accounts.by_handle(handle)?.is_some() {
+            return Err(Error::Taken("Handle"));
+        }
+        if accounts.by_email(&signup.email)?.is_some() {
+            return Err(Error::Taken("Email"));
+        }
+        Ok(())
+    }
+
+    /// Takes a half-finished signup back out, best effort: what is left behind
+    /// is worth a log line and never worth failing a second attempt.
+    fn discard(&self, did: &Did) {
+        if let Err(error) = self.locked().delete(did) {
+            tracing::error!(%did, %error, "could not undo a failed signup");
+        }
+        if let Err(error) = std::fs::remove_dir_all(self.directory.actor(did))
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::error!(%did, %error, "could not remove a failed signup's directory");
         }
     }
 
@@ -83,6 +318,33 @@ impl Manager {
     /// If storage will not answer.
     pub fn account(&self, did: &Did) -> Result<Option<store::Account>, Error> {
         Ok(self.locked().by_did(did)?)
+    }
+
+    /// The account a handle names, whatever case it is asked in.
+    ///
+    /// # Errors
+    ///
+    /// If storage will not answer.
+    pub fn resolve(&self, handle: &Handle) -> Result<Option<Did>, Error> {
+        Ok(self.locked().by_handle(handle)?.map(|account| account.did))
+    }
+
+    /// Writes invite codes, all for one account and all with the same number
+    /// of uses.
+    ///
+    /// # Errors
+    ///
+    /// If a code is already there, or the write fails.
+    pub fn invites(
+        &self,
+        codes: &[String],
+        for_account: &Did,
+        created_by: &str,
+        uses: u32,
+    ) -> Result<(), Error> {
+        Ok(self
+            .locked()
+            .create_invites(codes, for_account, created_by, uses)?)
     }
 
     /// Checks an identifier and a password, taking the same time whichever

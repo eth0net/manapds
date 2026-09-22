@@ -31,6 +31,17 @@ The certificate authorities are the compiled-in Mozilla set. A server behind a
 proxy that reissues certificates therefore has nothing to point at, which is
 the cost of not reading a store the container would have to be given.
 
+Signing up writes every local thing first and registers the identifier last.
+That order is chosen rather than inherited: the reference registers first and
+tombstones what it registered if the rest fails, and until this server can
+write a tombstone, undoing rows is the only undo it has. Against a refusal or
+a timeout that is complete — nothing is left and the name is free again.
+
+What no ordering covers is an answer lost on the way back. The directory then
+holds an operation this server has already forgotten, and the name resolves to
+a server with no account under it. Reconciling that needs the tombstone, so it
+waits for the same thing account migration does.
+
 ## Budgets
 
 Every caller gets a fixed number of points per window, counted in this process
