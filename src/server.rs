@@ -16,6 +16,8 @@ use tower_http::{
     trace::TraceLayer,
 };
 
+mod session;
+
 use crate::account;
 use crate::config::Config;
 use crate::store;
@@ -118,6 +120,22 @@ fn routes(context: Context) -> Router {
         .route(
             "/xrpc/com.atproto.server.describeServer",
             xrpc::query(describe_server),
+        )
+        .route(
+            "/xrpc/com.atproto.server.createSession",
+            xrpc::procedure(session::create),
+        )
+        .route(
+            "/xrpc/com.atproto.server.getSession",
+            xrpc::query(session::get),
+        )
+        .route(
+            "/xrpc/com.atproto.server.refreshSession",
+            xrpc::procedure(session::refresh),
+        )
+        .route(
+            "/xrpc/com.atproto.server.deleteSession",
+            xrpc::procedure(session::delete),
         )
         .fallback(xrpc::fallback)
         .with_state(context)

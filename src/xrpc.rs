@@ -10,9 +10,11 @@ use axum::{
 use serde::Serialize;
 
 pub mod auth;
+mod input;
 pub mod limit;
 mod route;
 
+pub use input::Input;
 pub use route::{fallback, procedure, query};
 
 /// The result an XRPC method hands back.

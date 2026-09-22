@@ -405,6 +405,47 @@ where
     }
 }
 
+impl<S: Sync> FromRequestParts<S> for Refresh
+where
+    Tokens: FromRef<S>,
+{
+    type Rejection = Error;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Error> {
+        refresh(parts, state, Expired::Refuse).await
+    }
+}
+
+/// A refresh token read whether or not it has run out.
+///
+/// Ending a session is the one thing a client that has been away longer than
+/// the token lives may still do, since the alternative is a session nobody
+/// can close.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Closing(pub Refresh);
+
+impl<S: Sync> FromRequestParts<S> for Closing
+where
+    Tokens: FromRef<S>,
+{
+    type Rejection = Error;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Error> {
+        refresh(parts, state, Expired::Allow).await.map(Self)
+    }
+}
+
+async fn refresh<S: Sync>(parts: &mut Parts, state: &S, expired: Expired) -> Result<Refresh, Error>
+where
+    Tokens: FromRef<S>,
+{
+    let authorization = Authorization::from_request_parts(parts, state).await?;
+    let token = authorization
+        .bearer()
+        .ok_or_else(|| Error::new(super::Status::AuthenticationRequired).named("AuthMissing"))?;
+    Tokens::from_ref(state).verify_refresh(token, expired)
+}
+
 /// Set on a request so that reading its credentials can be noticed after the
 /// handler has finished with it.
 #[derive(Clone, Debug)]
