@@ -14,7 +14,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use jiff::{SignedDuration, Timestamp};
 
 use crate::config::Config;
-use crate::crypto::{Algorithm, Keypair, PublicKey};
+use crate::crypto::{self, Algorithm, Keypair, PublicKey};
 use crate::repo::Repo;
 use crate::store;
 use crate::syntax::{AtIdentifier, Did, Handle, TidClock};
@@ -31,6 +31,9 @@ const GRACE: SignedDuration = SignedDuration::from_hours(2);
 /// budget the time taken says whether it does — and an email address is not
 /// something this server confirms any other way.
 const LOGIN: Duration = Duration::from_millis(350);
+
+/// Who a code the server itself hands out belongs to, which is nobody.
+const ADMINISTRATOR: &str = "admin";
 
 /// The longest password a new account may choose. Anything above it is a
 /// client sending something that is not a password.
@@ -333,22 +336,35 @@ impl Manager {
         Ok(self.locked().by_handle(handle)?.map(|account| account.did))
     }
 
-    /// Writes invite codes, all for one account and all with the same number
-    /// of uses.
+    /// Writes fresh invite codes for an account, and says what they are.
     ///
     /// # Errors
     ///
-    /// If a code is already there, or the write fails.
-    pub fn invites(
+    /// If the write fails.
+    pub fn mint_invites(
         &self,
-        codes: &[String],
-        for_account: &Did,
-        created_by: &str,
+        for_account: &str,
+        count: u32,
         uses: u32,
-    ) -> Result<(), Error> {
-        Ok(self
-            .locked()
-            .create_invites(codes, for_account, created_by, uses)?)
+    ) -> Result<Vec<String>, Error> {
+        let codes: Vec<String> = (0..count).map(|_| self.invite_code()).collect();
+        self.locked()
+            .create_invites(&codes, for_account, ADMINISTRATOR, uses)?;
+        Ok(codes)
+    }
+
+    /// `<hostname>-xxxxx-xxxxx`, with the dots in the hostname written as
+    /// dashes, which is the shape the reference writes.
+    fn invite_code(&self) -> String {
+        let mut bytes = [0u8; 8];
+        rand::fill(&mut bytes);
+        let token = crypto::base32(&bytes);
+        format!(
+            "{}-{}-{}",
+            self.config.hostname.replace('.', "-"),
+            &token[..5],
+            &token[5..10]
+        )
     }
 
     /// Checks an identifier and a password, taking the same time whichever

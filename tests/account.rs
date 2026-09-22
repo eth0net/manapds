@@ -502,20 +502,17 @@ async fn a_server_that_asks_for_an_invite_spends_it_once() {
     let error = manager.create(&asked).await.expect_err("no such code");
     assert!(matches!(error, account::Error::Invite), "{error}");
 
-    manager
-        .invites(
-            &["pds-test-aaaaa-bbbbb".to_owned()],
-            &"did:plc:mav423b24thku7ezkx7yaray".parse().expect("a DID"),
-            "admin",
-            1,
-        )
-        .expect("writes the code");
+    let codes = manager.mint_invites("admin", 1, 1).expect("a code");
+    // The code names the server it is good for, so one pasted at the wrong
+    // one is obviously wrong.
+    assert!(codes[0].starts_with("pds-test-"), "{}", codes[0]);
+    asked.invite = Some(codes[0].clone());
     manager.create(&asked).await.expect("an account");
 
     // One use, so the next signup under it is refused.
     let mut second = signup("bob.pds.test");
     second.email = "bob@example.com".to_owned();
-    second.invite = Some("pds-test-aaaaa-bbbbb".to_owned());
+    second.invite = Some(codes[0].clone());
     let error = manager.create(&second).await.expect_err("spent");
     assert!(matches!(error, account::Error::Invite), "{error}");
 }

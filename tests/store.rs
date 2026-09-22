@@ -498,7 +498,7 @@ fn an_invite_code_is_spent_until_it_runs_out() {
         .create(&registration("alice.example.com", "alice@example.com"))
         .expect("creates");
     accounts
-        .create_invites(&["code-one".to_owned()], &account(), "admin", 2)
+        .create_invites(&["code-one".to_owned()], account().as_str(), "admin", 2)
         .expect("writes");
 
     assert!(accounts.invite_available("code-one").expect("reads"));
@@ -527,7 +527,7 @@ fn a_code_that_was_disabled_or_taken_down_with_its_account_is_not_available() {
     accounts
         .create_invites(
             &["disabled".to_owned(), "held".to_owned()],
-            &account(),
+            account().as_str(),
             "admin",
             1,
         )
@@ -937,9 +937,8 @@ fn the_migration_that_replaces_device_sessions_carries_the_right_ones() {
 #[test]
 fn an_account_comes_in_on_its_code_and_leaves_with_its_session() {
     let mut accounts = Accounts::memory().expect("opens");
-    let inviter = "did:plc:zzzzzzzzzzzzzzzzzzzzzzzz".parse().expect("a DID");
     accounts
-        .create_invites(&["pds-test-aaaaa-bbbbb".to_owned()], &inviter, "admin", 1)
+        .create_invites(&["pds-test-aaaaa-bbbbb".to_owned()], "admin", "admin", 1)
         .expect("writes the code");
 
     let mut registered = registration("alice.example.com", "alice@example.com");

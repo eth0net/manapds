@@ -560,13 +560,16 @@ impl Accounts {
     /// Writes invite codes, all for one account and all with the same number
     /// of uses.
     ///
+    /// The account is a string rather than a DID: a code the server itself
+    /// hands out belongs to `admin`, which is nobody.
+    ///
     /// # Errors
     ///
     /// If a code is already there, or the write fails.
     pub fn create_invites(
         &mut self,
         codes: &[String],
-        for_account: &Did,
+        for_account: &str,
         created_by: &str,
         uses: u32,
     ) -> Result<(), Error> {
@@ -577,7 +580,7 @@ impl Accounts {
                 r#"insert into "invite_code"
                    ("code", "availableUses", "disabled", "forAccount", "createdBy", "createdAt")
                    values (?1, ?2, 0, ?3, ?4, ?5)"#,
-                params![code, uses, for_account.as_str(), created_by, now],
+                params![code, uses, for_account, created_by, now],
             )?;
         }
         transaction.commit()?;

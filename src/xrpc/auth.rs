@@ -22,6 +22,7 @@ use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
+use crate::config::Config;
 use crate::syntax::Did;
 
 use super::Error;
@@ -444,6 +445,37 @@ where
         .bearer()
         .ok_or_else(|| Error::new(super::Status::AuthenticationRequired).named("AuthMissing"))?;
     Tokens::from_ref(state).verify_refresh(token, expired)
+}
+
+/// The only name the admin password answers to.
+const ADMINISTRATOR: &str = "admin";
+
+/// Proof that the caller holds the admin password.
+///
+/// One name and one password rather than an account: these methods belong to
+/// whoever runs the server, not to anybody who has an account on it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Admin;
+
+impl<S: Sync> FromRequestParts<S> for Admin
+where
+    Arc<Config>: FromRef<S>,
+{
+    type Rejection = Error;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Error> {
+        let authorization = Authorization::from_request_parts(parts, state).await?;
+        let Some(Credential::Basic { username, password }) = &authorization.0 else {
+            return Err(Error::new(super::Status::AuthenticationRequired).named("AuthMissing"));
+        };
+        let config = Arc::<Config>::from_ref(state);
+        if username != ADMINISTRATOR
+            || !crate::crypto::same(password, config.admin_password.reveal())
+        {
+            return Err(Error::new(super::Status::AuthenticationRequired));
+        }
+        Ok(Self)
+    }
 }
 
 /// Set on a request so that reading its credentials can be noticed after the

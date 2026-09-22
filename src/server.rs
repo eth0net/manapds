@@ -16,6 +16,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 
+mod admin;
 mod identity;
 mod session;
 mod signup;
@@ -122,6 +123,14 @@ fn routes(context: Context) -> Router {
         .route(
             "/xrpc/com.atproto.server.describeServer",
             xrpc::query(describe_server),
+        )
+        .route(
+            "/xrpc/com.atproto.server.createInviteCode",
+            xrpc::procedure(admin::create_invite_code),
+        )
+        .route(
+            "/xrpc/com.atproto.server.createInviteCodes",
+            xrpc::procedure(admin::create_invite_codes),
         )
         .route(
             "/xrpc/com.atproto.identity.resolveHandle",

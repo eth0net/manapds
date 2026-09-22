@@ -27,6 +27,18 @@ pub fn hex(bytes: &[u8]) -> String {
     })
 }
 
+/// Compares two strings without saying where they first differ, which is what
+/// anything checking a secret somebody else chose the length of needs.
+#[must_use]
+pub fn same(left: &str, right: &str) -> bool {
+    left.len() == right.len()
+        && left
+            .bytes()
+            .zip(right.bytes())
+            .fold(0, |difference, (left, right)| difference | (left ^ right))
+            == 0
+}
+
 /// Lowercase base32 without padding, which is how an identifier and an invite
 /// code are both spelled.
 #[must_use]

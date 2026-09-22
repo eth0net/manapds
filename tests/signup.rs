@@ -226,3 +226,110 @@ async fn a_handle_nothing_here_holds_is_not_resolved_for_a_client() {
         assert_eq!(body["error"], error, "{query}");
     }
 }
+
+/// The header `pdsadmin` sends, which is HTTP Basic under one fixed name.
+fn as_admin(password: &str) -> String {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    format!("Basic {}", STANDARD.encode(format!("admin:{password}")))
+}
+
+async fn call_as(
+    router: &NormalizePath<Router>,
+    path: &str,
+    authorization: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/xrpc/{path}"))
+        .header(header::AUTHORIZATION, authorization)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .expect("a request");
+
+    let response = router.clone().oneshot(request).await.expect("a response");
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("a body");
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn an_administrator_writes_a_code_and_an_account_comes_in_on_it() {
+    let (router, _data, _seen) = server(true).await;
+
+    let (status, body) = call_as(
+        &router,
+        "com.atproto.server.createInviteCode",
+        &as_admin("admin"),
+        json!({ "useCount": 1 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let code = body["code"].as_str().expect("a code").to_owned();
+    assert!(code.starts_with("pds-test-"), "{code}");
+
+    let mut input = signup("alice.pds.test");
+    input["inviteCode"] = json!(code);
+    let (status, body) = call(
+        &router,
+        "POST",
+        "com.atproto.server.createAccount",
+        Some(input),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn nobody_without_the_admin_password_writes_a_code() {
+    let (router, _data, _seen) = server(true).await;
+
+    for authorization in [
+        as_admin("not the password"),
+        // A Basic credential that is not base64, which reaches the same "no
+        // credentials" answer as sending none.
+        "Basic not-base64!".to_owned(),
+        "Bearer admin".to_owned(),
+        // The right password under a name that is not the administrator's.
+        {
+            use base64::{Engine, engine::general_purpose::STANDARD};
+            format!("Basic {}", STANDARD.encode("alice:admin"))
+        },
+    ] {
+        let (status, _) = call_as(
+            &router,
+            "com.atproto.server.createInviteCode",
+            &authorization,
+            json!({ "useCount": 1 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{authorization}");
+    }
+}
+
+#[tokio::test]
+async fn codes_are_written_in_bulk_for_the_accounts_named() {
+    let (router, _data, _seen) = server(true).await;
+
+    let (status, body) = call_as(
+        &router,
+        "com.atproto.server.createInviteCodes",
+        &as_admin("admin"),
+        json!({ "codeCount": 2, "useCount": 5, "forAccounts": ["did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["codes"][0]["account"],
+        "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"
+    );
+    assert_eq!(
+        body["codes"][0]["codes"].as_array().expect("codes").len(),
+        2
+    );
+}

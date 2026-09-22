@@ -8,7 +8,7 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::crypto::hex;
+use crate::crypto::{hex, same};
 use crate::syntax::Did;
 
 /// N is 2^14, the block size is 8, and nothing is parallelized.
@@ -56,15 +56,4 @@ fn with_salt(password: &str, salt: &str) -> String {
     scrypt::scrypt(password.as_bytes(), salt.as_bytes(), &params, &mut derived)
         .expect("a length scrypt writes");
     format!("{salt}:{}", hex(&derived))
-}
-
-/// Compares without saying where the two first differ, which upstream's `===`
-/// does not promise.
-fn same(left: &str, right: &str) -> bool {
-    left.len() == right.len()
-        && left
-            .bytes()
-            .zip(right.bytes())
-            .fold(0, |difference, (left, right)| difference | (left ^ right))
-            == 0
 }
