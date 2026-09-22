@@ -2,6 +2,7 @@
 //! much of it one caller gets.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use axum::extract::FromRequestParts;
 use axum::{
@@ -10,9 +11,11 @@ use axum::{
     extract::ConnectInfo,
     http::{Request, StatusCode, header},
 };
+use manapds::account;
 use manapds::config::{Config, Secret};
 use manapds::crypto::{Algorithm, Keypair};
 use manapds::server;
+use manapds::store;
 use manapds::syntax::Did;
 use manapds::xrpc::auth::{Access, Authorization, Credential, Expired, Scope, Tokens};
 use manapds::xrpc::limit::{self, Limiter};
@@ -26,6 +29,18 @@ fn account() -> Did {
 
 fn tokens() -> Tokens {
     Tokens::new("a secret", "did:web:pds.example.com")
+}
+
+/// The context a router is built from, around a database held in memory.
+fn context() -> server::Context {
+    context_from(config())
+}
+
+fn context_from(config: Config) -> server::Context {
+    let config = Arc::new(config);
+    let accounts = store::Accounts::memory().expect("a database");
+    let manager = account::Manager::new(Arc::clone(&config), accounts, tokens());
+    server::Context::new(config, Arc::new(manager), tokens())
 }
 
 fn config() -> Config {
@@ -102,7 +117,7 @@ fn a_fault_on_this_side_is_never_described() {
 
 #[tokio::test]
 async fn a_method_this_server_does_not_serve_says_so() {
-    let router = server::router(config());
+    let router = server::router(context());
     let (status, body) = call(
         &router,
         "GET",
@@ -116,7 +131,7 @@ async fn a_method_this_server_does_not_serve_says_so() {
 
 #[tokio::test]
 async fn a_path_that_is_not_a_lexicon_is_refused_before_that() {
-    let router = server::router(config());
+    let router = server::router(context());
     let (status, body) = call(&router, "GET", "/xrpc/not-an-nsid", "1.2.3.4:9").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body.contains("invalid xrpc path"), "{body}");
@@ -124,7 +139,7 @@ async fn a_path_that_is_not_a_lexicon_is_refused_before_that() {
 
 #[tokio::test]
 async fn a_query_asked_for_as_a_procedure_names_the_verb_it_wanted() {
-    let router = server::router(config());
+    let router = server::router(context());
     let (status, body) = call(
         &router,
         "POST",
@@ -138,7 +153,7 @@ async fn a_query_asked_for_as_a_procedure_names_the_verb_it_wanted() {
 
 #[tokio::test]
 async fn a_method_asked_for_with_a_trailing_slash_is_still_served() {
-    let router = server::router(config());
+    let router = server::router(context());
     let (status, body) = call(
         &router,
         "GET",
@@ -152,7 +167,7 @@ async fn a_method_asked_for_with_a_trailing_slash_is_still_served() {
 
 #[tokio::test]
 async fn a_path_outside_xrpc_is_left_alone() {
-    let router = server::router(config());
+    let router = server::router(context());
     let (status, _) = call(&router, "GET", "/nothing/here", "1.2.3.4:9").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, body) = call(&router, "GET", "/robots.txt", "1.2.3.4:9").await;
@@ -275,8 +290,7 @@ async fn extract(header: Option<&str>) -> Result<manapds::xrpc::auth::Access, Er
         request = request.header(axum::http::header::AUTHORIZATION, header);
     }
     let (mut parts, ()) = request.body(()).expect("a request").into_parts();
-    manapds::xrpc::auth::Access::from_request_parts(&mut parts, &server::Context::new(config()))
-        .await
+    manapds::xrpc::auth::Access::from_request_parts(&mut parts, &context()).await
 }
 
 #[tokio::test]
@@ -344,7 +358,7 @@ fn a_budget_runs_out_and_says_when_it_is_back() {
 async fn a_caller_that_spends_its_budget_is_told_what_it_has_left() {
     let mut config = config();
     config.rate_limits = true;
-    let router = server::router(config);
+    let router = server::router(context_from(config));
 
     let request = Request::builder()
         .uri("/xrpc/com.atproto.server.describeServer")
@@ -371,7 +385,7 @@ async fn a_caller_that_spends_its_budget_is_told_what_it_has_left() {
 
 #[tokio::test]
 async fn the_budget_is_off_unless_it_is_asked_for() {
-    let router = server::router(config());
+    let router = server::router(context());
     let request = Request::builder()
         .uri("/xrpc/com.atproto.server.describeServer")
         .header(header::ACCEPT, "application/json")
@@ -452,7 +466,7 @@ async fn a_caller_holding_the_bypass_key_is_not_counted() {
     let mut config = config();
     config.rate_limits = true;
     config.rate_limit_bypass_key = Some(Secret::new("let me through"));
-    let router = server::router(config);
+    let router = server::router(context_from(config));
 
     let mut request = Request::builder()
         .uri("/xrpc/com.atproto.server.describeServer")
@@ -478,7 +492,7 @@ async fn a_browser_is_told_it_may_call_from_anywhere() {
         .body(Body::empty())
         .expect("a request");
 
-    let response = server::router(config())
+    let response = server::router(context())
         .oneshot(request)
         .await
         .expect("an answer");
@@ -505,7 +519,7 @@ async fn an_answer_that_depended_on_the_caller_says_so() {
             "/xrpc/com.example.anyones",
             axum::routing::get(|| async { "everyone's" }),
         )
-        .with_state(server::Context::new(config()))
+        .with_state(context())
         .layer(axum::middleware::from_fn(manapds::xrpc::auth::private));
 
     let call = async |path: &str, header: Option<String>| {
@@ -646,7 +660,7 @@ fn a_budget_comes_back_when_its_window_has_passed() {
 async fn a_caller_past_its_budget_is_refused_and_told_when_to_return() {
     let mut config = config();
     config.rate_limits = true;
-    let router = server::router(config);
+    let router = server::router(context_from(config));
 
     let call = async || {
         let mut request = Request::builder()
@@ -697,7 +711,7 @@ async fn a_caller_past_its_budget_is_refused_and_told_when_to_return() {
 async fn the_one_path_with_its_own_budget_is_not_counted_here() {
     let mut config = config();
     config.rate_limits = true;
-    let router = server::router(config);
+    let router = server::router(context_from(config));
 
     let mut request = Request::builder()
         .uri("/xrpc/com.atproto.sync.getRepo")
@@ -802,7 +816,7 @@ fn every_status_is_named_the_way_the_lexicons_name_it() {
 async fn describe_server_answers_the_fields_its_lexicon_declares() {
     let mut config = config();
     config.contact_email = Some("hello@pds.example.com".to_owned());
-    let router = server::router(config);
+    let router = server::router(context_from(config));
 
     let (status, body) = call(
         &router,

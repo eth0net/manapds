@@ -66,15 +66,16 @@ async fn serve() -> Result<(), Box<dyn Error>> {
 
     let config = Config::from_env()?;
     let address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.port));
-    let listener = TcpListener::bind(address).await?;
     let hostname = config.hostname.clone();
+    let context = server::Context::open(config)?;
+    let listener = TcpListener::bind(address).await?;
 
     tracing::info!(%address, %hostname, "listening");
     // The connecting address is carried into the request so that rate limits
     // have someone to count against.
     let service = ServiceExt::<axum::extract::Request>::into_make_service_with_connect_info::<
         SocketAddr,
-    >(server::router(config));
+    >(server::router(context));
     axum::serve(listener, service)
         .with_graceful_shutdown(async {
             let _ = signal::ctrl_c().await;

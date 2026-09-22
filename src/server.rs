@@ -1,4 +1,5 @@
-//! Routing, and the handlers that need no storage yet.
+//! Routing, what every handler is handed, and the methods small enough to
+//! sit beside it.
 
 use std::sync::Arc;
 
@@ -15,7 +16,9 @@ use tower_http::{
     trace::TraceLayer,
 };
 
+use crate::account;
 use crate::config::Config;
+use crate::store;
 use crate::xrpc::{self, auth::Tokens, limit::Limits};
 
 /// Everything a handler can ask the router for.
@@ -23,17 +26,38 @@ use crate::xrpc::{self, auth::Tokens, limit::Limits};
 pub struct Context {
     /// How this server was started.
     pub config: Arc<Config>,
+    /// The accounts on it, and the sessions open against them.
+    pub accounts: Arc<account::Manager>,
     /// The secret every session token is signed under.
     pub tokens: Tokens,
 }
 
 impl Context {
-    /// Builds what the handlers share out of the configuration.
-    #[must_use]
-    pub fn new(config: Config) -> Self {
+    /// Opens the databases under the configured data directory.
+    ///
+    /// # Errors
+    ///
+    /// If the directory cannot be made, or a database cannot be opened or has
+    /// been migrated past what this server reads.
+    pub fn open(config: Config) -> Result<Self, store::Error> {
+        let config = Arc::new(config);
+        let directory = store::Directory::new(config.data_directory.clone());
+        let accounts = store::Accounts::open(&directory.accounts())?;
         let tokens = Tokens::new(config.jwt_secret.reveal(), config.service_did.clone());
+        Ok(Self::new(
+            Arc::clone(&config),
+            Arc::new(account::Manager::new(config, accounts, tokens.clone())),
+            tokens,
+        ))
+    }
+
+    /// The same, around an account layer somebody else opened, which is what a
+    /// test wants.
+    #[must_use]
+    pub fn new(config: Arc<Config>, accounts: Arc<account::Manager>, tokens: Tokens) -> Self {
         Self {
-            config: Arc::new(config),
+            config,
+            accounts,
             tokens,
         }
     }
@@ -51,19 +75,42 @@ impl FromRef<Context> for Arc<Config> {
     }
 }
 
-/// Builds the whole request surface. Takes the configuration rather than
-/// reading it, so a test can drive it without touching the environment.
+impl FromRef<Context> for Arc<account::Manager> {
+    fn from_ref(context: &Context) -> Self {
+        Arc::clone(&context.accounts)
+    }
+}
+
+impl From<account::Error> for xrpc::Error {
+    fn from(error: account::Error) -> Self {
+        use account::Error;
+        let status = match error {
+            Error::Credentials => xrpc::Status::AuthenticationRequired,
+            Error::Plc(_) | Error::Repo(_) | Error::Storage(_) => {
+                return Self::internal(error.to_string());
+            }
+            _ => xrpc::Status::InvalidRequest,
+        };
+        Self::new(status)
+            .named(error.name())
+            .saying(error.to_string())
+    }
+}
+
+/// Builds the whole request surface. Takes what it needs rather than opening
+/// it, so a test can drive the server without touching the environment or the
+/// disk.
 ///
 /// A trailing slash is trimmed before anything routes, because upstream serves
 /// `/xrpc/<nsid>/` and a client that sends one should not be told the method
 /// does not exist.
 #[must_use]
-pub fn router(config: Config) -> NormalizePath<Router> {
-    NormalizePath::trim_trailing_slash(routes(config))
+pub fn router(context: Context) -> NormalizePath<Router> {
+    NormalizePath::trim_trailing_slash(routes(context))
 }
 
-fn routes(config: Config) -> Router {
-    let limits = Limits::new(&config).map(Arc::new);
+fn routes(context: Context) -> Router {
+    let limits = Limits::new(&context.config).map(Arc::new);
     let router = Router::new()
         .route("/", get(root))
         .route("/robots.txt", get(robots))
@@ -73,7 +120,7 @@ fn routes(config: Config) -> Router {
             xrpc::query(describe_server),
         )
         .fallback(xrpc::fallback)
-        .with_state(Context::new(config))
+        .with_state(context)
         .layer(middleware::from_fn(xrpc::auth::private));
 
     // CORS goes outside the budget so that a browser is told why it was
