@@ -1,6 +1,8 @@
 //! The request surface: what a method answers with, who it answers, and how
 //! much of it one caller gets.
 
+mod common;
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -13,7 +15,6 @@ use axum::{
 };
 use manapds::account;
 use manapds::config::{Config, Secret};
-use manapds::crypto::{Algorithm, Keypair};
 use manapds::server;
 use manapds::store;
 use manapds::syntax::Did;
@@ -27,8 +28,12 @@ fn account() -> Did {
     "did:plc:4cjoyc3cgpal7gnrpzyjhnv3".parse().expect("a DID")
 }
 
+fn config() -> Config {
+    common::config("pds.example.com", "data", "http://127.0.0.1:1")
+}
+
 fn tokens() -> Tokens {
-    Tokens::new("a secret", "did:web:pds.example.com")
+    Tokens::new(common::SECRET, "did:web:pds.example.com")
 }
 
 /// The context a router is built from, around a database held in memory.
@@ -41,29 +46,6 @@ fn context_from(config: Config) -> server::Context {
     let accounts = store::Accounts::memory().expect("a database");
     let manager = account::Manager::new(Arc::clone(&config), accounts, tokens());
     server::Context::new(config, Arc::new(manager), tokens())
-}
-
-fn config() -> Config {
-    Config {
-        hostname: "pds.example.com".to_owned(),
-        port: 0,
-        service_did: "did:web:pds.example.com".to_owned(),
-        data_directory: "data".into(),
-        jwt_secret: Secret::new("a secret"),
-        admin_password: Secret::new("admin"),
-        plc_rotation_key: Keypair::generate(Algorithm::Secp256k1),
-        plc_url: "https://plc.example.com".to_owned(),
-        recovery_key: None,
-        handle_domains: vec![".pds.example.com".to_owned()],
-        invite_required: true,
-        blob_upload_limit: 5 * 1024 * 1024,
-        privacy_policy_url: None,
-        terms_of_service_url: None,
-        contact_email: None,
-        rate_limits: false,
-        rate_limit_bypass_key: None,
-        rate_limit_bypass_ips: Vec::new(),
-    }
 }
 
 /// Sends one request through the router, as if from `peer`.
@@ -572,8 +554,9 @@ fn forge(typ: &str, claims: &serde_json::Value) -> String {
     let header = encoder.encode(serde_json::json!({"alg": "HS256", "typ": typ}).to_string());
     let signed = format!("{header}.{}", encoder.encode(claims.to_string()));
 
-    let mut mac = <hmac::Hmac<sha2::Sha256> as hmac::KeyInit>::new_from_slice(b"a secret")
-        .expect("a key of any length");
+    let mut mac =
+        <hmac::Hmac<sha2::Sha256> as hmac::KeyInit>::new_from_slice(common::SECRET.as_bytes())
+            .expect("a key of any length");
     mac.update(signed.as_bytes());
     format!("{signed}.{}", encoder.encode(mac.finalize().into_bytes()))
 }
@@ -816,6 +799,7 @@ fn every_status_is_named_the_way_the_lexicons_name_it() {
 async fn describe_server_answers_the_fields_its_lexicon_declares() {
     let mut config = config();
     config.contact_email = Some("hello@pds.example.com".to_owned());
+    config.invite_required = true;
     let router = server::router(context_from(config));
 
     let (status, body) = call(

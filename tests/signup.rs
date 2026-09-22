@@ -1,5 +1,7 @@
 //! Signing up and resolving a handle, over a router, as a client reaches them.
 
+mod common;
+
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 
@@ -7,8 +9,6 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, Uri, header};
 use manapds::account;
-use manapds::config::{Config, Secret};
-use manapds::crypto::{Algorithm, Keypair};
 use manapds::server;
 use manapds::store;
 use manapds::xrpc::auth::Tokens;
@@ -16,8 +16,6 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
 use tower_http::normalize_path::NormalizePath;
-
-const SECRET: &str = "a secret long enough to not be guessed";
 
 /// What a directory was sent, so that a test can tell whether it was told.
 type Seen = Arc<Mutex<Vec<String>>>;
@@ -52,27 +50,10 @@ async fn plc() -> (String, Seen) {
 async fn server(invite_required: bool) -> (NormalizePath<Router>, TempDir, Seen) {
     let (url, seen) = plc().await;
     let data = tempfile::tempdir().expect("a directory");
-    let config = Arc::new(Config {
-        hostname: "pds.test".to_owned(),
-        port: 443,
-        service_did: "did:web:pds.test".to_owned(),
-        data_directory: data.path().to_path_buf(),
-        jwt_secret: Secret::new(SECRET),
-        admin_password: Secret::new("admin"),
-        plc_rotation_key: Keypair::generate(Algorithm::Secp256k1),
-        plc_url: url,
-        recovery_key: None,
-        handle_domains: vec![".pds.test".to_owned()],
-        invite_required,
-        blob_upload_limit: 5 * 1024 * 1024,
-        privacy_policy_url: None,
-        terms_of_service_url: None,
-        contact_email: None,
-        rate_limits: false,
-        rate_limit_bypass_key: None,
-        rate_limit_bypass_ips: Vec::new(),
-    });
-    let tokens = Tokens::new(SECRET, "did:web:pds.test");
+    let mut config = common::config("pds.test", data.path(), &url);
+    config.invite_required = invite_required;
+    let config = Arc::new(config);
+    let tokens = Tokens::new(common::SECRET, "did:web:pds.test");
     let accounts = store::Accounts::memory().expect("a database");
     let manager = account::Manager::new(Arc::clone(&config), accounts, tokens.clone());
     let context = server::Context::new(config, Arc::new(manager), tokens);
@@ -265,7 +246,7 @@ async fn an_administrator_writes_a_code_and_an_account_comes_in_on_it() {
     let (status, body) = call_as(
         &router,
         "com.atproto.server.createInviteCode",
-        &as_admin("admin"),
+        &as_admin(common::ADMIN),
         json!({ "useCount": 1 }),
     )
     .await;
@@ -298,7 +279,10 @@ async fn nobody_without_the_admin_password_writes_a_code() {
         // The right password under a name that is not the administrator's.
         {
             use base64::{Engine, engine::general_purpose::STANDARD};
-            format!("Basic {}", STANDARD.encode("alice:admin"))
+            format!(
+                "Basic {}",
+                STANDARD.encode(format!("alice:{}", common::ADMIN))
+            )
         },
     ] {
         let (status, _) = call_as(
@@ -319,7 +303,7 @@ async fn codes_are_written_in_bulk_for_the_accounts_named() {
     let (status, body) = call_as(
         &router,
         "com.atproto.server.createInviteCodes",
-        &as_admin("admin"),
+        &as_admin(common::ADMIN),
         json!({ "codeCount": 2, "useCount": 5, "forAccounts": ["did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"] }),
     )
     .await;

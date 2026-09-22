@@ -1,12 +1,13 @@
 //! The session methods, over a router, as a client reaches them.
 
+mod common;
+
 use std::sync::Arc;
 
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use manapds::account::{self, password};
-use manapds::config::{Config, Secret};
 use manapds::crypto::{Algorithm, Keypair};
 use manapds::repo::Repo;
 use manapds::server;
@@ -17,37 +18,12 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 use tower_http::normalize_path::NormalizePath;
 
-const SECRET: &str = "a secret long enough to not be guessed";
-
 fn account() -> Did {
     "did:plc:mav423b24thku7ezkx7yaray".parse().expect("a DID")
 }
 
 fn tokens() -> Tokens {
-    Tokens::new(SECRET, "did:web:pds.test")
-}
-
-fn config() -> Config {
-    Config {
-        hostname: "pds.test".to_owned(),
-        port: 443,
-        service_did: "did:web:pds.test".to_owned(),
-        data_directory: "data".into(),
-        jwt_secret: Secret::new(SECRET),
-        admin_password: Secret::new("admin"),
-        plc_rotation_key: Keypair::generate(Algorithm::Secp256k1),
-        plc_url: "http://127.0.0.1:1".to_owned(),
-        recovery_key: None,
-        handle_domains: vec![".pds.test".to_owned()],
-        invite_required: false,
-        blob_upload_limit: 5 * 1024 * 1024,
-        privacy_policy_url: None,
-        terms_of_service_url: None,
-        contact_email: None,
-        rate_limits: false,
-        rate_limit_bypass_key: None,
-        rate_limit_bypass_ips: Vec::new(),
-    }
+    Tokens::new(common::SECRET, "did:web:pds.test")
 }
 
 /// A server holding one account, reachable over its own router.
@@ -67,7 +43,7 @@ fn server() -> NormalizePath<Router> {
         })
         .expect("an account");
 
-    let config = Arc::new(config());
+    let config = Arc::new(common::config("pds.test", "data", "http://127.0.0.1:1"));
     let manager = account::Manager::new(Arc::clone(&config), accounts, tokens());
     server::router(server::Context::new(config, Arc::new(manager), tokens()))
 }

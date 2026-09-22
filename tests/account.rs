@@ -1,11 +1,12 @@
 //! The account layer, against what the reference stores for the same inputs.
 
+mod common;
+
 use std::net::Ipv4Addr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use manapds::account::{self, email, handle, password};
-use manapds::config::{Config, Secret};
 use manapds::crypto::{Algorithm, Keypair};
 use manapds::repo::Repo;
 use manapds::store;
@@ -160,35 +161,8 @@ fn the_domain_itself_is_this_server_even_though_no_account_holds_it() {
     assert_eq!(rules.service_domain(&handle("pds.test")), None);
 }
 
-/// A server with nothing on it, writing under a directory of its own.
-fn config(data: &Path, plc: &str) -> Config {
-    Config {
-        hostname: "pds.test".to_owned(),
-        port: 443,
-        service_did: "did:web:pds.test".to_owned(),
-        data_directory: data.to_path_buf(),
-        jwt_secret: Secret::new(SECRET),
-        admin_password: Secret::new("admin"),
-        plc_rotation_key: Keypair::generate(Algorithm::Secp256k1),
-        plc_url: plc.to_owned(),
-        recovery_key: None,
-        handle_domains: vec![".pds.test".to_owned()],
-        invite_required: false,
-        blob_upload_limit: 5 * 1024 * 1024,
-        privacy_policy_url: None,
-        terms_of_service_url: None,
-        contact_email: None,
-        rate_limits: false,
-        rate_limit_bypass_key: None,
-        rate_limit_bypass_ips: Vec::new(),
-    }
-}
-
-/// The secret every test signs its tokens under.
-const SECRET: &str = "a secret long enough to not be guessed";
-
 fn tokens() -> Tokens {
-    Tokens::new(SECRET, "did:web:pds.test")
+    Tokens::new(common::SECRET, "did:web:pds.test")
 }
 
 /// What a directory was sent: the path and the body, in order.
@@ -250,7 +224,11 @@ fn manager() -> (account::Manager, Did, TempDir) {
         )
         .expect("an app password");
 
-    let config = Arc::new(config(data.path(), "http://127.0.0.1:1"));
+    let config = Arc::new(common::config(
+        "pds.test",
+        data.path(),
+        "http://127.0.0.1:1",
+    ));
     (account::Manager::new(config, accounts, tokens()), did, data)
 }
 
@@ -393,7 +371,7 @@ fn changing_what_signs_in_ends_every_session_at_once() {
 async fn empty(invite_required: bool) -> (account::Manager, TempDir, Seen) {
     let (url, seen) = directory().await;
     let data = tempfile::tempdir().expect("a directory");
-    let mut config = config(data.path(), &url);
+    let mut config = common::config("pds.test", data.path(), &url);
     config.invite_required = invite_required;
     let accounts = store::Accounts::memory().expect("a database");
     (
@@ -454,7 +432,7 @@ async fn a_signup_the_directory_will_not_take_leaves_nothing_behind() {
     let data = tempfile::tempdir().expect("a directory");
     // A port nothing answers on, which is the failure that happens after
     // everything local has already been written.
-    let config = config(data.path(), "http://127.0.0.1:1");
+    let config = common::config("pds.test", data.path(), "http://127.0.0.1:1");
     let accounts = store::Accounts::memory().expect("a database");
     let manager = account::Manager::new(Arc::new(config), accounts, tokens());
 
