@@ -297,6 +297,9 @@ async fn a_password_that_is_not_the_password_says_nothing_else() {
         ("nobody.pds.test", "correct horse battery staple"),
         ("nobody@example.com", "correct horse battery staple"),
         ("not an identifier at all", "correct horse battery staple"),
+        // Longer than any password this server ever stored, so nothing it
+        // holds could be it.
+        ("alice.pds.test", &"x".repeat(513)),
     ] {
         let error = manager
             .login(identifier, password)
@@ -565,6 +568,26 @@ async fn what_a_signup_asks_for_is_checked_before_anything_is_written() {
 
     // None of which reached the directory.
     assert!(seen.lock().expect("nothing panicked").is_empty());
+}
+
+#[tokio::test]
+async fn a_password_is_measured_in_characters_rather_than_bytes() {
+    let (manager, _data, _seen) = empty(false).await;
+
+    // 256 accented letters are 512 bytes, and still a password anybody may
+    // choose.
+    let mut accented = signup("alice.pds.test");
+    accented.password = "é".repeat(256);
+    manager.create(&accented).await.expect("an account");
+
+    // One character over is not, however it is spelled.
+    let mut over = signup("bob.pds.test");
+    over.email = "bob@example.com".to_owned();
+    over.password = "é".repeat(257);
+    assert!(matches!(
+        manager.create(&over).await.expect_err("too long"),
+        account::Error::PasswordTooLong
+    ));
 }
 
 #[test]

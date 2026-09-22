@@ -32,9 +32,13 @@ const GRACE: SignedDuration = SignedDuration::from_hours(2);
 /// something this server confirms any other way.
 const LOGIN: Duration = Duration::from_millis(350);
 
-/// The longest password this server will take. Anything above it is a client
-/// sending something that is not a password.
+/// The longest password a new account may choose. Anything above it is a
+/// client sending something that is not a password.
 const PASSWORD: usize = 256;
+
+/// The longest password any account ever chose, which is what signing in is
+/// held to: a longer one matches nothing this server could be holding.
+const STORED_PASSWORD: usize = 512;
 
 /// What went wrong signing in.
 #[derive(Debug, thiserror::Error)]
@@ -179,7 +183,7 @@ impl Manager {
     /// If the handle, email, password or invite will not do, either is already
     /// held, or storage or the directory will not answer.
     pub async fn create(&self, signup: &Signup) -> Result<Created, Error> {
-        if signup.password.len() > PASSWORD {
+        if signup.password.chars().count() > PASSWORD {
             return Err(Error::PasswordTooLong);
         }
         if self.config.invite_required && signup.invite.is_none() {
@@ -458,6 +462,12 @@ impl Manager {
     /// The account and app password a password proves, without the padding
     /// that makes the answer take the same time either way.
     fn check(&self, identifier: &str, password: &str) -> Result<Login, Error> {
+        // Refused as a wrong password rather than by length, and refused here
+        // rather than at the handler so that it costs the same as any other
+        // wrong one.
+        if password.chars().count() > STORED_PASSWORD {
+            return Err(Error::Credentials);
+        }
         let identifier = identifier.to_ascii_lowercase();
         let accounts = self.locked();
         let account = if identifier.contains('@') {
