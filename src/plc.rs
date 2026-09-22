@@ -19,7 +19,7 @@ use hyper_util::rt::TokioExecutor;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::crypto::{Keypair, PublicKey};
+use crate::crypto::{Keypair, PublicKey, base32};
 use crate::repo;
 use crate::syntax::{Did, Handle};
 
@@ -43,9 +43,6 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 /// How much of a refusal is read back, since the message is for a log rather
 /// than for anything that parses it.
 const REFUSAL: usize = 4 * 1024;
-
-/// Lowercase base32 without padding, which is how the hash is spelled.
-const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
 
 /// What went wrong building or reading an operation.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
@@ -199,23 +196,6 @@ impl Operation {
         unsigned.sig = None;
         Ok(repo::encode(&unsigned)?)
     }
-}
-
-fn base32(bytes: &[u8]) -> String {
-    let mut encoded = String::new();
-    let (mut buffer, mut bits) = (0u32, 0u32);
-    for byte in bytes {
-        buffer = (buffer << 8) | u32::from(*byte);
-        bits += 8;
-        while bits >= 5 {
-            bits -= 5;
-            encoded.push(char::from(ALPHABET[((buffer >> bits) & 31) as usize]));
-        }
-    }
-    if bits > 0 {
-        encoded.push(char::from(ALPHABET[((buffer << (5 - bits)) & 31) as usize]));
-    }
-    encoded
 }
 
 /// The directory operations are registered at.

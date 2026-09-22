@@ -27,6 +27,28 @@ pub fn hex(bytes: &[u8]) -> String {
     })
 }
 
+/// Lowercase base32 without padding, which is how an identifier and an invite
+/// code are both spelled.
+#[must_use]
+pub fn base32(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+
+    let mut encoded = String::new();
+    let (mut buffer, mut bits) = (0u32, 0u32);
+    for byte in bytes {
+        buffer = (buffer << 8) | u32::from(*byte);
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            encoded.push(char::from(ALPHABET[((buffer >> bits) & 31) as usize]));
+        }
+    }
+    if bits > 0 {
+        encoded.push(char::from(ALPHABET[((buffer << (5 - bits)) & 31) as usize]));
+    }
+    encoded
+}
+
 /// The bytes a hex string spells, or nothing if it does not spell any.
 #[must_use]
 pub fn unhex(text: &str) -> Option<Vec<u8>> {
