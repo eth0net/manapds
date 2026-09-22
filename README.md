@@ -11,9 +11,10 @@ has untested assumptions rather than none.
 
 ## Status
 
-Early. Repositories, storage and the request surface are built; nothing here
-hosts an account yet. [`docs/roadmap.md`](docs/roadmap.md) is the order of work
-and [`docs/`](docs/architecture.md) carries the reasoning.
+Early. An account can be created against the real PLC directory, signed in to,
+and resolved by handle; nothing can be written to its repository yet, and there
+is no OAuth. [`docs/roadmap.md`](docs/roadmap.md) is the order of work and
+[`docs/`](docs/architecture.md) carries the reasoning.
 
 ## Running it
 
