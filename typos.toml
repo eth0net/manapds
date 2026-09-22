@@ -16,4 +16,7 @@ extend-exclude = [
   "LICENSE-APACHE",
   # Interop vectors captured from atproto, compared byte for byte.
   "**/tests/fixtures/**",
+  # Names held back from signup, copied from atproto. Several are reserved
+  # because they are misspellings somebody would otherwise squat.
+  "src/account/handle/reserved.rs",
 ]
