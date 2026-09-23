@@ -266,13 +266,17 @@ impl Manager {
     ) -> Result<Credentials, Error> {
         let root = self.start_repo(did, signing_key)?;
 
+        // Hashed before the lock is asked for: the receiver of a call is
+        // evaluated before its arguments, so building this inline would hold
+        // the database for as long as scrypt takes.
+        let password_scrypt = password::hash(&signup.password);
         let id = token_id();
         self.locked().create(&store::Registration {
             account: store::Account {
                 did: did.clone(),
                 handle: Some(handle.clone()),
                 email: signup.email.clone(),
-                password_scrypt: password::hash(&signup.password),
+                password_scrypt,
             },
             root,
             invite: signup.invite.clone(),
@@ -509,14 +513,18 @@ impl Manager {
             return Err(Error::Credentials);
         }
         let identifier = identifier.to_ascii_lowercase();
-        let accounts = self.locked();
-        let account = if identifier.contains('@') {
-            accounts.by_email(&identifier)?
-        } else {
-            match identifier.parse::<AtIdentifier>() {
-                Ok(AtIdentifier::Did(did)) => accounts.by_did(&did)?,
-                Ok(AtIdentifier::Handle(handle)) => accounts.by_handle(&handle)?,
-                Err(_) => None,
+        // Scoped so that the hashing below, which is the expensive half, is not
+        // done holding the database every other request is waiting for.
+        let account = {
+            let accounts = self.locked();
+            if identifier.contains('@') {
+                accounts.by_email(&identifier)?
+            } else {
+                match identifier.parse::<AtIdentifier>() {
+                    Ok(AtIdentifier::Did(did)) => accounts.by_did(&did)?,
+                    Ok(AtIdentifier::Handle(handle)) => accounts.by_handle(&handle)?,
+                    Err(_) => None,
+                }
             }
         };
         let account = account.ok_or(Error::Credentials)?;
@@ -529,8 +537,10 @@ impl Manager {
         }
         // App passwords are salted with the account, so the hash is the lookup
         // rather than something to compare a row against.
-        let app_password = accounts
-            .app_password(&account.did, &password::app(&account.did, password))?
+        let offered = password::app(&account.did, password);
+        let app_password = self
+            .locked()
+            .app_password(&account.did, &offered)?
             .ok_or(Error::Credentials)?;
         Ok(Login {
             account,
