@@ -41,6 +41,19 @@ pub fn app(did: &Did, password: &str) -> String {
     with_salt(password, &hex(&digest[..SALT]))
 }
 
+/// Hashes a password against a stored value no password reaches.
+///
+/// An identifier no account holds has nothing to check, so without this it
+/// answers without doing the work — and under load the wait alone says which
+/// identifiers exist.
+#[must_use]
+pub fn nobody(password: &str) -> bool {
+    /// Shaped like a stored hash so the work is the same, and a derivation of
+    /// nothing so the answer is always no.
+    const NOTHING: &str = "00000000000000000000000000000000:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+    verify(password, NOTHING)
+}
+
 /// Whether a password is the one behind a stored hash.
 #[must_use]
 pub fn verify(password: &str, stored: &str) -> bool {

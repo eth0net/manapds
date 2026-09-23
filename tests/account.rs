@@ -78,6 +78,18 @@ fn a_fresh_hash_is_salted_and_reads_back() {
     assert!(!password::verify("anything", "no colon here"));
 }
 
+#[test]
+fn the_password_nobody_has_is_nobody_s() {
+    for password in [
+        "",
+        "correct horse battery staple",
+        "\u{1f600}",
+        "0".repeat(512).as_str(),
+    ] {
+        assert!(!password::nobody(password), "{password:?}");
+    }
+}
+
 /// A server handing out handles under one domain, as the configuration would.
 fn rules() -> handle::Rules {
     handle::Rules::new(&[".pds.test".to_owned()])

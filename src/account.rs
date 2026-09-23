@@ -27,9 +27,10 @@ const GRACE: SignedDuration = SignedDuration::from_hours(2);
 
 /// How long signing in takes, whatever the answer.
 ///
-/// The hashing is only done for an identifier that exists, so without a fixed
-/// budget the time taken says whether it does — and an email address is not
-/// something this server confirms any other way.
+/// An email is worth hiding here because a server that asks for an invite does
+/// not hand one over anywhere else: signing up says an address is taken, but
+/// only to somebody holding a code. This budget, the equal work beneath it,
+/// and that code are one defense, and it is worth what the weakest of them is.
 const LOGIN: Duration = Duration::from_millis(350);
 
 /// Who a code the server itself hands out belongs to, which is nobody.
@@ -161,6 +162,7 @@ pub struct Manager {
     login: Duration,
     directory: store::Directory,
     accounts: Mutex<store::Accounts>,
+    hashing: Arc<tokio::sync::Semaphore>,
     clock: Mutex<TidClock>,
     plc: plc::Client,
     rules: handle::Rules,
@@ -177,6 +179,7 @@ impl Manager {
             plc: plc::Client::new(config.plc_url.clone()),
             rules: handle::Rules::new(&config.handle_domains),
             accounts: Mutex::new(accounts),
+            hashing: Arc::new(tokio::sync::Semaphore::new(hashes_at_once())),
             clock: Mutex::new(TidClock::new()),
             login: LOGIN,
             tokens,
@@ -266,10 +269,9 @@ impl Manager {
     ) -> Result<Credentials, Error> {
         let root = self.start_repo(did, signing_key)?;
 
-        // Hashed before the lock is asked for: the receiver of a call is
-        // evaluated before its arguments, so building this inline would hold
-        // the database for as long as scrypt takes.
-        let password_scrypt = password::hash(&signup.password);
+        // Hashed before the lock is taken, and not only by preference: a guard
+        // cannot be held across the await this now is.
+        let password_scrypt = self.hashing(&signup.password, password::hash).await;
         let id = token_id();
         self.locked().create(&store::Registration {
             account: store::Account {
@@ -297,6 +299,9 @@ impl Manager {
     }
 
     /// Writes the account's key and its first commit.
+    // todo: this makes a file, migrates it and signs a commit on the thread
+    // answering the request, which is the shape `docs/architecture.md` rules
+    // out. It is milliseconds where the hashing was tenths, so it waits.
     fn start_repo(&self, did: &Did, signing_key: &Keypair) -> Result<store::Root, Error> {
         store::keys::write(&self.directory.actor_key(did), signing_key)?;
         let mut actor = store::Actor::open(&self.directory.actor_store(did), did.clone())?;
@@ -404,7 +409,7 @@ impl Manager {
     /// account's nor one of its app passwords, or storage will not answer.
     pub async fn login(&self, identifier: &str, password: &str) -> Result<Login, Error> {
         let started = Instant::now();
-        let outcome = self.check(identifier, password);
+        let outcome = self.check(identifier, password).await;
         let taken = started.elapsed();
         tokio::time::sleep(remaining(self.login, taken)).await;
         outcome
@@ -505,7 +510,7 @@ impl Manager {
 
     /// The account and app password a password proves, without the padding
     /// that makes the answer take the same time either way.
-    fn check(&self, identifier: &str, password: &str) -> Result<Login, Error> {
+    async fn check(&self, identifier: &str, password: &str) -> Result<Login, Error> {
         // Refused as a wrong password rather than by length, and refused here
         // rather than at the handler so that it costs the same as any other
         // wrong one.
@@ -527,9 +532,25 @@ impl Manager {
                 }
             }
         };
-        let account = account.ok_or(Error::Credentials)?;
+        let Some(account) = account else {
+            // Twice, because that is what a wrong password costs: the row is
+            // checked, then the app passwords are looked up by hash. An
+            // identifier nobody holds has to spend the same to say nothing.
+            //
+            // Skipped along with the budget, since a server told not to hide
+            // which identifiers exist has nothing to buy with the work.
+            if !self.login.is_zero() {
+                self.hashing(password, password::nobody).await;
+                self.hashing(password, password::nobody).await;
+            }
+            return Err(Error::Credentials);
+        };
 
-        if password::verify(password, &account.password_scrypt) {
+        let stored = account.password_scrypt.clone();
+        if self
+            .hashing(password, move |offered| password::verify(offered, &stored))
+            .await
+        {
             return Ok(Login {
                 account,
                 app_password: None,
@@ -537,7 +558,10 @@ impl Manager {
         }
         // App passwords are salted with the account, so the hash is the lookup
         // rather than something to compare a row against.
-        let offered = password::app(&account.did, password);
+        let did = account.did.clone();
+        let offered = self
+            .hashing(password, move |password| password::app(&did, password))
+            .await;
         let app_password = self
             .locked()
             .app_password(&account.did, &offered)?
@@ -559,6 +583,30 @@ impl Manager {
             access: self.tokens.access(did, scope),
             refresh: self.tokens.refresh(did, id),
         }
+    }
+
+    /// Runs one scrypt on a thread that is allowed to block, waiting for a turn
+    /// if enough are already running.
+    async fn hashing<T: Send + 'static>(
+        &self,
+        password: &str,
+        work: impl FnOnce(&str) -> T + Send + 'static,
+    ) -> T {
+        let turn = Arc::clone(&self.hashing)
+            .acquire_owned()
+            .await
+            .expect("the semaphore is never closed");
+        let password = password.to_owned();
+        // The turn is given up by the work rather than by whoever is waiting on
+        // it: a caller that hangs up cannot cancel a blocking task, so handing
+        // it back any earlier would let the count run past the bound.
+        tokio::task::spawn_blocking(move || {
+            let hashed = work(&password);
+            drop(turn);
+            hashed
+        })
+        .await
+        .expect("the hashing thread")
     }
 
     /// The account database. A poisoned lock is a panic somewhere else, and
@@ -584,6 +632,15 @@ fn remaining(budget: Duration, taken: Duration) -> Duration {
         .checked_mul(whole)
         .unwrap_or(taken)
         .saturating_sub(taken)
+}
+
+/// How many passwords may be hashed at once.
+///
+/// Each one holds 16MB for as long as it runs and a blocking task goes to a
+/// pool 512 deep, so without a bound a burst of sign-ins is a memory limit
+/// rather than a processor one.
+fn hashes_at_once() -> usize {
+    std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get)
 }
 
 /// A refresh token's `jti`, which is also the row the session is kept under.
