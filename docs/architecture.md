@@ -36,14 +36,20 @@ bar the log entries, which wait for the directory to answer. That order is
 chosen rather than inherited: the reference registers first and tombstones what
 it registered if the rest fails, and until this server can write a tombstone,
 undoing rows is the only undo it has. Against a refusal that undo is complete —
-nothing is left and the name is free again — and it runs when the request is
-dropped as well as when it fails, because hanging up while
-the directory is being waited on is the likeliest way out of a signup.
+nothing is left and the name is free again — and it runs on a dropped request
+too, since hanging up is the likeliest way out of a signup.
 
-Dropping is the half that undo is least sure of: hanging up says nothing about
-whether the directory answered, so an account that would have worked can be
-taken back. That is the safer guess while there is no tombstone — a name freed
-early can be taken again, and an identity left behind cannot be reclaimed.
+It stops where the operation goes out, and what happens there turns on whether
+the directory said anything. A refusal is something said: nothing landed, the
+rows come out and the name is free again. Silence is not, and neither is a
+request the caller dropped while it was in flight, so under both the account
+stays — deleting one the network can already resolve cannot be undone. A name
+nobody holds can be taken again; an identity left behind cannot be reclaimed.
+Nothing collects what that leaves. Doing so means asking the directory about
+an account that never heard back, and freeing it only where the directory has
+nothing under it — which is what a caller retrying the same name is waiting on.
+That is one account on a bad day and every account during an outage, so it is
+the collection that decides how much an outage costs rather than the keeping.
 
 What no ordering covers is an answer lost on the way back, which a timeout
 cannot be told apart from. So the directory is asked what is filed under the

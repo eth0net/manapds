@@ -547,6 +547,51 @@ async fn a_signup_the_directory_will_not_take_leaves_nothing_behind() {
     assert_eq!(files(data.path()), Vec::<String>::new());
 }
 
+/// A directory that says nothing about a registration and nothing about what
+/// it holds, which is the state no answer can be read out of.
+async fn mute() -> String {
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("a port");
+    let url = format!(
+        "http://127.0.0.1:{}",
+        listener.local_addr().expect("an address").port()
+    );
+    tokio::spawn(async move {
+        let router = axum::Router::new().fallback(|| async { axum::http::StatusCode::BAD_GATEWAY });
+        let _ = axum::serve(listener, router).await;
+    });
+    url
+}
+
+#[tokio::test]
+async fn a_signup_the_directory_would_not_speak_for_is_left_standing() {
+    let data = tempfile::tempdir().expect("a directory");
+    let config = common::config("pds.test", data.path(), &mute().await);
+    let accounts = store::Accounts::memory().expect("a database");
+    let manager = account::Manager::new(
+        Arc::new(config),
+        accounts,
+        store::Sequencer::memory().expect("a log"),
+        tokens(),
+    );
+
+    let error = manager
+        .create(&signup("alice.pds.test"))
+        .await
+        .expect_err("no session");
+    assert!(matches!(error, account::Error::Plc(_)), "{error}");
+
+    // Kept: a directory that will not say what it holds may be holding this,
+    // and an identifier it took is not this server's to give back.
+    assert!(
+        manager
+            .resolve(&"alice.pds.test".parse().expect("a handle"))
+            .expect("reads")
+            .is_some()
+    );
+}
+
 /// A directory that accepts the connection and then says nothing, which is
 /// what a signup is waiting on when the caller gives up on it.
 async fn silent() -> String {
@@ -568,7 +613,7 @@ async fn silent() -> String {
 }
 
 #[tokio::test]
-async fn a_signup_the_caller_gives_up_on_leaves_nothing_behind() {
+async fn a_signup_the_caller_gives_up_on_mid_registration_is_left_standing() {
     let data = tempfile::tempdir().expect("a directory");
     let config = common::config("pds.test", data.path(), &silent().await);
     let accounts = store::Accounts::memory().expect("a database");
@@ -601,8 +646,10 @@ async fn a_signup_the_caller_gives_up_on_leaves_nothing_behind() {
     // The caller hangs up. Nothing else is going to run on this account's behalf.
     drop(attempt);
 
-    assert!(manager.resolve(&handle).expect("reads").is_none());
-    assert_eq!(files(data.path()), Vec::<String>::new());
+    // Kept: hanging up says nothing about what the directory did with the
+    // operation, and an identifier it took is not this server's to give back.
+    assert!(manager.resolve(&handle).expect("reads").is_some());
+    assert!(!files(data.path()).is_empty());
 }
 
 /// Every file under a directory, however deep, by name.

@@ -251,15 +251,25 @@ impl Manager {
         )?;
         let did = operation.did()?;
 
-        // Armed for the whole of `settle`: a dropped request leaves it by a
-        // path that returning an error never passes through.
+        // Armed across every await below: a dropped request leaves by a path
+        // that returning an error never passes through.
         let mut undo = Undo {
             manager: self,
-            did: Some(did.clone()),
+            did: did.clone(),
+            rollback: Rollback::Discard,
         };
-        let (credentials, blocks, commit, rev) = self
-            .settle(&did, &handle, signup, &signing_key, &operation)
-            .await?;
+        let (credentials, blocks, commit, rev) =
+            self.settle(&did, &handle, signup, &signing_key).await?;
+
+        undo.sending();
+        let registered = self.plc.send(&did, &operation).await;
+        // Anything the directory said settles what it holds, a refusal
+        // included. Only its saying nothing leaves the account standing.
+        if !matches!(registered, Err(plc::Error::Uncertain(_))) {
+            undo.answered();
+        }
+        registered?;
+
         // Past undoing: the directory has taken the identifier, so anything
         // that fails from here is worth a log line and not worth deleting an
         // account the rest of the network can already see.
@@ -278,15 +288,14 @@ impl Manager {
         })
     }
 
-    /// Everything after the identifier is known, under the rollback the caller
-    /// arms around it.
+    /// Everything the identifier needs written here, under the rollback the
+    /// caller arms around it.
     async fn settle(
         &self,
         did: &Did,
         handle: &Handle,
         signup: &Signup,
         signing_key: &Keypair,
-        operation: &plc::Operation,
     ) -> Result<(Credentials, repo::BlockMap, Cid, Tid), Error> {
         let (root, blocks) = self.start_repo(did, signing_key)?;
         let (commit, rev) = (root.cid, root.rev.clone());
@@ -313,7 +322,6 @@ impl Manager {
             }),
         })?;
 
-        self.plc.send(did, operation).await?;
         Ok((self.mint(did, None, &id), blocks, commit, rev))
     }
 
@@ -682,26 +690,57 @@ fn remaining(budget: Duration, taken: Duration) -> Duration {
         .saturating_sub(taken)
 }
 
-/// Takes a half-written signup back out unless it is told the signup finished.
+/// Takes a half-written signup back out, or leaves it, on whichever of
+/// [`Rollback`] it was last told.
 ///
 /// Dropping covers the paths a `match` on the result does not: an early return
 /// added later, a panic, and a request the caller abandoned.
 struct Undo<'a> {
     manager: &'a Manager,
-    did: Option<Did>,
+    did: Did,
+    rollback: Rollback,
+}
+
+/// What dropping the guard owes the account it is watching.
+enum Rollback {
+    /// Take it back out: nothing outside this server has heard of it.
+    Discard,
+    /// Leave it standing: the directory may hold the identifier by now, and
+    /// what it holds cannot be handed back.
+    Keep,
+    /// Nothing. The signup finished.
+    Nothing,
 }
 
 impl Undo<'_> {
+    /// The directory is being told, so from here only its answer says whether
+    /// the identifier is this server's to take back.
+    fn sending(&mut self) {
+        self.rollback = Rollback::Keep;
+    }
+
+    /// It said what it holds.
+    fn answered(&mut self) {
+        self.rollback = Rollback::Discard;
+    }
+
     /// Stands the rollback down.
     fn done(&mut self) {
-        self.did = None;
+        self.rollback = Rollback::Nothing;
     }
 }
 
 impl Drop for Undo<'_> {
     fn drop(&mut self) {
-        if let Some(did) = &self.did {
-            self.manager.discard(did);
+        match self.rollback {
+            Rollback::Discard => self.manager.discard(&self.did),
+            // todo: nothing collects one of these and nothing announces it,
+            // so it holds a name while the network never hears of it.
+            Rollback::Keep => tracing::error!(
+                did = %self.did,
+                "a signup was left standing with the directory unasked"
+            ),
+            Rollback::Nothing => {}
         }
     }
 }
