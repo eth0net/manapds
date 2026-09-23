@@ -227,7 +227,9 @@ impl Limits {
             return true;
         }
         match (&self.bypass_key, headers.get(BYPASS)) {
-            (Some(key), Some(offered)) => offered.as_bytes() == key.reveal().as_bytes(),
+            (Some(key), Some(offered)) => {
+                crate::crypto::same(offered.as_bytes(), key.reveal().as_bytes())
+            }
             _ => false,
         }
     }

@@ -470,7 +470,10 @@ where
         };
         let config = Arc::<Config>::from_ref(state);
         if username != ADMINISTRATOR
-            || !crate::crypto::same(password, config.admin_password.reveal())
+            || !crate::crypto::same(
+                password.as_bytes(),
+                config.admin_password.reveal().as_bytes(),
+            )
         {
             return Err(Error::new(super::Status::AuthenticationRequired));
         }

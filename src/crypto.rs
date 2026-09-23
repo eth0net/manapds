@@ -27,14 +27,14 @@ pub fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// Compares two strings without saying where they first differ, which is what
-/// anything checking a secret somebody else chose the length of needs.
+/// Compares two byte strings without saying where they first differ, which
+/// is what anything checking a secret somebody else chose the length of needs.
 #[must_use]
-pub fn same(left: &str, right: &str) -> bool {
+pub fn same(left: &[u8], right: &[u8]) -> bool {
     left.len() == right.len()
         && left
-            .bytes()
-            .zip(right.bytes())
+            .iter()
+            .zip(right)
             .fold(0, |difference, (left, right)| difference | (left ^ right))
             == 0
 }

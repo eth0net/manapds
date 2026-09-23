@@ -60,7 +60,7 @@ pub fn verify(password: &str, stored: &str) -> bool {
     let Some((salt, _)) = stored.split_once(':') else {
         return false;
     };
-    same(&with_salt(password, salt), stored)
+    same(with_salt(password, salt).as_bytes(), stored.as_bytes())
 }
 
 fn with_salt(password: &str, salt: &str) -> String {
