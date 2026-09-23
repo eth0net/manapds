@@ -281,10 +281,20 @@ impl Accounts {
     /// If the write fails.
     pub fn delete(&mut self, did: &Did) -> Result<(), Error> {
         let transaction = self.db.transaction()?;
+        // todo(deleteAccount): shaped for undoing a signup, so it gives an
+        // invite use back and leaves invite_code alone; a real deletion wants
+        // neither, and an orphaned code stays spendable.
+        // The two OAuth tables are here before anything writes them: a row
+        // that outlives the account it belongs to is a harder thing to notice
+        // than a delete that does nothing.
         for table in [
             "refresh_token",
             "app_password",
             "invite_code_use",
+            "token",
+            "email_token",
+            "authorization_request",
+            "device_account",
             "repo_root",
             "account",
             "actor",
