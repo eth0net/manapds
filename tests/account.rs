@@ -631,3 +631,12 @@ async fn signing_in_takes_as_long_whether_or_not_the_account_is_there() {
         );
     }
 }
+
+#[test]
+fn a_race_lost_inside_the_write_answers_like_one_lost_before_it() {
+    let named = |error: store::Error| account::Error::from(error).name();
+
+    assert_eq!(named(store::Error::InviteUnavailable), "InvalidInviteCode");
+    assert_eq!(named(store::Error::HandleTaken), "HandleNotAvailable");
+    assert_eq!(named(store::Error::EmailTaken), "InvalidRequest");
+}

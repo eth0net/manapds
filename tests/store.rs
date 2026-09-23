@@ -1008,3 +1008,35 @@ fn deleting_an_account_takes_everything_hanging_off_it() {
     // And the handle is free again, which is the point of undoing a signup.
     accounts.create(&registered).expect("creates again");
 }
+
+#[test]
+fn a_handle_lost_to_a_race_is_named_as_taken() {
+    let mut accounts = Accounts::memory().expect("opens");
+    accounts
+        .create(&registration("alice.test", "alice@example.com"))
+        .expect("the first account");
+
+    let mut second = registration("ALICE.test", "bob@example.com");
+    second.account.did = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb".parse().expect("a did");
+
+    assert!(matches!(
+        accounts.create(&second).expect_err("a clash"),
+        Error::HandleTaken
+    ));
+}
+
+#[test]
+fn an_email_lost_to_a_race_is_named_as_taken() {
+    let mut accounts = Accounts::memory().expect("opens");
+    accounts
+        .create(&registration("alice.test", "alice@example.com"))
+        .expect("the first account");
+
+    let mut second = registration("bob.test", "ALICE@example.com");
+    second.account.did = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb".parse().expect("a did");
+
+    assert!(matches!(
+        accounts.create(&second).expect_err("a clash"),
+        Error::EmailTaken
+    ));
+}

@@ -30,6 +30,13 @@ pub enum Error {
     /// would have spent it.
     #[error("invite code is not available")]
     InviteUnavailable,
+    /// A handle somebody else holds, refused the same way. The unique index is
+    /// what settles a race the read before it cannot.
+    #[error("handle is already taken")]
+    HandleTaken,
+    /// An email somebody else holds, refused by the index that pairs with it.
+    #[error("email is already taken")]
+    EmailTaken,
     /// A blob whose bytes are not what its CID says.
     #[error("{0} is not the CID of the bytes under it")]
     WrongCid(ipld_core::cid::Cid),

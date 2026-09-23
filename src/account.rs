@@ -77,7 +77,20 @@ pub enum Error {
     Repo(#[from] repo::Error),
     /// Storage would not answer.
     #[error("{0}")]
-    Storage(#[from] store::Error),
+    Storage(store::Error),
+}
+
+impl From<store::Error> for Error {
+    /// Three of these are a race the check before the write lost, and the
+    /// caller is owed the same answer it would have had by arriving second.
+    fn from(error: store::Error) -> Self {
+        match error {
+            store::Error::InviteUnavailable => Self::Invite,
+            store::Error::HandleTaken => Self::Taken("Handle"),
+            store::Error::EmailTaken => Self::Taken("Email"),
+            other => Self::Storage(other),
+        }
+    }
 }
 
 impl Error {

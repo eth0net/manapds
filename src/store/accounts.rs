@@ -232,19 +232,23 @@ impl Accounts {
             )?;
         }
 
-        transaction.execute(
-            r#"insert into "actor" ("did", "handle", "createdAt") values (?1, ?2, ?3)"#,
-            params![
-                account.did.as_str(),
-                account.handle.as_ref().map(Handle::as_str),
-                now
-            ],
-        )?;
-        transaction.execute(
-            r#"insert into "account" ("did", "email", "passwordScrypt", "invitesDisabled")
-               values (?1, ?2, ?3, 0)"#,
-            params![account.did.as_str(), account.email, account.password_scrypt],
-        )?;
+        transaction
+            .execute(
+                r#"insert into "actor" ("did", "handle", "createdAt") values (?1, ?2, ?3)"#,
+                params![
+                    account.did.as_str(),
+                    account.handle.as_ref().map(Handle::as_str),
+                    now
+                ],
+            )
+            .map_err(taken)?;
+        transaction
+            .execute(
+                r#"insert into "account" ("did", "email", "passwordScrypt", "invitesDisabled")
+                   values (?1, ?2, ?3, 0)"#,
+                params![account.did.as_str(), account.email, account.password_scrypt],
+            )
+            .map_err(taken)?;
         transaction.execute(
             r#"insert into "repo_root" ("did", "cid", "rev", "indexedAt") values (?1, ?2, ?3, ?4)
                on conflict("did") do update set "cid" = ?2, "rev" = ?3"#,
@@ -639,6 +643,26 @@ impl Accounts {
             })
         })
         .transpose()
+    }
+}
+
+/// Names a unique index back as the thing it was protecting.
+///
+/// Whether a handle or an email lost the race is only in the message SQLite
+/// writes, and the caller has to answer with one or the other.
+fn taken(error: rusqlite::Error) -> Error {
+    let rusqlite::Error::SqliteFailure(code, Some(message)) = &error else {
+        return Error::Sqlite(error);
+    };
+    if code.extended_code != rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE {
+        return Error::Sqlite(error);
+    }
+    if message.contains("actor_handle_lower_idx") {
+        Error::HandleTaken
+    } else if message.contains("account_email_lower_idx") {
+        Error::EmailTaken
+    } else {
+        Error::Sqlite(error)
     }
 }
 
