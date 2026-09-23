@@ -1040,3 +1040,52 @@ fn an_email_lost_to_a_race_is_named_as_taken() {
         Error::EmailTaken
     ));
 }
+
+#[test]
+fn a_stored_blob_leaves_nothing_beside_it_and_no_way_in() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let blobs = Directory::new(home.path()).blobs();
+    let bytes = b"a blob, written whole or not at all";
+    let cid = blobs::cid_for(bytes);
+    blobs.put(&account(), &cid, bytes).expect("stores");
+
+    let path = blobs.path(&account(), &cid);
+    let parent = path.parent().expect("a parent");
+    let held: Vec<_> = std::fs::read_dir(parent)
+        .expect("reads")
+        .map(|entry| entry.expect("an entry").file_name())
+        .collect();
+    assert_eq!(held, [path.file_name().expect("a name")]);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(parent)
+            .expect("reads")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700, "{mode:o}");
+    }
+}
+
+#[test]
+fn a_blob_that_cannot_be_put_in_place_leaves_nothing_behind() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let blobs = Directory::new(home.path()).blobs();
+    let bytes = b"a blob that never lands";
+    let cid = blobs::cid_for(bytes);
+
+    // Something already occupies the name, and is not a file, so the move onto
+    // it cannot succeed.
+    let path = blobs.path(&account(), &cid);
+    std::fs::create_dir_all(&path).expect("a directory in the way");
+
+    blobs.put(&account(), &cid, bytes).expect_err("cannot land");
+
+    let parent = path.parent().expect("a parent");
+    let held: Vec<_> = std::fs::read_dir(parent)
+        .expect("reads")
+        .map(|entry| entry.expect("an entry").file_name())
+        .collect();
+    assert_eq!(held, [path.file_name().expect("a name")]);
+}

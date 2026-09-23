@@ -117,16 +117,29 @@ impl Blobs {
     }
 }
 
+/// Written beside its place and moved onto it, so a blob interrupted halfway
+/// is not one `has` will offer to serve.
 fn write(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        super::directory(parent)?;
     }
-    Ok(std::fs::write(path, bytes)?)
+    let mut scratch = [0u8; 8];
+    rand::fill(&mut scratch);
+    let mut partial = path.as_os_str().to_owned();
+    partial.push(format!(".{}", crate::crypto::base32(&scratch)));
+    let partial = PathBuf::from(partial);
+
+    std::fs::write(&partial, bytes)
+        .and_then(|()| std::fs::rename(&partial, path))
+        .inspect_err(|_| {
+            drop(std::fs::remove_file(&partial));
+        })?;
+    Ok(())
 }
 
 fn rename(from: &Path, to: &Path) -> Result<(), Error> {
     if let Some(parent) = to.parent() {
-        std::fs::create_dir_all(parent)?;
+        super::directory(parent)?;
     }
     Ok(std::fs::rename(from, to)?)
 }
