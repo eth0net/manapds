@@ -25,6 +25,10 @@ into the pull requests.
 Copy the interop files in `tests/fixtures` again while you are there. A vector
 that upstream changed is the cheapest possible notice that a rule did too.
 
+One of them is made rather than copied: `tests/fixtures/sequencer/account.json`
+holds the entries a signup writes, encoded by the reference's own packages.
+`tools/sequencer-fixture.mjs` remakes it and names what it needs installed.
+
 What is already built is deliberately not tracked here. [`roadmap.md`](roadmap.md)
 holds the plan and the test suite holds the truth; a third list would be the
 one that goes quietly wrong.
