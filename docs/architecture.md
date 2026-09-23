@@ -34,13 +34,21 @@ the cost of not reading a store the container would have to be given.
 Signing up writes every local thing first and registers the identifier last.
 That order is chosen rather than inherited: the reference registers first and
 tombstones what it registered if the rest fails, and until this server can
-write a tombstone, undoing rows is the only undo it has. Against a refusal or
-a timeout that is complete — nothing is left and the name is free again.
+write a tombstone, undoing rows is the only undo it has. Against a refusal that
+undo is complete — nothing is left and the name is free again — and it runs
+when the request is dropped as well as when it fails, because hanging up while
+the directory is being waited on is the likeliest way out of a signup.
 
-What no ordering covers is an answer lost on the way back. The directory then
-holds an operation this server has already forgotten, and the name resolves to
-a server with no account under it. Reconciling that needs the tombstone, so it
-waits for the same thing account migration does.
+Dropping is the half that undo is least sure of: hanging up says nothing about
+whether the directory answered, so an account that would have worked can be
+taken back. That is the safer guess while there is no tombstone — a name freed
+early can be taken again, and an identity left behind cannot be reclaimed.
+
+What no ordering covers is an answer lost on the way back, which a timeout
+cannot be told apart from. The directory then holds an operation this server
+has already forgotten, and the name resolves to a server with no account under
+it. Reconciling that needs the tombstone, so it waits for the same thing
+account migration does.
 
 ## Budgets
 

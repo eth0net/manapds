@@ -241,24 +241,26 @@ impl Manager {
         )?;
         let did = operation.did()?;
 
-        let outcome = self
+        // Armed for the whole of `settle`: a dropped request leaves it by a
+        // path that returning an error never passes through.
+        let mut undo = Undo {
+            manager: self,
+            did: Some(did.clone()),
+        };
+        let credentials = self
             .settle(&did, &handle, signup, &signing_key, &operation)
-            .await;
-        match outcome {
-            Ok(credentials) => Ok(Created {
-                did,
-                handle,
-                credentials,
-            }),
-            Err(error) => {
-                self.discard(&did);
-                Err(error)
-            }
-        }
+            .await?;
+        undo.done();
+
+        Ok(Created {
+            did,
+            handle,
+            credentials,
+        })
     }
 
-    /// Everything after the identifier is known, so that one failure path
-    /// undoes all of it.
+    /// Everything after the identifier is known, under the rollback the caller
+    /// arms around it.
     async fn settle(
         &self,
         did: &Did,
@@ -632,6 +634,30 @@ fn remaining(budget: Duration, taken: Duration) -> Duration {
         .checked_mul(whole)
         .unwrap_or(taken)
         .saturating_sub(taken)
+}
+
+/// Takes a half-written signup back out unless it is told the signup finished.
+///
+/// Dropping covers the paths a `match` on the result does not: an early return
+/// added later, a panic, and a request the caller abandoned.
+struct Undo<'a> {
+    manager: &'a Manager,
+    did: Option<Did>,
+}
+
+impl Undo<'_> {
+    /// Stands the rollback down.
+    fn done(&mut self) {
+        self.did = None;
+    }
+}
+
+impl Drop for Undo<'_> {
+    fn drop(&mut self) {
+        if let Some(did) = &self.did {
+            self.manager.discard(did);
+        }
+    }
 }
 
 /// How many passwords may be hashed at once.

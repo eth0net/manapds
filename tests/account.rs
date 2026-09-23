@@ -490,6 +490,59 @@ async fn a_signup_the_directory_will_not_take_leaves_nothing_behind() {
     assert_eq!(files(data.path()), Vec::<String>::new());
 }
 
+/// A directory that accepts the connection and then says nothing, which is
+/// what a signup is waiting on when the caller gives up on it.
+async fn silent() -> String {
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("a port");
+    let url = format!(
+        "http://127.0.0.1:{}",
+        listener.local_addr().expect("an address").port()
+    );
+    tokio::spawn(async move {
+        // Held, because dropping a socket would answer by closing it.
+        let mut open = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            open.push(socket);
+        }
+    });
+    url
+}
+
+#[tokio::test]
+async fn a_signup_the_caller_gives_up_on_leaves_nothing_behind() {
+    let data = tempfile::tempdir().expect("a directory");
+    let config = common::config("pds.test", data.path(), &silent().await);
+    let accounts = store::Accounts::memory().expect("a database");
+    let manager = account::Manager::new(Arc::new(config), accounts, tokens());
+    let handle: manapds::syntax::Handle = "alice.pds.test".parse().expect("a handle");
+
+    let request = signup("alice.pds.test");
+    let mut attempt = Box::pin(manager.create(&request));
+    // Driven until the account is written, which is the point the directory is
+    // being waited on and everything local is already there.
+    for _ in 0..200 {
+        tokio::select! {
+            _ = &mut attempt => panic!("the directory answered after all"),
+            () = tokio::time::sleep(Duration::from_millis(25)) => {}
+        }
+        if manager.resolve(&handle).expect("reads").is_some() {
+            break;
+        }
+    }
+    assert!(
+        manager.resolve(&handle).expect("reads").is_some(),
+        "the signup never got as far as the directory"
+    );
+
+    // The caller hangs up. Nothing else is going to run on this account's behalf.
+    drop(attempt);
+
+    assert!(manager.resolve(&handle).expect("reads").is_none());
+    assert_eq!(files(data.path()), Vec::<String>::new());
+}
+
 /// Every file under a directory, however deep, by name.
 fn files(at: &Path) -> Vec<String> {
     let mut found = Vec::new();
