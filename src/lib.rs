@@ -5,6 +5,7 @@
 pub mod account;
 pub mod config;
 pub mod crypto;
+pub mod event;
 pub mod plc;
 pub mod repo;
 pub mod server;
