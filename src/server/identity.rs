@@ -48,6 +48,13 @@ pub(crate) async fn resolve_handle(
             })
         })
         .ok_or_else(|| {
-            xrpc::Error::invalid_request("Unable to resolve handle").named("HandleNotFound")
+            let unresolved = xrpc::Error::invalid_request("Unable to resolve handle");
+            // Only a name this server answers for is one it can say does not
+            // exist. For anyone else's, not knowing is all this means.
+            if accounts.rules().is_local(&handle) {
+                unresolved.named("HandleNotFound")
+            } else {
+                unresolved
+            }
         })
 }

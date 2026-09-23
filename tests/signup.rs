@@ -197,9 +197,11 @@ async fn a_handle_nothing_here_holds_is_not_resolved_for_a_client() {
     let (router, _data, _seen) = server(false).await;
 
     for (query, error) in [
+        // A name this server hands out, so its absence is an answer.
         ("handle=nobody.pds.test", "HandleNotFound"),
-        // Somebody else's domain, which this server has no way to ask about.
-        ("handle=alice.example.com", "HandleNotFound"),
+        // Somebody else's domain, which this server has no way to ask about
+        // and therefore cannot say does not exist.
+        ("handle=alice.example.com", "InvalidRequest"),
         ("handle=not%20a%20handle", "InvalidHandle"),
     ] {
         let (status, body) = call(
