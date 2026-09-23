@@ -15,9 +15,10 @@ use jiff::{SignedDuration, Timestamp};
 
 use crate::config::Config;
 use crate::crypto::{self, Algorithm, Keypair, PublicKey};
-use crate::repo::Repo;
+use crate::event;
+use crate::repo::{Cid, Repo};
 use crate::store;
-use crate::syntax::{AtIdentifier, Did, Handle, TidClock};
+use crate::syntax::{AtIdentifier, Did, Handle, Tid, TidClock};
 use crate::xrpc::auth::{REFRESH_LIFETIME, Scope, Tokens};
 use crate::{plc, repo};
 
@@ -163,6 +164,7 @@ pub struct Manager {
     directory: store::Directory,
     accounts: Mutex<store::Accounts>,
     hashing: Arc<tokio::sync::Semaphore>,
+    sequencer: Mutex<store::Sequencer>,
     clock: Mutex<TidClock>,
     plc: plc::Client,
     rules: handle::Rules,
@@ -170,16 +172,22 @@ pub struct Manager {
 }
 
 impl Manager {
-    /// Holds an open account database, the directory the rest of the data
-    /// sits in, and the secret sessions are signed under.
+    /// Holds an open account database and event log, the directory the rest of
+    /// the data sits in, and the secret sessions are signed under.
     #[must_use]
-    pub fn new(config: Arc<Config>, accounts: store::Accounts, tokens: Tokens) -> Self {
+    pub fn new(
+        config: Arc<Config>,
+        accounts: store::Accounts,
+        sequencer: store::Sequencer,
+        tokens: Tokens,
+    ) -> Self {
         Self {
             directory: store::Directory::new(config.data_directory.clone()),
             plc: plc::Client::new(config.plc_url.clone()),
             rules: handle::Rules::new(&config.handle_domains),
             accounts: Mutex::new(accounts),
             hashing: Arc::new(tokio::sync::Semaphore::new(hashes_at_once())),
+            sequencer: Mutex::new(sequencer),
             clock: Mutex::new(TidClock::new()),
             login: LOGIN,
             tokens,
@@ -205,8 +213,8 @@ impl Manager {
     /// Creates an account: an identifier, a key, a repository with nothing in
     /// it, and a session to go on with.
     ///
-    /// The directory is told last; `docs/architecture.md` has what that order
-    /// buys and what it does not.
+    /// The directory is told last bar the log entries; `docs/architecture.md`
+    /// has what that order buys and what it does not.
     ///
     /// # Errors
     ///
@@ -247,10 +255,19 @@ impl Manager {
             manager: self,
             did: Some(did.clone()),
         };
-        let credentials = self
+        let (credentials, blocks, commit, rev) = self
             .settle(&did, &handle, signup, &signing_key, &operation)
             .await?;
+        // Past undoing: the directory has taken the identifier, so anything
+        // that fails from here is worth a log line and not worth deleting an
+        // account the rest of the network can already see.
         undo.done();
+
+        // todo: nothing tries this again, so a consumer never learns about an
+        // account whose entries were refused.
+        if let Err(error) = self.log(&did, &handle, commit, &rev, &blocks) {
+            tracing::error!(%did, %error, "an account was created and not logged");
+        }
 
         Ok(Created {
             did,
@@ -268,8 +285,9 @@ impl Manager {
         signup: &Signup,
         signing_key: &Keypair,
         operation: &plc::Operation,
-    ) -> Result<Credentials, Error> {
-        let root = self.start_repo(did, signing_key)?;
+    ) -> Result<(Credentials, repo::BlockMap, Cid, Tid), Error> {
+        let (root, blocks) = self.start_repo(did, signing_key)?;
+        let (commit, rev) = (root.cid, root.rev.clone());
 
         // Hashed before the lock is taken, and not only by preference: a guard
         // cannot be held across the await this now is.
@@ -294,17 +312,43 @@ impl Manager {
         })?;
 
         self.plc.send(did, operation).await?;
+        Ok((self.mint(did, None, &id), blocks, commit, rev))
+    }
 
-        // todo: the log gets no entry for this yet, so a firehose reader built
-        // later would not see the account appear.
-        Ok(self.mint(did, None, &id))
+    /// Puts a new account in the log.
+    ///
+    /// Separate from the writes that make it, because it happens after the
+    /// point those can be taken back.
+    fn log(
+        &self,
+        did: &Did,
+        handle: &Handle,
+        commit: Cid,
+        rev: &Tid,
+        blocks: &repo::BlockMap,
+    ) -> Result<(), Error> {
+        let entries = event::account_created(did, handle, commit, rev, blocks)?;
+        self.sequencer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend(
+                did,
+                entries
+                    .iter()
+                    .map(|entry| (entry.event, entry.bytes.as_slice())),
+            )?;
+        Ok(())
     }
 
     /// Writes the account's key and its first commit.
     // todo: this makes a file, migrates it and signs a commit on the thread
     // answering the request, which is the shape `docs/architecture.md` rules
     // out. It is milliseconds where the hashing was tenths, so it waits.
-    fn start_repo(&self, did: &Did, signing_key: &Keypair) -> Result<store::Root, Error> {
+    fn start_repo(
+        &self,
+        did: &Did,
+        signing_key: &Keypair,
+    ) -> Result<(store::Root, repo::BlockMap), Error> {
         store::keys::write(&self.directory.actor_key(did), signing_key)?;
         let mut actor = store::Actor::open(&self.directory.actor_store(did), did.clone())?;
         let (repo, blocks) = Repo::create(
@@ -320,7 +364,7 @@ impl Manager {
             rev: repo.rev().clone(),
         };
         actor.commit(&root, &blocks)?;
-        Ok(root)
+        Ok((root, blocks))
     }
 
     /// Whether the code, the handle and the email are all still free.

@@ -124,6 +124,34 @@ impl Sequencer {
         Ok(self.db.last_insert_rowid())
     }
 
+    /// Appends several entries at once, all of them or none.
+    ///
+    /// Events that describe one thing happening have to be read together, so a
+    /// consumer must not be able to see the log partway through them.
+    ///
+    /// # Errors
+    ///
+    /// If the write fails.
+    pub fn extend<'a>(
+        &mut self,
+        did: &Did,
+        bodies: impl IntoIterator<Item = (Event, &'a [u8])>,
+    ) -> Result<Vec<i64>, Error> {
+        let transaction = self.db.transaction()?;
+        let now = format!("{:.3}", jiff::Timestamp::now());
+        let mut numbers = Vec::new();
+        for (event, body) in bodies {
+            transaction.execute(
+                r#"insert into "repo_seq" ("did", "eventType", "event", "invalidated", "sequencedAt")
+                   values (?1, ?2, ?3, 0, ?4)"#,
+                params![did.as_str(), event.as_str(), body, now],
+            )?;
+            numbers.push(transaction.last_insert_rowid());
+        }
+        transaction.commit()?;
+        Ok(numbers)
+    }
+
     /// The highest number handed out, or `None` while the log is empty.
     ///
     /// # Errors

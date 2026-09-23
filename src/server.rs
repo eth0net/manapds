@@ -48,10 +48,16 @@ impl Context {
         let config = Arc::new(config);
         let directory = store::Directory::new(config.data_directory.clone());
         let accounts = store::Accounts::open(&directory.accounts())?;
+        let sequencer = store::Sequencer::open(&directory.sequencer())?;
         let tokens = Tokens::new(config.jwt_secret.reveal(), config.service_did.clone());
         Ok(Self::new(
             Arc::clone(&config),
-            Arc::new(account::Manager::new(config, accounts, tokens.clone())),
+            Arc::new(account::Manager::new(
+                config,
+                accounts,
+                sequencer,
+                tokens.clone(),
+            )),
             tokens,
         ))
     }

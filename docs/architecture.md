@@ -31,12 +31,13 @@ The certificate authorities are the compiled-in Mozilla set. A server behind a
 proxy that reissues certificates therefore has nothing to point at, which is
 the cost of not reading a store the container would have to be given.
 
-Signing up writes every local thing first and registers the identifier last.
-That order is chosen rather than inherited: the reference registers first and
-tombstones what it registered if the rest fails, and until this server can
-write a tombstone, undoing rows is the only undo it has. Against a refusal that
-undo is complete — nothing is left and the name is free again — and it runs
-when the request is dropped as well as when it fails, because hanging up while
+Signing up writes every local thing first and registers the identifier last,
+bar the log entries, which wait for the directory to answer. That order is
+chosen rather than inherited: the reference registers first and tombstones what
+it registered if the rest fails, and until this server can write a tombstone,
+undoing rows is the only undo it has. Against a refusal that undo is complete —
+nothing is left and the name is free again — and it runs when the request is
+dropped as well as when it fails, because hanging up while
 the directory is being waited on is the likeliest way out of a signup.
 
 Dropping is the half that undo is least sure of: hanging up says nothing about

@@ -44,7 +44,12 @@ fn context() -> server::Context {
 fn context_from(config: Config) -> server::Context {
     let config = Arc::new(config);
     let accounts = store::Accounts::memory().expect("a database");
-    let manager = account::Manager::new(Arc::clone(&config), accounts, tokens());
+    let manager = account::Manager::new(
+        Arc::clone(&config),
+        accounts,
+        store::Sequencer::memory().expect("a log"),
+        tokens(),
+    );
     server::Context::new(config, Arc::new(manager), tokens())
 }
 
