@@ -101,8 +101,10 @@ impl Error {
     #[must_use]
     pub fn name(&self) -> &'static str {
         match self {
+            // A name held back is `HandleNotAvailable`; one somebody already
+            // holds is not, on this method. Changing a handle draws the line
+            // in the other place, which is the reference's own split.
             Self::Handle(invalid) => invalid.name(),
-            Self::Taken("Handle") => "HandleNotAvailable",
             Self::InviteRequired | Self::Invite => "InvalidInviteCode",
             Self::Credentials => "AuthenticationRequired",
             Self::Plc(_) | Self::Repo(_) | Self::Storage(_) => "InternalServerError",

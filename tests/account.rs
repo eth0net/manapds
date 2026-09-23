@@ -661,6 +661,8 @@ async fn a_name_or_an_address_somebody_else_holds_is_refused() {
         .await
         .expect_err("taken");
     assert!(matches!(error, account::Error::Taken("Handle")), "{error}");
+    // Not HandleNotAvailable, which this method keeps for a name held back.
+    assert_eq!(error.name(), "InvalidRequest");
 
     let mut same_email = signup("bob.pds.test");
     same_email.email = "ALICE@example.com".to_owned();
@@ -764,7 +766,7 @@ fn a_race_lost_inside_the_write_answers_like_one_lost_before_it() {
     let named = |error: store::Error| account::Error::from(error).name();
 
     assert_eq!(named(store::Error::InviteUnavailable), "InvalidInviteCode");
-    assert_eq!(named(store::Error::HandleTaken), "HandleNotAvailable");
+    assert_eq!(named(store::Error::HandleTaken), "InvalidRequest");
     assert_eq!(named(store::Error::EmailTaken), "InvalidRequest");
 }
 
