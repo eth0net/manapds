@@ -10,7 +10,7 @@ pub mod password;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD as BASE64};
 use jiff::{SignedDuration, Timestamp};
 
 use crate::config::Config;
@@ -564,6 +564,9 @@ fn remaining(budget: Duration, taken: Duration) -> Duration {
 }
 
 /// A refresh token's `jti`, which is also the row the session is kept under.
+///
+/// Unpadded, because the reference spells it through a multibase alphabet that
+/// has no padding, and both servers read the same table.
 fn token_id() -> String {
     let mut bytes = [0u8; 32];
     rand::fill(&mut bytes);

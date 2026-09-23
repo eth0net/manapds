@@ -327,6 +327,21 @@ async fn an_app_password_opens_a_session_that_may_do_less() {
 }
 
 #[test]
+fn a_session_is_named_the_way_the_reference_names_one() {
+    let (manager, did, _data) = manager();
+    let tokens = tokens();
+    let opened = manager.open_session(&did, None).expect("a session");
+    let id = tokens
+        .verify_refresh(&opened.refresh, Expired::Refuse)
+        .expect("a refresh token")
+        .id;
+
+    // 32 bytes through an alphabet that carries no padding.
+    assert_eq!(id.len(), 43);
+    assert!(!id.contains('='));
+}
+
+#[test]
 fn a_session_is_exchanged_for_the_next_one_and_the_old_token_stops_working() {
     let (manager, did, _data) = manager();
     let tokens = tokens();
