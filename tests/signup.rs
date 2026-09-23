@@ -327,6 +327,24 @@ async fn codes_are_written_in_bulk_for_the_accounts_named() {
 }
 
 #[tokio::test]
+async fn asking_for_codes_without_saying_how_many_asks_for_one() {
+    let (router, _data, _seen) = server(true).await;
+
+    let (status, body) = call_as(
+        &router,
+        "com.atproto.server.createInviteCodes",
+        &as_admin(common::ADMIN),
+        json!({ "useCount": 5 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["codes"][0]["codes"].as_array().expect("codes").len(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn an_account_signs_in_with_what_it_signed_up_with() {
     let (router, _data, _seen) = server(false).await;
 

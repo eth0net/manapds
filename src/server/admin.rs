@@ -33,12 +33,19 @@ pub(crate) struct Code {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Many {
-    /// How many codes each account gets.
+    /// How many codes each account gets. The lexicon gives this a default, so
+    /// leaving it out asks for one rather than being a malformed request.
+    #[serde(default = "one")]
     code_count: u32,
     /// How many signups each one is good for.
     use_count: u32,
     /// Whose they are.
     for_accounts: Option<Vec<String>>,
+}
+
+/// What `codeCount` means when it is not sent.
+fn one() -> u32 {
+    1
 }
 
 /// The codes that were written, by whose they are.
