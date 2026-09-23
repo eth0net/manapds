@@ -42,6 +42,14 @@ pub fn write(path: &Path, keypair: &Keypair) -> Result<(), Error> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    options.open(path)?.write_all(&keypair.to_bytes())?;
+    let mut file = options.open(path)?;
+    file.write_all(&keypair.to_bytes())?;
+    // Flushed before the account that needs it is committed. A key that is
+    // still in the page cache when the power goes is an account whose document
+    // names a public key nothing here can sign for, and there is no second copy.
+    file.sync_all()?;
+    if let Some(parent) = path.parent() {
+        std::fs::File::open(parent)?.sync_all()?;
+    }
     Ok(())
 }
