@@ -447,24 +447,28 @@ fn a_session_names_one_successor_and_refuses_a_second() {
 
     assert!(
         accounts
-            .hold_session("first", grace, "second")
-            .expect("holds")
+            .rotate("first", grace, &session("second", "2026-12-01T00:00:00Z"))
+            .expect("rotates")
     );
     // The same exchange arriving twice is answered with the same session.
     assert!(
         accounts
-            .hold_session("first", grace, "second")
-            .expect("holds")
+            .rotate("first", grace, &session("second", "2026-12-01T00:00:00Z"))
+            .expect("rotates")
     );
     assert!(
         !accounts
-            .hold_session("first", grace, "third")
-            .expect("holds")
+            .rotate("first", grace, &session("third", "2026-12-01T00:00:00Z"))
+            .expect("rotates")
     );
 
     let held = accounts.session("first").expect("reads").expect("held");
     assert_eq!(held.next_id.as_deref(), Some("second"));
     assert_eq!(held.expires_at, grace);
+
+    // The successor it named exists, and the one it refused does not.
+    assert!(accounts.session("second").expect("reads").is_some());
+    assert!(accounts.session("third").expect("reads").is_none());
 }
 
 #[test]

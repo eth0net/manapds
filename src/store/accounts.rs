@@ -384,23 +384,30 @@ impl Accounts {
         .transpose()
     }
 
-    /// Shortens a session to the grace period it has left and names what
-    /// replaces it, so that a client retrying an exchange is handed the same
-    /// session rather than a second one.
+    /// Shortens a token to its grace period, names its successor, and writes
+    /// that successor, as one write.
     ///
-    /// Answers false when another exchange got there first under a different
-    /// successor, which is the caller's signal to read the row again.
+    /// False where another exchange named a different successor, in which case
+    /// nothing was written. Together, because a token naming a row that does
+    /// not exist is a session that dies at the grace period instead of when it
+    /// was meant to.
     ///
     /// # Errors
     ///
     /// If the write fails.
-    pub fn hold_session(&self, id: &str, until: Timestamp, next: &str) -> Result<bool, Error> {
-        let updated = self.db.execute(
+    pub fn rotate(&mut self, id: &str, until: Timestamp, next: &Session) -> Result<bool, Error> {
+        let transaction = self.db.transaction()?;
+        let held = transaction.execute(
             r#"update "refresh_token" set "expiresAt" = ?2, "nextId" = ?3
                where "id" = ?1 and ("nextId" is null or "nextId" = ?3)"#,
-            params![id, stamp(until), next],
+            params![id, stamp(until), next.id],
         )?;
-        Ok(updated > 0)
+        if held == 0 {
+            return Ok(false);
+        }
+        store_session(&transaction, next)?;
+        transaction.commit()?;
+        Ok(true)
     }
 
     /// Ends one session.
@@ -635,8 +642,8 @@ impl Accounts {
     }
 }
 
-/// Written both on its own and as part of a registration, so the statement has
-/// one owner.
+/// Written on its own, as part of a registration, and as the far half of an
+/// exchange, so the statement has one owner.
 fn store_session(db: &Connection, session: &Session) -> Result<(), Error> {
     db.execute(
         r#"insert or ignore into "refresh_token" ("id", "did", "expiresAt", "appPasswordName")

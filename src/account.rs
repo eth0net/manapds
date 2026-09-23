@@ -419,15 +419,15 @@ impl Manager {
     /// has been revoked or has run out.
     ///
     /// A client that retries is handed the same successor rather than a second
-    /// session: the row names what replaces it before the replacement is
-    /// written, so both attempts arrive at one answer.
+    /// session: the row names what replaces it in the same write that creates
+    /// it, so both attempts arrive at one answer.
     ///
     /// # Errors
     ///
     /// If storage will not answer.
     pub fn refresh_session(&self, id: &str) -> Result<Option<Credentials>, Error> {
         loop {
-            let accounts = self.locked();
+            let mut accounts = self.locked();
             let Some(session) = accounts.session(id)? else {
                 return Ok(None);
             };
@@ -444,21 +444,21 @@ impl Manager {
                 return Ok(None);
             }
 
-            let next = session.next_id.clone().unwrap_or_else(token_id);
-            if !accounts.hold_session(id, expires_at, &next)? {
+            let next = store::Session {
+                id: session.next_id.clone().unwrap_or_else(token_id),
+                did: session.did.clone(),
+                expires_at: now + REFRESH_LIFETIME,
+                next_id: None,
+                app_password: session.app_password.clone(),
+            };
+            if !accounts.rotate(id, expires_at, &next)? {
                 // Another exchange named a different successor. Its row says
                 // which, so read it again rather than guessing.
                 drop(accounts);
                 continue;
             }
-            accounts.store_session(&store::Session {
-                id: next.clone(),
-                did: session.did.clone(),
-                expires_at: now + REFRESH_LIFETIME,
-                next_id: None,
-                app_password: session.app_password.clone(),
-            })?;
             drop(accounts);
+            let next = next.id;
 
             return Ok(Some(self.mint(
                 &session.did,
