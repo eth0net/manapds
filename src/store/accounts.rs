@@ -219,7 +219,13 @@ impl Accounts {
     pub fn create(&mut self, registration: &Registration) -> Result<(), Error> {
         let account = &registration.account;
         let now = stamp(Timestamp::now());
-        let transaction = self.db.transaction()?;
+        // Immediate, because this reads the invite before spending it. A
+        // deferred transaction takes its write lock at the first insert, and
+        // another process that wrote in between gets this one refused outright
+        // rather than made to wait.
+        let transaction = self
+            .db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
         if let Some(code) = &registration.invite {
             if !available(&transaction, code)? {
