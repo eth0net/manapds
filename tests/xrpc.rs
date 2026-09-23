@@ -18,7 +18,7 @@ use manapds::config::{Config, Secret};
 use manapds::server;
 use manapds::store;
 use manapds::syntax::Did;
-use manapds::xrpc::auth::{Access, Authorization, Credential, Expired, Scope, Tokens};
+use manapds::xrpc::auth::{Access, Authorization, Credential, Expired, Full, Scope, Tokens};
 use manapds::xrpc::limit::{self, Limiter};
 use manapds::xrpc::{Error, Status};
 use tower::ServiceExt;
@@ -270,33 +270,57 @@ fn a_tampered_token_does_not_verify() {
     assert!(tokens.verify_access(&forged, &Scope::STANDARD).is_err());
 }
 
-/// Runs the `Access` extractor over a request carrying this header.
-async fn extract(header: Option<&str>) -> Result<manapds::xrpc::auth::Access, Error> {
+/// Runs an extractor over a request carrying this header.
+async fn extract<T>(header: Option<&str>) -> Result<T, Error>
+where
+    T: FromRequestParts<manapds::server::Context, Rejection = Error>,
+{
     let mut request = Request::builder().uri("/xrpc/com.atproto.repo.createRecord");
     if let Some(header) = header {
         request = request.header(axum::http::header::AUTHORIZATION, header);
     }
     let (mut parts, ()) = request.body(()).expect("a request").into_parts();
-    manapds::xrpc::auth::Access::from_request_parts(&mut parts, &context()).await
+    T::from_request_parts(&mut parts, &context()).await
 }
 
 #[tokio::test]
 async fn a_handler_is_handed_the_account_its_caller_signed_in_as() {
     let token = tokens().access(&account(), Scope::Access);
-    let access = extract(Some(&format!("Bearer {token}")))
+    let access: Access = extract(Some(&format!("Bearer {token}")))
         .await
         .expect("the session verifies");
     assert_eq!(access.did, account());
 
-    let error = extract(None).await.expect_err("nothing was offered");
+    let error = extract::<Access>(None)
+        .await
+        .expect_err("nothing was offered");
     assert_eq!(error.status(), Status::AuthenticationRequired);
     assert_eq!(error.name(), "AuthMissing");
     assert_eq!(error.message(), "Authentication Required");
 
-    let error = extract(Some("Bearer not-a-token"))
+    let error = extract::<Access>(Some("Bearer not-a-token"))
         .await
         .expect_err("that is not one of ours");
     assert_eq!(error.name(), "InvalidToken");
+}
+
+#[tokio::test]
+async fn a_method_that_asks_for_a_full_session_will_not_take_an_app_password() {
+    let tokens = tokens();
+    for scope in [Scope::AppPassword, Scope::PrivilegedAppPassword] {
+        let header = format!("Bearer {}", tokens.access(&account(), scope));
+        extract::<Access>(Some(&header))
+            .await
+            .expect("an app password signs in");
+        let error = extract::<Full>(Some(&header))
+            .await
+            .expect_err("and gets no further");
+        assert_eq!(error.message(), "Bad token scope");
+    }
+
+    let header = format!("Bearer {}", tokens.access(&account(), Scope::Access));
+    let Full(access) = extract(Some(&header)).await.expect("a password does");
+    assert_eq!(access.did, account());
 }
 
 #[test]

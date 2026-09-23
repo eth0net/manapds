@@ -54,7 +54,11 @@ pub enum Scope {
 }
 
 impl Scope {
+    /// A session opened with the account's own password and nothing else.
+    pub const FULL: [Self; 1] = [Self::Access];
+
     /// A full session, or an app password trusted with more than posting.
+    // todo(getServiceAuth): the handler that reads this has not landed.
     pub const PRIVILEGED: [Self; 2] = [Self::Access, Self::PrivilegedAppPassword];
 
     /// Any session a client signs in with, which is what most methods take.
@@ -398,12 +402,37 @@ where
     type Rejection = Error;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Error> {
-        let authorization = Authorization::from_request_parts(parts, state).await?;
-        let token = authorization.bearer().ok_or_else(|| {
-            Error::new(super::Status::AuthenticationRequired).named("AuthMissing")
-        })?;
-        Tokens::from_ref(state).verify_access(token, &Scope::STANDARD)
+        access(parts, state, &Scope::STANDARD).await
     }
+}
+
+/// A session an app password never opens.
+///
+/// What the account is, rather than what it posts: an app password may write
+/// records under the account and may not change the account itself.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Full(pub Access);
+
+impl<S: Sync> FromRequestParts<S> for Full
+where
+    Tokens: FromRef<S>,
+{
+    type Rejection = Error;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Error> {
+        access(parts, state, &Scope::FULL).await.map(Self)
+    }
+}
+
+async fn access<S: Sync>(parts: &mut Parts, state: &S, scopes: &[Scope]) -> Result<Access, Error>
+where
+    Tokens: FromRef<S>,
+{
+    let authorization = Authorization::from_request_parts(parts, state).await?;
+    let token = authorization
+        .bearer()
+        .ok_or_else(|| Error::new(super::Status::AuthenticationRequired).named("AuthMissing"))?;
+    Tokens::from_ref(state).verify_access(token, scopes)
 }
 
 impl<S: Sync> FromRequestParts<S> for Refresh
