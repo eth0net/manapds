@@ -69,6 +69,8 @@ pub struct Config {
     pub recovery_key: Option<PublicKey>,
     /// Suffixes an account may take a handle under, each with its leading dot.
     pub handle_domains: Vec<String>,
+    /// Names this server will not hand out, added to the built-in list.
+    pub reserved_handles: Vec<String>,
     pub invite_required: bool,
     pub blob_upload_limit: u64,
     pub privacy_policy_url: Option<String>,
@@ -97,6 +99,8 @@ pub enum ConfigError {
     NotAKey(&'static str),
     #[error("{0} is not a did:key, which is how the holder of that key publishes it")]
     NotADidKey(&'static str),
+    #[error("{0} takes the name in front of a service domain, so `{1}` cannot be one")]
+    NotALabel(&'static str, String),
 }
 
 impl Config {
@@ -116,6 +120,7 @@ impl Config {
             service_did: string("PDS_SERVICE_DID").unwrap_or_else(|| format!("did:web:{hostname}")),
             handle_domains: list("PDS_SERVICE_HANDLE_DOMAINS")
                 .unwrap_or_else(|| vec![format!(".{hostname}")]),
+            reserved_handles: labels("PDS_RESERVED_HANDLES")?,
             port: number("PDS_PORT")?.unwrap_or(2583),
             data_directory: string("PDS_DATA_DIRECTORY")
                 .map_or_else(|| PathBuf::from("data"), PathBuf::from),
@@ -195,6 +200,21 @@ fn list(key: &str) -> Option<Vec<String>> {
             .map(|part| part.trim().to_owned())
             .collect()
     })
+}
+
+/// A list of names, each the part in front of a service domain rather than a
+/// whole handle. Neither a dot nor whitespace is allowed in one;
+/// `docs/architecture.md` says why nothing else is checked.
+fn labels(key: &'static str) -> Result<Vec<String>, ConfigError> {
+    let Some(values) = list(key) else {
+        return Ok(Vec::new());
+    };
+    for value in &values {
+        if value.contains('.') || value.chars().any(char::is_whitespace) {
+            return Err(ConfigError::NotALabel(key, value.clone()));
+        }
+    }
+    Ok(values)
 }
 
 /// Upstream reads an unrecognized value as unset and falls back to the

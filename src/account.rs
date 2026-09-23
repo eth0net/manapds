@@ -184,7 +184,7 @@ impl Manager {
         Self {
             directory: store::Directory::new(config.data_directory.clone()),
             plc: plc::Client::new(config.plc_url.clone()),
-            rules: handle::Rules::new(&config.handle_domains),
+            rules: handle::Rules::new(&config.handle_domains, &config.reserved_handles),
             accounts: Mutex::new(accounts),
             hashing: Arc::new(tokio::sync::Semaphore::new(hashes_at_once())),
             sequencer: Mutex::new(sequencer),

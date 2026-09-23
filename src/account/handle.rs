@@ -57,19 +57,29 @@ impl Invalid {
     }
 }
 
-/// The domains this server hands handles out under.
+/// The domains this server hands handles out under, and the names it will not
+/// hand out beneath them.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Rules {
     domains: Vec<String>,
+    held: Vec<String>,
 }
 
 impl Rules {
     /// Takes the suffixes, each with its leading dot, as the configuration
-    /// writes them.
+    /// writes them, along with any names this server holds back of its own.
     #[must_use]
-    pub fn new(domains: &[String]) -> Self {
+    pub fn new(domains: &[String], held: &[String]) -> Self {
+        let mut held: Vec<String> = held
+            .iter()
+            .map(|name| name.trim().to_ascii_lowercase())
+            .filter(|name| !name.is_empty())
+            .collect();
+        held.sort();
+        held.dedup();
         Self {
             domains: domains.to_vec(),
+            held,
         }
     }
 
@@ -132,7 +142,12 @@ impl Rules {
         if front.len() > LONGEST {
             return Err(Invalid::Handle("Handle too long"));
         }
-        if reserved::held(front) {
+        if reserved::held(front)
+            || self
+                .held
+                .binary_search_by(|held| held.as_str().cmp(front))
+                .is_ok()
+        {
             return Err(Invalid::Reserved);
         }
         // todo: the reference refuses explicit slurs anywhere in a handle too.

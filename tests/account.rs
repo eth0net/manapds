@@ -92,7 +92,7 @@ fn the_password_nobody_has_is_nobody_s() {
 
 /// A server handing out handles under one domain, as the configuration would.
 fn rules() -> handle::Rules {
-    handle::Rules::new(&[".pds.test".to_owned()])
+    handle::Rules::new(&[".pds.test".to_owned()], &[])
 }
 
 #[test]
@@ -109,6 +109,46 @@ fn signing_up_takes_a_name_under_a_domain_this_server_serves() {
         rules.signup("alice.example.com"),
         Err(handle::Invalid::Unsupported)
     );
+}
+
+#[test]
+fn a_server_can_hold_back_names_of_its_own() {
+    let rules = handle::Rules::new(
+        &[".pds.test".to_owned()],
+        &["Mana".to_owned(), "  support  ".to_owned()],
+    );
+
+    // Matched however the configuration and the caller happen to spell it.
+    assert_eq!(
+        rules.signup("mana.pds.test"),
+        Err(handle::Invalid::Reserved)
+    );
+    assert_eq!(
+        rules.signup("MANA.pds.test"),
+        Err(handle::Invalid::Reserved)
+    );
+    assert_eq!(
+        rules.signup("support.pds.test"),
+        Err(handle::Invalid::Reserved)
+    );
+
+    // Added to the built-in list rather than replacing it.
+    assert_eq!(
+        rules.signup("admin.pds.test"),
+        Err(handle::Invalid::Reserved)
+    );
+    assert!(rules.signup("alice.pds.test").is_ok());
+}
+
+#[test]
+fn holding_back_nothing_holds_back_what_the_reference_does() {
+    let rules = rules();
+
+    assert_eq!(
+        rules.signup("admin.pds.test"),
+        Err(handle::Invalid::Reserved)
+    );
+    assert_eq!(rules.signup("mana.pds.test").map(|_| ()), Ok(()));
 }
 
 #[test]

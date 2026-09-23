@@ -23,6 +23,7 @@ pub(crate) fn config(hostname: &str, data: impl AsRef<Path>, plc: &str) -> Confi
     Config {
         service_did: format!("did:web:{hostname}"),
         handle_domains: vec![format!(".{hostname}")],
+        reserved_handles: Vec::new(),
         hostname: hostname.to_owned(),
         port: 443,
         data_directory: data.as_ref().to_path_buf(),

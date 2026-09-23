@@ -118,3 +118,19 @@ matching them costs nothing and buys the whole existing operational toolkit.
 
 Variables for features this server does not have are read and ignored rather
 than rejected, so a reference `pds.env` starts it unedited.
+
+One is not the reference's. `PDS_RESERVED_HANDLES` takes a comma-separated
+list, and every name in it joins the built-in list rather than standing in for
+it, so setting it can only ever refuse more. A server that leaves it alone
+hands out precisely what upstream would, which is why there is no matching way
+to un-reserve a name: an operator who could would be running something that
+answers a signup differently while claiming to be the same server.
+
+Each entry is the label before a service domain, not a whole handle, and one
+carrying a dot or a space stops the server rather than being skipped: both are
+ways of writing something that looks like a list and holds nothing back. Those
+are the only shapes refused, and not because they are the only ones that cannot
+match. The built-in list carries names the length floor and the character set
+already put out of reach — `ad` is shorter than the three characters a signup
+needs, `contact_us` has an underscore no label may hold — so refusing every
+entry that cannot match would throw out names upstream ships.

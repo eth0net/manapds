@@ -23,6 +23,7 @@ fn with(vars: &[(&str, &str)]) -> Result<Config, ConfigError> {
         "PDS_HOSTNAME",
         "PDS_INVITE_REQUIRED",
         "PDS_RATE_LIMITS_ENABLED",
+        "PDS_RESERVED_HANDLES",
     ] {
         // Safe: this binary is single-threaded until a test spawns something,
         // and none of these do.
@@ -196,4 +197,26 @@ fn the_public_url_is_https_unless_the_server_is_talking_to_itself() {
     // And the handle domain follows the hostname, since one is the default of
     // the other.
     assert_eq!(config.handle_domains, [".pds.example.com"]);
+}
+
+#[test]
+fn a_name_held_back_is_a_label_rather_than_a_handle() {
+    let config = starting(&[("PDS_RESERVED_HANDLES", "mana, support ,help")]).expect("starts");
+    assert_eq!(config.reserved_handles, ["mana", "support", "help"]);
+
+    // A whole handle, and a list written with spaces instead of commas: both
+    // are shapes this list never sees, and both would hold nothing back.
+    for written in ["mana,admin.pds.test", "admin pds support"] {
+        let error = starting(&[("PDS_RESERVED_HANDLES", written)]).expect_err("not a label");
+        assert!(
+            matches!(&error, ConfigError::NotALabel("PDS_RESERVED_HANDLES", _)),
+            "{written}: {error}"
+        );
+    }
+}
+
+#[test]
+fn holding_back_nothing_is_the_default() {
+    let config = starting(&[]).expect("starts");
+    assert!(config.reserved_handles.is_empty());
 }
