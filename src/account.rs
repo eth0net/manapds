@@ -145,6 +145,7 @@ pub struct Credentials {
 #[derive(Debug)]
 pub struct Manager {
     config: Arc<Config>,
+    login: Duration,
     directory: store::Directory,
     accounts: Mutex<store::Accounts>,
     clock: Mutex<TidClock>,
@@ -164,9 +165,19 @@ impl Manager {
             rules: handle::Rules::new(&config.handle_domains),
             accounts: Mutex::new(accounts),
             clock: Mutex::new(TidClock::new()),
+            login: LOGIN,
             tokens,
             config,
         }
+    }
+
+    /// Answers a sign-in in this long rather than the usual, which is what a
+    /// test wants and nothing else does: the delay is there to hide something
+    /// a test has no reason to hide.
+    #[must_use]
+    pub fn answering_in(mut self, budget: Duration) -> Self {
+        self.login = budget;
+        self
     }
 
     /// The rules this server hands handles out under.
@@ -378,7 +389,7 @@ impl Manager {
         let started = Instant::now();
         let outcome = self.check(identifier, password);
         let taken = started.elapsed();
-        tokio::time::sleep(remaining(taken)).await;
+        tokio::time::sleep(remaining(self.login, taken)).await;
         outcome
     }
 
@@ -541,9 +552,12 @@ impl Manager {
 /// The budget is rounded up to a whole one rather than held to a floor: work
 /// slower than a budget waits for the next, where a floor would stop hiding
 /// anything at exactly the point the server is loaded enough to be measured.
-fn remaining(taken: Duration) -> Duration {
-    let whole = u32::try_from(taken.as_nanos() / LOGIN.as_nanos() + 1).unwrap_or(u32::MAX);
-    LOGIN
+fn remaining(budget: Duration, taken: Duration) -> Duration {
+    if budget.is_zero() {
+        return Duration::ZERO;
+    }
+    let whole = u32::try_from(taken.as_nanos() / budget.as_nanos() + 1).unwrap_or(u32::MAX);
+    budget
         .checked_mul(whole)
         .unwrap_or(taken)
         .saturating_sub(taken)

@@ -44,7 +44,8 @@ fn server() -> NormalizePath<Router> {
         .expect("an account");
 
     let config = Arc::new(common::config("pds.test", "data", "http://127.0.0.1:1"));
-    let manager = account::Manager::new(Arc::clone(&config), accounts, tokens());
+    let manager = account::Manager::new(Arc::clone(&config), accounts, tokens())
+        .answering_in(std::time::Duration::ZERO);
     server::router(server::Context::new(config, Arc::new(manager), tokens()))
 }
 

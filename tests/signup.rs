@@ -55,7 +55,8 @@ async fn server(invite_required: bool) -> (NormalizePath<Router>, TempDir, Seen)
     let config = Arc::new(config);
     let tokens = Tokens::new(common::SECRET, "did:web:pds.test");
     let accounts = store::Accounts::memory().expect("a database");
-    let manager = account::Manager::new(Arc::clone(&config), accounts, tokens.clone());
+    let manager = account::Manager::new(Arc::clone(&config), accounts, tokens.clone())
+        .answering_in(std::time::Duration::ZERO);
     let context = server::Context::new(config, Arc::new(manager), tokens);
     (server::router(context), data, seen)
 }

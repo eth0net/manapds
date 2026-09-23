@@ -5,6 +5,7 @@ mod common;
 use std::net::Ipv4Addr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use manapds::account::{self, email, handle, password};
 use manapds::crypto::{Algorithm, Keypair};
@@ -196,7 +197,16 @@ async fn directory() -> (String, Seen) {
 }
 
 /// An account on a server holding nothing else, with one app password.
+///
+/// Sign-ins answer as fast as they can: the delay is there to hide which
+/// identifiers exist, which a test has no reason to hide.
 fn manager() -> (account::Manager, Did, TempDir) {
+    budgeted(Duration::ZERO)
+}
+
+/// The same, holding sign-ins to a budget, which is what testing the budget
+/// itself needs.
+fn budgeted(budget: Duration) -> (account::Manager, Did, TempDir) {
     let did: Did = "did:plc:mav423b24thku7ezkx7yaray".parse().expect("a DID");
     let data = tempfile::tempdir().expect("a directory");
     let mut accounts = store::Accounts::memory().expect("a database");
@@ -229,7 +239,8 @@ fn manager() -> (account::Manager, Did, TempDir) {
         data.path(),
         "http://127.0.0.1:1",
     ));
-    (account::Manager::new(config, accounts, tokens()), did, data)
+    let manager = account::Manager::new(config, accounts, tokens()).answering_in(budget);
+    (manager, did, data)
 }
 
 /// Where a repository starts, which an account cannot be written without.
@@ -375,7 +386,7 @@ async fn empty(invite_required: bool) -> (account::Manager, TempDir, Seen) {
     config.invite_required = invite_required;
     let accounts = store::Accounts::memory().expect("a database");
     (
-        account::Manager::new(Arc::new(config), accounts, tokens()),
+        account::Manager::new(Arc::new(config), accounts, tokens()).answering_in(Duration::ZERO),
         data,
         seen,
     )
@@ -587,5 +598,21 @@ fn an_address_is_taken_only_if_something_could_be_sent_to_it() {
         "alice@-example.com",
     ] {
         assert!(!email::plausible(address), "{address}");
+    }
+}
+
+#[tokio::test]
+async fn signing_in_takes_as_long_whether_or_not_the_account_is_there() {
+    let budget = Duration::from_millis(120);
+    let (manager, _, _data) = budgeted(budget);
+
+    for identifier in ["alice.pds.test", "nobody@example.com"] {
+        let started = std::time::Instant::now();
+        let _ = manager.login(identifier, "not the password").await;
+        let taken = started.elapsed();
+        assert!(
+            taken >= budget,
+            "{identifier} answered in {taken:?}, which says whether it was there"
+        );
     }
 }
