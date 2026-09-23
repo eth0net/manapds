@@ -46,10 +46,17 @@ taken back. That is the safer guess while there is no tombstone — a name freed
 early can be taken again, and an identity left behind cannot be reclaimed.
 
 What no ordering covers is an answer lost on the way back, which a timeout
-cannot be told apart from. The directory then holds an operation this server
-has already forgotten, and the name resolves to a server with no account under
-it. Reconciling that needs the tombstone, so it waits for the same thing
-account migration does.
+cannot be told apart from. So the directory is asked what is filed under the
+identifier before the operation goes a second time, and again afterwards: an
+identifier is a hash of the operation that mints it, so a document filed there
+naming it back is that operation and no other, and a second attempt refused as
+a duplicate says the same in the shape of a refusal. Half the budget goes to
+the first attempt and the rest is split three ways, because an attempt that
+spent everything is the one most worth asking about.
+
+A read nobody answers settles nothing by itself. What settles it then is
+whether the operation ever got onto a connection: one that did not cannot be
+in there, and one that did has to be treated as though it were.
 
 ## Budgets
 

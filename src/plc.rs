@@ -36,13 +36,25 @@ const PDS_TYPE: &str = "AtprotoPersonalDataServer";
 /// How much of the hash the identifier keeps.
 const LENGTH: usize = 24;
 
-/// How long the directory has to answer before the account creation that is
-/// waiting on it fails.
+/// How long the directory has to answer, across every exchange registering an
+/// operation takes.
 const TIMEOUT: Duration = Duration::from_secs(30);
+
+/// What share of that budget one attempt may take, the rest being kept back
+/// for the read backs; `docs/architecture.md` has why.
+const ATTEMPT: u32 = 2;
+
+/// How the rest is split: a read back, another attempt, and the read back that
+/// decides whether the account behind the operation stands.
+const STEPS: u32 = 3;
 
 /// How much of a refusal is read back, since the message is for a log rather
 /// than for anything that parses it.
 const REFUSAL: usize = 4 * 1024;
+
+/// How much of a document is read back, which only has to reach the one field
+/// worth reading.
+const DOCUMENT: usize = 64 * 1024;
 
 /// What went wrong building or reading an operation.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
@@ -56,9 +68,13 @@ pub enum Error {
     /// An operation no directory would have accepted.
     #[error("{0}")]
     Malformed(&'static str),
-    /// The directory could not be reached, or did not answer in time.
+    /// The directory could not be reached, so nothing it holds has changed.
     #[error("plc directory: {0}")]
     Unreachable(String),
+    /// The directory was reached and would not say what it holds, so whether
+    /// the operation landed is not known.
+    #[error("plc directory would not say: {0}")]
+    Uncertain(String),
     /// The directory was reached and said no.
     #[error("plc directory refused the operation: {0} {1}")]
     Refused(u16, String),
@@ -239,9 +255,94 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// If the operation will not encode, the directory cannot be reached, or
-    /// it refuses what it is sent.
+    /// If the operation will not encode, the directory cannot be reached, it
+    /// refuses what it is sent, or it will not say what it holds.
     pub async fn send(&self, did: &Did, operation: &Operation) -> Result<(), Error> {
+        match self.attempt(did, operation, self.answer / ATTEMPT).await {
+            // Never connected, so it is not in there, and a read back that
+            // cannot connect either says as much.
+            Err(Error::Unreachable(_)) => self.confirm(did, operation, false).await,
+            // Connected, so it may be in there whatever fails to say so.
+            Err(Error::Uncertain(_)) => self.confirm(did, operation, true).await,
+            // A refusal is the directory's decision, and sending it again
+            // changes nothing.
+            answered => answered,
+        }
+    }
+
+    /// Finds out what became of an operation whose answer never arrived, and
+    /// sends it again if it never arrived either.
+    ///
+    /// `sent` says whether the first attempt reached the directory at all. An
+    /// operation that never left cannot be in there, which is what lets a read
+    /// back nobody answered still settle the question.
+    async fn confirm(&self, did: &Did, operation: &Operation, sent: bool) -> Result<(), Error> {
+        let each = self.answer / ATTEMPT / STEPS;
+        if self.holds(did, each).await == Held::Yes {
+            return Ok(());
+        }
+        let Err(again) = self.attempt(did, operation, each).await else {
+            return Ok(());
+        };
+        match self.holds(did, each).await {
+            Held::Yes => Ok(()),
+            Held::No => Err(again),
+            // Nothing answered, so only an operation neither attempt got out
+            // settles it: a second attempt refused as a duplicate would be the
+            // first one having landed after all.
+            Held::Unknown if !sent && !matches!(again, Error::Uncertain(_)) => Err(again),
+            Held::Unknown => Err(Error::Uncertain(format!(
+                "asked twice what it holds and answered neither time: {again}"
+            ))),
+        }
+    }
+
+    /// What the directory has under the identifier, which can only ever be
+    /// this operation; `docs/architecture.md` has why.
+    ///
+    /// The answer has to name the identifier back, since a directory is not
+    /// the only thing that can answer at an address.
+    async fn holds(&self, did: &Did, budget: Duration) -> Held {
+        let Ok(request) = hyper::Request::builder()
+            .method(hyper::Method::GET)
+            .uri(format!("{}/{did}", self.url))
+            .body(Full::new(Bytes::new()))
+        else {
+            return Held::Unknown;
+        };
+        tokio::time::timeout(budget, self.document(did, request))
+            .await
+            .unwrap_or(Held::Unknown)
+    }
+
+    /// The document under an identifier, read only far enough to see whose it
+    /// is. Anything short of an answer is no answer.
+    async fn document(&self, did: &Did, request: hyper::Request<Full<Bytes>>) -> Held {
+        let Ok(response) = self.http.request(request).await else {
+            return Held::Unknown;
+        };
+        if response.status() == hyper::StatusCode::NOT_FOUND {
+            return Held::No;
+        }
+        if !response.status().is_success() {
+            return Held::Unknown;
+        }
+        let Ok(body) = Limited::new(response.into_body(), DOCUMENT).collect().await else {
+            return Held::Unknown;
+        };
+        match serde_json::from_slice::<Document>(&body.to_bytes()) {
+            Ok(document) if document.id == did.as_str() => Held::Yes,
+            _ => Held::Unknown,
+        }
+    }
+
+    /// One registration, sent.
+    async fn attempt(
+        &self,
+        did: &Did,
+        operation: &Operation,
+        budget: Duration,
+    ) -> Result<(), Error> {
         let body =
             serde_json::to_vec(operation).map_err(|error| Error::Encode(error.to_string()))?;
         let request = hyper::Request::builder()
@@ -250,10 +351,18 @@ impl Client {
             .header(header::CONTENT_TYPE, "application/json")
             .body(Full::new(Bytes::from(body)))
             .map_err(|error| Error::Unreachable(error.to_string()))?;
+        self.within(request, budget).await
+    }
 
-        tokio::time::timeout(self.answer, self.exchange(request))
+    /// One exchange, held to what is left of the budget.
+    async fn within(
+        &self,
+        request: hyper::Request<Full<Bytes>>,
+        budget: Duration,
+    ) -> Result<(), Error> {
+        tokio::time::timeout(budget, self.exchange(request))
             .await
-            .map_err(|_| Error::Unreachable("no answer in time".to_owned()))?
+            .unwrap_or_else(|_| Err(Error::Uncertain("no answer in time".to_owned())))
     }
 
     /// The whole exchange, refusal and all.
@@ -261,11 +370,15 @@ impl Client {
     /// Reading the refusal is inside the budget because a directory that sends
     /// a status and then stops is the same wait as one that sends nothing.
     async fn exchange(&self, request: hyper::Request<Full<Bytes>>) -> Result<(), Error> {
-        let response = self
-            .http
-            .request(request)
-            .await
-            .map_err(|error| Error::Unreachable(error.to_string()))?;
+        let response = self.http.request(request).await.map_err(|error| {
+            // A connection never made cannot have carried the operation; one
+            // that broke after it was made might have.
+            if error.is_connect() {
+                Error::Unreachable(error.to_string())
+            } else {
+                Error::Uncertain(error.to_string())
+            }
+        })?;
 
         let status = response.status();
         if status.is_success() {
@@ -276,6 +389,28 @@ impl Client {
             .await
             .map(|body| String::from_utf8_lossy(&body.to_bytes()).into_owned())
             .unwrap_or_default();
+        if status.is_server_error() {
+            // The directory failing to answer rather than answering, so what
+            // it did with the operation is still open.
+            return Err(Error::Uncertain(format!("{} {said}", status.as_u16())));
+        }
         Err(Error::Refused(status.as_u16(), said))
     }
+}
+
+/// Just enough of a DID document to know whose it is.
+#[derive(Deserialize)]
+struct Document {
+    id: String,
+}
+
+/// What the directory said when asked what it holds under an identifier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Held {
+    /// The operation.
+    Yes,
+    /// Nothing.
+    No,
+    /// It would not say.
+    Unknown,
 }
