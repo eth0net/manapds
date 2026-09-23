@@ -194,3 +194,46 @@ async fn a_directory_that_is_not_there_is_not_a_signature_problem() {
         .expect_err("nothing there");
     assert!(matches!(error, Error::Unreachable(_)), "{error}");
 }
+
+/// A directory that sends a refusal and then holds the body open.
+///
+/// Raw sockets rather than axum, because the point is a response no HTTP
+/// server would produce on purpose.
+async fn stalling() -> String {
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("a port");
+    let url = format!(
+        "http://127.0.0.1:{}",
+        listener.local_addr().expect("an address").port()
+    );
+    tokio::spawn(async move {
+        while let Ok((socket, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                // A length that is promised and never sent.
+                if socket.writable().await.is_ok() {
+                    let _ =
+                        socket.try_write(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 64\r\n\r\n");
+                }
+                std::future::pending::<()>().await;
+            });
+        }
+    });
+    url
+}
+
+#[tokio::test]
+async fn a_refusal_that_never_finishes_arriving_gives_up() {
+    let (fixture, rotation) = fixture();
+    let operation = create(&fixture, &rotation);
+    let did = operation.did().expect("hashes");
+    let url = stalling().await;
+
+    let error = Client::new(&url)
+        .waiting(std::time::Duration::from_millis(250))
+        .send(&did, &operation)
+        .await
+        .expect_err("gives up");
+
+    assert!(matches!(error, Error::Unreachable(_)), "{error:?}");
+}

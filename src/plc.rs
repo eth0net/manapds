@@ -205,6 +205,7 @@ impl Operation {
 #[derive(Clone, Debug)]
 pub struct Client {
     url: String,
+    answer: Duration,
     http: hyper_util::client::legacy::Client<HttpsConnector<HttpConnector>, Full<Bytes>>,
 }
 
@@ -221,8 +222,17 @@ impl Client {
             .build();
         Self {
             url: url.into().trim_end_matches('/').to_owned(),
+            answer: TIMEOUT,
             http: hyper_util::client::legacy::Client::builder(TokioExecutor::new()).build(tls),
         }
+    }
+
+    /// Gives the directory this long rather than the usual, which is what a
+    /// test waiting on one that never answers wants.
+    #[must_use]
+    pub fn waiting(mut self, answer: Duration) -> Self {
+        self.answer = answer;
+        self
     }
 
     /// Registers an operation against an identifier.
@@ -241,9 +251,20 @@ impl Client {
             .body(Full::new(Bytes::from(body)))
             .map_err(|error| Error::Unreachable(error.to_string()))?;
 
-        let response = tokio::time::timeout(TIMEOUT, self.http.request(request))
+        tokio::time::timeout(self.answer, self.exchange(request))
             .await
             .map_err(|_| Error::Unreachable("no answer in time".to_owned()))?
+    }
+
+    /// The whole exchange, refusal and all.
+    ///
+    /// Reading the refusal is inside the budget because a directory that sends
+    /// a status and then stops is the same wait as one that sends nothing.
+    async fn exchange(&self, request: hyper::Request<Full<Bytes>>) -> Result<(), Error> {
+        let response = self
+            .http
+            .request(request)
+            .await
             .map_err(|error| Error::Unreachable(error.to_string()))?;
 
         let status = response.status();
