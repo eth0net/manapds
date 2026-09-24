@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use axum::Router;
 use axum::http::{Method, StatusCode, Uri};
 use manapds::crypto::{Algorithm, Keypair, PublicKey};
-use manapds::plc::{Client, Error, Operation};
+use manapds::plc::{Client, Error, Operation, Tombstone};
 use manapds::syntax::Handle;
 use serde::Deserialize;
 
@@ -20,6 +20,7 @@ struct Fixture {
     handle: String,
     pds: String,
     operation: Operation,
+    tombstone: Tombstone,
 }
 
 fn fixture() -> (Fixture, Keypair) {
@@ -57,6 +58,14 @@ fn genesis_is_what_the_reference_writes() {
         fixture.did
     );
     fixture.operation.verify().expect("the key signed it");
+}
+
+#[test]
+fn a_tombstone_is_what_the_reference_writes() {
+    let (fixture, rotation) = fixture();
+
+    let tombstone = Tombstone::create(&fixture.operation, &rotation).expect("builds");
+    assert_eq!(tombstone, fixture.tombstone);
 }
 
 #[test]
@@ -349,6 +358,75 @@ async fn a_directory_that_answers_nothing_fails_the_signup() {
     // known not to have landed, but neither attempt was ever acknowledged.
     assert!(matches!(error, Error::Uncertain(_)), "{error:?}");
     assert_eq!(asked(&seen), ["POST", "GET", "POST", "GET"]);
+}
+
+#[tokio::test]
+async fn an_identifier_the_directory_stops_holding_is_free() {
+    let (fixture, rotation) = fixture();
+    let operation = create(&fixture, &rotation);
+    let did = operation.did().expect("hashes");
+    let tombstone = Tombstone::create(&operation, &rotation).expect("builds");
+    let (url, seen) = unreliable(0, false).await;
+
+    assert!(lost(&url).retire(&did, &tombstone).await);
+    assert_eq!(asked(&seen), ["POST", "GET"]);
+}
+
+#[tokio::test]
+async fn an_identifier_the_directory_still_answers_for_is_not_free() {
+    let (fixture, rotation) = fixture();
+    let operation = create(&fixture, &rotation);
+    let did = operation.did().expect("hashes");
+    let tombstone = Tombstone::create(&operation, &rotation).expect("builds");
+    // Takes the tombstone and resolves the identifier regardless, which is
+    // what a directory this server cannot retire an account at looks like.
+    let (url, _) = unreliable(0, true).await;
+
+    assert!(!lost(&url).retire(&did, &tombstone).await);
+}
+
+#[tokio::test]
+async fn a_tombstone_the_directory_never_took_frees_nothing() {
+    let (fixture, rotation) = fixture();
+    let operation = create(&fixture, &rotation);
+    let did = operation.did().expect("hashes");
+    let tombstone = Tombstone::create(&operation, &rotation).expect("builds");
+    // Holds every registration and answers every read with nothing, which is
+    // what a directory looks like while an operation is still on its way in.
+    let (url, seen) = unreliable(usize::MAX, false).await;
+
+    // The reads agree the identifier is free and they are both answering about
+    // a moment the operation had not reached yet.
+    assert!(!lost(&url).retire(&did, &tombstone).await);
+    assert_eq!(asked(&seen), ["POST"]);
+}
+
+#[tokio::test]
+async fn a_tombstone_is_sent_to_the_identifier_it_retires() {
+    let (fixture, rotation) = fixture();
+    let operation = create(&fixture, &rotation);
+    let did = operation.did().expect("hashes");
+    let tombstone = Tombstone::create(&operation, &rotation).expect("builds");
+    let (url, seen) = directory().await;
+
+    lost(&url).retire(&did, &tombstone).await;
+
+    let seen = seen.lock().expect("nothing panicked while holding it");
+    assert_eq!(seen[0].0, format!("/{did}"));
+    let sent: Tombstone = serde_json::from_str(&seen[0].1).expect("json");
+    assert_eq!(sent, tombstone);
+    assert_eq!(sent, fixture.tombstone);
+}
+
+#[tokio::test]
+async fn an_identifier_the_directory_will_not_speak_for_is_not_free() {
+    let (fixture, rotation) = fixture();
+    let operation = create(&fixture, &rotation);
+    let did = operation.did().expect("hashes");
+    let tombstone = Tombstone::create(&operation, &rotation).expect("builds");
+    let (url, _) = mute().await;
+
+    assert!(!lost(&url).retire(&did, &tombstone).await);
 }
 
 /// A directory that takes a registration without answering, refuses the next

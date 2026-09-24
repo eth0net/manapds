@@ -30,8 +30,9 @@ codec.
 
 `plc/` is another: a genesis operation built by `@did-plc/lib`, from the K-256
 scalar in `crypto/` and a second scalar the file carries so the rotation key is
-reproducible too. Regenerating it means calling `createOp` with those two keys,
-the handle and the endpoint recorded beside them.
+reproducible too, and the tombstone that retires it. Regenerating them means
+calling `createOp` with those two keys, the handle and the endpoint recorded
+beside them, then `tombstoneOp` over the CID of what that returns.
 
 `password/` is node's `crypto.scrypt` with every parameter left at its
 default, which is the one thing about how the reference stores a password that

@@ -26,6 +26,9 @@ use crate::syntax::{Did, Handle};
 /// The `type` of every operation written since the legacy format.
 const OPERATION: &str = "plc_operation";
 
+/// The `type` of the operation that retires an identifier.
+const TOMBSTONE: &str = "plc_tombstone";
+
 /// Where an account's signing key is named.
 const ATPROTO: &str = "atproto";
 
@@ -37,7 +40,7 @@ const PDS_TYPE: &str = "AtprotoPersonalDataServer";
 const LENGTH: usize = 24;
 
 /// How long the directory has to answer, across every exchange registering an
-/// operation takes.
+/// operation takes. Retiring one is two exchanges past that.
 const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What share of that budget one attempt may take, the rest being kept back
@@ -214,6 +217,41 @@ impl Operation {
     }
 }
 
+/// The operation that retires an identifier, after which it resolves nowhere.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Tombstone {
+    /// Always [`TOMBSTONE`].
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// The operation this one follows, addressed by its CID.
+    pub prev: String,
+    /// Base64url over the dag-cbor of everything above.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sig: Option<String>,
+}
+
+impl Tombstone {
+    /// Builds the operation that retires what `previous` created, and signs it.
+    ///
+    /// The CID is taken here rather than read back, which is what lets an
+    /// identifier be retired without knowing whether it was ever taken;
+    /// `docs/architecture.md` has why.
+    ///
+    /// # Errors
+    ///
+    /// If either operation will not encode, which neither of these can.
+    pub fn create(previous: &Operation, rotation: &Keypair) -> Result<Self, Error> {
+        let mut tombstone = Self {
+            kind: TOMBSTONE.to_owned(),
+            prev: repo::cid_for(&repo::encode(previous)?).to_string(),
+            sig: None,
+        };
+        let signature = rotation.sign(&repo::encode(&tombstone)?);
+        tombstone.sig = Some(BASE64.encode(signature));
+        Ok(tombstone)
+    }
+}
+
 /// The directory operations are registered at.
 ///
 /// An identifier nothing has been sent to resolves nowhere, so an account is
@@ -270,6 +308,24 @@ impl Client {
         }
     }
 
+    /// Retires an identifier a registration may have taken, and says whether
+    /// the directory is left holding nothing under it.
+    ///
+    /// Only a tombstone the directory took proves anything: one it refused may
+    /// have been refused because the operation it follows is still on its way
+    /// in, and a read back agreeing is answering about that same moment.
+    pub async fn retire(&self, did: &Did, tombstone: &Tombstone) -> bool {
+        if self.attempt(did, tombstone, self.share()).await.is_err() {
+            return false;
+        }
+        self.holds(did, self.share()).await == Held::No
+    }
+
+    /// What one exchange gets once the budget is down to the read backs.
+    fn share(&self) -> Duration {
+        self.answer / ATTEMPT / STEPS
+    }
+
     /// Finds out what became of an operation whose answer never arrived, and
     /// sends it again if it never arrived either.
     ///
@@ -277,7 +333,7 @@ impl Client {
     /// operation that never left cannot be in there, which is what lets a read
     /// back nobody answered still settle the question.
     async fn confirm(&self, did: &Did, operation: &Operation, sent: bool) -> Result<(), Error> {
-        let each = self.answer / ATTEMPT / STEPS;
+        let each = self.share();
         if self.holds(did, each).await == Held::Yes {
             return Ok(());
         }
@@ -336,11 +392,11 @@ impl Client {
         }
     }
 
-    /// One registration, sent.
-    async fn attempt(
+    /// One operation, sent.
+    async fn attempt<T: Serialize>(
         &self,
         did: &Did,
-        operation: &Operation,
+        operation: &T,
         budget: Duration,
     ) -> Result<(), Error> {
         let body =

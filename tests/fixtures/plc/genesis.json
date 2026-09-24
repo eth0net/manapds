@@ -24,5 +24,10 @@
     },
     "prev": null,
     "sig": "I03qbyPndzmhcpDXSYZpRgVRvjqCY9a7nhdWLW2OpaJz_Q6ZbqmPKeKB6LD6epZed3xfavbHRMDyYsSZrVMRgw"
+  },
+  "tombstone": {
+    "type": "plc_tombstone",
+    "prev": "bafyreidafpgwyoxez2vhzgkv76aeiggcsbnnhu7qj6sq4xynqzqjdgjkwu",
+    "sig": "lZiAFMuJ-VG2q_NjMQSf_wEI62Cr-B1c9aF8weSmQzcb0kYnIz4OZBm5FQ3RapUnqxuUmfksvId2Mdmnk_qlnw"
   }
 }

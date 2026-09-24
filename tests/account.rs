@@ -592,6 +592,72 @@ async fn a_signup_the_directory_would_not_speak_for_is_left_standing() {
     );
 }
 
+/// A directory that says nothing while the registration is in flight and then
+/// comes back: it takes the tombstone and owns up to holding nothing.
+///
+/// `quiet` is how many of each kind of request come before it answers, which
+/// is the two attempts and the two read backs the registration itself makes.
+async fn relenting(quiet: usize) -> String {
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("a port");
+    let url = format!(
+        "http://127.0.0.1:{}",
+        listener.local_addr().expect("an address").port()
+    );
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    tokio::spawn(async move {
+        let router = axum::Router::new().fallback(move |method: axum::http::Method| {
+            let asked = Arc::clone(&asked);
+            async move {
+                let before = {
+                    let mut asked = asked.lock().expect("nothing panicked while holding it");
+                    asked.push(method.clone());
+                    asked.iter().filter(|seen| **seen == method).count() - 1
+                };
+                if before < quiet {
+                    return axum::http::StatusCode::BAD_GATEWAY;
+                }
+                if method == axum::http::Method::GET {
+                    return axum::http::StatusCode::NOT_FOUND;
+                }
+                axum::http::StatusCode::OK
+            }
+        });
+        let _ = axum::serve(listener, router).await;
+    });
+    url
+}
+
+#[tokio::test]
+async fn a_signup_whose_identifier_is_retired_is_taken_back_out() {
+    let data = tempfile::tempdir().expect("a directory");
+    let config = common::config("pds.test", data.path(), &relenting(2).await);
+    let accounts = store::Accounts::memory().expect("a database");
+    let manager = account::Manager::new(
+        Arc::new(config),
+        accounts,
+        store::Sequencer::memory().expect("a log"),
+        tokens(),
+    );
+
+    let error = manager
+        .create(&signup("alice.pds.test"))
+        .await
+        .expect_err("no session");
+    assert!(matches!(error, account::Error::Plc(_)), "{error}");
+
+    // The tombstone was taken and the identifier resolves nowhere, so the
+    // handle is somebody else's to claim.
+    assert!(
+        manager
+            .resolve(&"alice.pds.test".parse().expect("a handle"))
+            .expect("reads")
+            .is_none()
+    );
+    assert_eq!(files(data.path()), Vec::<String>::new());
+}
+
 /// A directory that accepts the connection and then says nothing, which is
 /// what a signup is waiting on when the caller gives up on it.
 async fn silent() -> String {

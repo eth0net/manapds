@@ -33,23 +33,28 @@ the cost of not reading a store the container would have to be given.
 
 Signing up writes every local thing first and registers the identifier last,
 bar the log entries, which wait for the directory to answer. That order is
-chosen rather than inherited: the reference registers first and tombstones what
-it registered if the rest fails, and until this server can write a tombstone,
-undoing rows is the only undo it has. Against a refusal that undo is complete —
-nothing is left and the name is free again — and it runs on a dropped request
-too, since hanging up is the likeliest way out of a signup.
+chosen rather than inherited: the reference registers first and undoes that with
+a tombstone when the rest fails, where going last leaves most failures with
+nothing to undo. Undoing rows runs on a dropped request too, since hanging up is
+the likeliest way out of a signup.
 
 It stops where the operation goes out, and what happens there turns on whether
 the directory said anything. A refusal is something said: nothing landed, the
-rows come out and the name is free again. Silence is not, and neither is a
-request the caller dropped while it was in flight, so under both the account
-stays — deleting one the network can already resolve cannot be undone. A name
-nobody holds can be taken again; an identity left behind cannot be reclaimed.
-Nothing collects what that leaves. Doing so means asking the directory about
-an account that never heard back, and freeing it only where the directory has
-nothing under it — which is what a caller retrying the same name is waiting on.
-That is one account on a bad day and every account during an outage, so it is
-the collection that decides how much an outage costs rather than the keeping.
+rows come out and the name is free again. Silence is not, so the identifier is
+retired to make it say something. A tombstone names the operation it follows by
+a hash taken here, which is why it needs nothing read back first. Only one the
+directory takes settles anything, though: it proves the operation is in there
+and that nothing can follow it, where a refusal only says the operation is not
+in there *yet*, and a read agreeing is answering about that same moment. So an
+account comes out when the tombstone was taken and the identifier then resolves
+nowhere, and stays in every other case, because deleting one the network can
+already resolve cannot be undone.
+
+Two things are past that. A request the caller dropped goes out the same way it
+always did, since retiring an identifier is an await and dropping is not. An
+outage answers the tombstone no better than it answered the operation. Both
+leave an account holding a name the rest of the network never hears of, and
+nothing collects those.
 
 What no ordering covers is an answer lost on the way back, which a timeout
 cannot be told apart from. So the directory is asked what is filed under the
@@ -58,7 +63,8 @@ identifier is a hash of the operation that mints it, so a document filed there
 naming it back is that operation and no other, and a second attempt refused as
 a duplicate says the same in the shape of a refusal. Half the budget goes to
 the first attempt and the rest is split three ways, because an attempt that
-spent everything is the one most worth asking about.
+spent everything is the one most worth asking about. Retiring costs two more at
+that share, which only a signup already out of budget ever reaches.
 
 A read nobody answers settles nothing by itself. What settles it then is
 whether the operation ever got onto a connection: one that did not cannot be

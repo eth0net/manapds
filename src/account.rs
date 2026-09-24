@@ -266,9 +266,14 @@ impl Manager {
 
         undo.sending();
         let registered = self.plc.send(&did, &operation).await;
-        // Anything the directory said settles what it holds, a refusal
-        // included. Only its saying nothing leaves the account standing.
-        if !matches!(registered, Err(plc::Error::Uncertain(_))) {
+        let settled = match &registered {
+            // The directory would not say what it holds, so the identifier is
+            // retired to settle it.
+            Err(plc::Error::Uncertain(_)) => self.retire(&did, &operation).await,
+            // Anything it did say settles what it holds, a refusal included.
+            _ => true,
+        };
+        if settled {
             undo.answered();
         }
         registered?;
@@ -289,6 +294,23 @@ impl Manager {
             handle,
             credentials,
         })
+    }
+
+    /// Retires an identifier the directory would not speak for, and says
+    /// whether the account behind it is this server's to take back out.
+    ///
+    /// todo(operation): an identifier the caller brought is not this server's
+    /// to retire, and the reference guards the same call with that check.
+    /// Nothing here takes one yet, so every identifier reaching this was minted
+    /// a few lines above.
+    async fn retire(&self, did: &Did, operation: &plc::Operation) -> bool {
+        match plc::Tombstone::create(operation, &self.config.plc_rotation_key) {
+            Ok(tombstone) => self.plc.retire(did, &tombstone).await,
+            Err(error) => {
+                tracing::error!(%did, %error, "a signup's identifier would not be retired");
+                false
+            }
+        }
     }
 
     /// Everything the identifier needs written here, under the rollback the
@@ -737,11 +759,11 @@ impl Drop for Undo<'_> {
     fn drop(&mut self) {
         match self.rollback {
             Rollback::Discard => self.manager.discard(&self.did),
-            // todo: nothing collects one of these and nothing announces it,
-            // so it holds a name while the network never hears of it.
+            // todo: retiring the identifier is an await and this is not, so a
+            // caller that hung up leaves a name the network never hears of.
             Rollback::Keep => tracing::error!(
                 did = %self.did,
-                "a signup was left standing with the directory unasked"
+                "a signup was left standing with what the directory holds unknown"
             ),
             Rollback::Nothing => {}
         }
