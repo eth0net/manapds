@@ -330,6 +330,42 @@ async fn codes_are_written_in_bulk_for_the_accounts_named() {
 }
 
 #[tokio::test]
+async fn asking_for_more_codes_than_anyone_hands_out_is_refused_before_any_are_built() {
+    let (router, _data, _seen) = server(true).await;
+
+    let (status, body) = call_as(
+        &router,
+        "com.atproto.server.createInviteCodes",
+        &as_admin(common::ADMIN),
+        json!({ "codeCount": 4_000_000_000_u32, "useCount": 1 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "InvalidRequest");
+}
+
+#[tokio::test]
+async fn the_cap_on_codes_counts_every_account_the_call_names() {
+    let (router, _data, _seen) = server(true).await;
+
+    let (status, body) = call_as(
+        &router,
+        "com.atproto.server.createInviteCodes",
+        &as_admin(common::ADMIN),
+        json!({
+            "codeCount": 100,
+            "useCount": 1,
+            "forAccounts": (0..11)
+                .map(|n| format!("did:plc:aaaaaaaaaaaaaaaaaaaaaa{n:02}"))
+                .collect::<Vec<String>>(),
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "InvalidRequest");
+}
+
+#[tokio::test]
 async fn asking_for_codes_without_saying_how_many_asks_for_one() {
     let (router, _data, _seen) = server(true).await;
 

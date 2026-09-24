@@ -746,7 +746,10 @@ async fn a_server_that_asks_for_an_invite_spends_it_once() {
     let error = manager.create(&asked).await.expect_err("no such code");
     assert!(matches!(error, account::Error::Invite), "{error}");
 
-    let codes = manager.mint_invites("admin", 1, 1).expect("a code");
+    let minted = manager
+        .mint_invites(&["admin".to_owned()], 1, 1)
+        .expect("a code");
+    let codes = &minted[0];
     // The code names the server it is good for, so one pasted at the wrong
     // one is obviously wrong.
     assert!(codes[0].starts_with("pds-test-"), "{}", codes[0]);

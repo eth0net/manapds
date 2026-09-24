@@ -71,13 +71,15 @@ pub(crate) async fn create_invite_code(
     State(accounts): State<Arc<Manager>>,
     Input(input): Input<One>,
 ) -> xrpc::Result<Json<Code>> {
-    let account = input.for_account.as_deref().unwrap_or(ADMINISTRATOR);
-    let mut codes = accounts.mint_invites(account, 1, input.use_count)?;
-    Ok(Json(Code {
-        code: codes
-            .pop()
-            .ok_or_else(|| xrpc::Error::internal("asked for one invite code and was given none"))?,
-    }))
+    let account = input
+        .for_account
+        .unwrap_or_else(|| ADMINISTRATOR.to_owned());
+    let code = accounts
+        .mint_invites(std::slice::from_ref(&account), 1, input.use_count)?
+        .pop()
+        .and_then(|mut codes| codes.pop())
+        .ok_or_else(|| xrpc::Error::internal("asked for one invite code and was given none"))?;
+    Ok(Json(Code { code }))
 }
 
 /// `com.atproto.server.createInviteCodes`
@@ -94,13 +96,11 @@ pub(crate) async fn create_invite_codes(
         .for_accounts
         .unwrap_or_else(|| vec![ADMINISTRATOR.to_owned()]);
 
-    let mut codes = Vec::with_capacity(for_accounts.len());
-    for account in for_accounts {
-        let minted = accounts.mint_invites(&account, input.code_count, input.use_count)?;
-        codes.push(Held {
-            account,
-            codes: minted,
-        });
-    }
+    let minted = accounts.mint_invites(&for_accounts, input.code_count, input.use_count)?;
+    let codes = for_accounts
+        .into_iter()
+        .zip(minted)
+        .map(|(account, codes)| Held { account, codes })
+        .collect();
     Ok(Json(Codes { codes }))
 }

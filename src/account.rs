@@ -48,6 +48,12 @@ const STORED_PASSWORD: usize = 512;
 /// The floor on how many passwords are hashed at once.
 const HASHES: usize = 4;
 
+/// The most invite codes one call writes, across every account it names.
+///
+/// Well past what anyone hands out at once, and a bound on what a mistyped
+/// number costs: the codes are built before any of them is written.
+const INVITES: u32 = 1000;
+
 /// What went wrong signing in.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -74,6 +80,9 @@ pub enum Error {
     /// A code that is not one, has been spent, or has been disabled.
     #[error("This invite code is not available")]
     Invite,
+    /// More codes asked for at once than this server writes.
+    #[error("Cannot create more than {INVITES} invite codes at once")]
+    TooManyInvites,
     /// The directory would not register the identifier.
     #[error("{0}")]
     Plc(#[from] plc::Error),
@@ -112,7 +121,9 @@ impl Error {
             Self::InviteRequired | Self::Invite => "InvalidInviteCode",
             Self::Credentials => "AuthenticationRequired",
             Self::Plc(_) | Self::Repo(_) | Self::Storage(_) => "InternalServerError",
-            Self::Email | Self::PasswordTooLong | Self::Taken(_) => "InvalidRequest",
+            Self::Email | Self::PasswordTooLong | Self::Taken(_) | Self::TooManyInvites => {
+                "InvalidRequest"
+            }
         }
     }
 }
@@ -465,21 +476,31 @@ impl Manager {
         Ok(self.locked().by_handle(handle)?.map(|account| account.did))
     }
 
-    /// Writes fresh invite codes for an account, and says what they are.
+    /// Writes fresh invite codes for every account named, and says what each
+    /// one got.
     ///
     /// # Errors
     ///
-    /// If the write fails.
+    /// If the call asks for more codes than one hands out, or a write fails.
     pub fn mint_invites(
         &self,
-        for_account: &str,
+        for_accounts: &[String],
         count: u32,
         uses: u32,
-    ) -> Result<Vec<String>, Error> {
-        let codes: Vec<String> = (0..count).map(|_| self.invite_code()).collect();
-        self.locked()
-            .create_invites(&codes, for_account, ADMINISTRATOR, uses)?;
-        Ok(codes)
+    ) -> Result<Vec<Vec<String>>, Error> {
+        let named = u32::try_from(for_accounts.len()).unwrap_or(u32::MAX);
+        if count.saturating_mul(named) > INVITES {
+            return Err(Error::TooManyInvites);
+        }
+        for_accounts
+            .iter()
+            .map(|for_account| {
+                let codes: Vec<String> = (0..count).map(|_| self.invite_code()).collect();
+                self.locked()
+                    .create_invites(&codes, for_account, ADMINISTRATOR, uses)?;
+                Ok(codes)
+            })
+            .collect()
     }
 
     /// `<hostname>-xxxxx-xxxxx`, with the dots in the hostname written as
