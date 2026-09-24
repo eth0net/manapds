@@ -128,6 +128,13 @@ neither. Each budget stops taking new keys at a hundred thousand, says so once
 in the log, and goes on counting everyone it had already seen. Refusing the
 requests it cannot count would hand an attacker the outage instead.
 
+Both halves of that have to be bounded, and only one of them is a count. A key
+a caller picks — the name a sign-in gives, which upstream also keys by — is cut
+to longer than any account could answer to before it is held, since a hundred
+thousand keys is a bound on a table only once a key has a size. A caller past
+the shared budget is turned away before a keyed one is asked at all, so the
+table is reached by requests that were going to be served.
+
 ### A secret too short to survive guessing is refused
 
 Upstream checks that `PDS_JWT_SECRET` is set and nothing further, and leaves

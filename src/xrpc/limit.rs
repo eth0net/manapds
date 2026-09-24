@@ -57,6 +57,13 @@ const CREATE_ACCOUNT: &str = "/xrpc/com.atproto.server.createAccount";
 /// How much of a sign-in is read to find the account it names.
 const SIGN_IN: usize = 8 * 1024;
 
+/// How much of that name a budget is keyed by.
+///
+/// Longer than any handle, DID or address an account here could answer to, so
+/// what it cuts short names nobody: a caller picks the key and only a bound on
+/// it bounds what a full table costs.
+const NAMED: usize = 256;
+
 /// The header a caller with the bypass key sends it in.
 const BYPASS: HeaderName = HeaderName::from_static("x-ratelimit-bypass");
 
@@ -307,13 +314,18 @@ pub async fn global(
     }
 
     let key = budget(caller);
-    let mut readings = if path == UNBUDGETED {
-        Vec::new()
-    } else {
-        vec![limits.global.consume(&key, 1)]
-    };
+    let shared = (path != UNBUDGETED).then(|| limits.global.consume(&key, 1));
+
+    // A caller already out of the shared budget is turned away before any other
+    // is asked, so a flood cannot fill a table on its way to being refused.
+    if let Some(reading) = shared.as_ref().filter(|reading| reading.exceeded) {
+        let mut response = Error::new(Status::RateLimitExceeded).into_response();
+        reading.write(response.headers_mut());
+        return response;
+    }
+
     let (request, method) = limits.method(&key, request).await;
-    readings.extend(method);
+    let readings = shared.into_iter().chain(method).collect();
 
     let Some(reading) = tightest(readings) else {
         return next.run(request).await;
@@ -348,9 +360,25 @@ async fn signing_in(request: Request) -> (Request, String) {
     let Ok(bytes) = axum::body::to_bytes(body, SIGN_IN).await else {
         return (Request::from_parts(parts, Body::empty()), String::new());
     };
-    let named = serde_json::from_slice::<SigningIn>(&bytes)
-        .map_or_else(|_| String::new(), |body| body.identifier.to_lowercase());
+    let named = serde_json::from_slice::<SigningIn>(&bytes).map_or_else(
+        |_| String::new(),
+        |body| shortened(&body.identifier.to_lowercase()).to_owned(),
+    );
     (Request::from_parts(parts, Body::from(bytes)), named)
+}
+
+/// The most of a name a key is worth holding.
+fn shortened(named: &str) -> &str {
+    if named.len() <= NAMED {
+        return named;
+    }
+    // Back to a character boundary, of which there is one within four bytes of
+    // anywhere and always at nothing.
+    let mut end = NAMED;
+    while !named.is_char_boundary(end) {
+        end -= 1;
+    }
+    &named[..end]
 }
 
 /// Who to count a request against.

@@ -793,6 +793,17 @@ async fn signing_in_spends_a_budget_the_account_it_names_holds() {
         sign_in("alice.pds.example.com", "5.6.7.8:9").await,
         StatusCode::UNAUTHORIZED
     );
+
+    // A name past what any account could answer to is held by what it starts
+    // with, so a caller cannot mint a key of its own by writing a longer one.
+    let long = "z".repeat(4000);
+    for _ in 0..30 {
+        assert_eq!(sign_in(&long, "9.9.9.9:9").await, StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(
+        sign_in(&format!("{long}{long}"), "9.9.9.9:9").await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
 }
 
 #[tokio::test]
