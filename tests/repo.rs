@@ -601,6 +601,47 @@ fn a_tree_deeper_than_its_keys_allow_is_refused() {
     );
 }
 
+/// A node holding one record and a subtree to the left of it.
+///
+/// The key hashes to one leading zero pair, so the node answers for its own
+/// layer and nothing walks down to find it.
+fn leafed(child: Cid, value: Cid) -> Ipld {
+    Ipld::Map(BTreeMap::from([
+        ("l".to_owned(), Ipld::Link(child)),
+        (
+            "e".to_owned(),
+            Ipld::List(vec![Ipld::Map(BTreeMap::from([
+                ("p".to_owned(), Ipld::Integer(0)),
+                (
+                    "k".to_owned(),
+                    Ipld::Bytes(b"com.example.record/zzz4".to_vec()),
+                ),
+                ("v".to_owned(), Ipld::Link(value)),
+            ]))]),
+        ),
+    ]))
+}
+
+#[test]
+fn a_tree_too_deep_to_read_is_too_deep_to_write_to() {
+    let mut blocks = BlockMap::new();
+    let value = blocks.add(&post("a record to point at")).expect("a record");
+    let mut cid = blocks.add(&chain(Ipld::Null)).expect("a node");
+    for _ in 0..300 {
+        cid = blocks.add(&leafed(cid, value)).expect("a node");
+    }
+
+    // Below every record in the chain, so each level hands it to the subtree on
+    // its left and the descent is the insert's own.
+    let error = Mst::load(cid)
+        .add(&blocks, "com.example.record/aaa1", value)
+        .expect_err("a chain no key could have built");
+    assert_eq!(
+        error,
+        Error::MalformedNode("a tree deeper than its keys allow")
+    );
+}
+
 #[test]
 fn a_tree_that_reaches_the_same_node_twice_is_refused() {
     let mut blocks = BlockMap::new();

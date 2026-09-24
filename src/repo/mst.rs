@@ -312,6 +312,7 @@ impl Mst {
         value: Cid,
         zeros: usize,
     ) -> Result<Self, Error> {
+        let _descent = reader.descend()?;
         let layer = self.layer(reader)?;
         if zeros > layer {
             // The key sits above everything here, so the whole tree becomes
@@ -449,6 +450,7 @@ impl Mst {
         reader: &Reader<'_>,
         key: &str,
     ) -> Result<(Option<Self>, Option<Self>), Error> {
+        let _descent = reader.descend()?;
         let index = self.index_of(reader, key)?;
         let layer = self.layer;
         let mut left = self.take_entries(reader)?;
