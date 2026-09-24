@@ -1,4 +1,5 @@
-//! The session methods, over a router, as a client reaches them.
+//! Sessions and the app passwords that open them, over a router, as a client
+//! reaches them.
 
 mod common;
 
@@ -262,4 +263,158 @@ async fn ending_a_session_stops_it_being_exchanged_again() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "ExpiredToken");
+}
+
+/// Writes an app password and hands back what the account was told.
+async fn write_app_password(router: &NormalizePath<Router>, access: &str, name: &str) -> Value {
+    let (status, body) = call(
+        router,
+        "POST",
+        "com.atproto.server.createAppPassword",
+        Some(access),
+        Some(json!({ "name": name })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body
+}
+
+#[tokio::test]
+async fn an_app_password_is_written_listed_and_signed_in_with() {
+    let router = server();
+    let session = sign_in(&router).await;
+    let access = session["accessJwt"].as_str().expect("a token");
+
+    let written = write_app_password(&router, access, "phone").await;
+    assert_eq!(written["name"], "phone");
+    assert_eq!(written["privileged"], false);
+    // Four groups of four, which is what a client shows somebody to type.
+    let password = written["password"].as_str().expect("a password");
+    assert_eq!(password.len(), 19);
+    assert!(password.split('-').all(|group| group.len() == 4));
+
+    let (status, listed) = call(
+        &router,
+        "GET",
+        "com.atproto.server.listAppPasswords",
+        Some(access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed["passwords"][0]["name"], "phone");
+    assert_eq!(listed["passwords"][0]["createdAt"], written["createdAt"]);
+    // Said once: a listing names them and hands none of them back.
+    assert!(listed["passwords"][0]["password"].is_null());
+
+    let (status, opened) = call(
+        &router,
+        "POST",
+        "com.atproto.server.createSession",
+        None,
+        Some(json!({ "identifier": "alice.pds.test", "password": password })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{opened}");
+}
+
+#[tokio::test]
+async fn a_revoked_app_password_opens_nothing_and_is_listed_no_longer() {
+    let router = server();
+    let session = sign_in(&router).await;
+    let access = session["accessJwt"].as_str().expect("a token");
+    let written = write_app_password(&router, access, "phone").await;
+    let password = written["password"].as_str().expect("a password");
+
+    let (status, body) = call(
+        &router,
+        "POST",
+        "com.atproto.server.revokeAppPassword",
+        Some(access),
+        Some(json!({ "name": "phone" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (_, listed) = call(
+        &router,
+        "GET",
+        "com.atproto.server.listAppPasswords",
+        Some(access),
+        None,
+    )
+    .await;
+    assert_eq!(listed["passwords"].as_array().expect("a list").len(), 0);
+
+    let (status, refused) = call(
+        &router,
+        "POST",
+        "com.atproto.server.createSession",
+        None,
+        Some(json!({ "identifier": "alice.pds.test", "password": password })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{refused}");
+}
+
+#[tokio::test]
+async fn an_app_password_will_not_write_another_one() {
+    let router = server();
+    let session = sign_in(&router).await;
+    let access = session["accessJwt"].as_str().expect("a token");
+    let written = write_app_password(&router, access, "phone").await;
+
+    let (_, opened) = call(
+        &router,
+        "POST",
+        "com.atproto.server.createSession",
+        None,
+        Some(json!({
+            "identifier": "alice.pds.test",
+            "password": written["password"].as_str().expect("a password"),
+        })),
+    )
+    .await;
+    let lesser = opened["accessJwt"].as_str().expect("a token");
+
+    let (status, refused) = call(
+        &router,
+        "POST",
+        "com.atproto.server.createAppPassword",
+        Some(lesser),
+        Some(json!({ "name": "laptop" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"], "InvalidToken");
+    // Listing them is another matter: upstream lets an app password see the
+    // names, and only writing one is held back.
+    let (status, listed) = call(
+        &router,
+        "GET",
+        "com.atproto.server.listAppPasswords",
+        Some(lesser),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+}
+
+#[tokio::test]
+async fn a_name_the_account_already_uses_is_refused() {
+    let router = server();
+    let session = sign_in(&router).await;
+    let access = session["accessJwt"].as_str().expect("a token");
+    write_app_password(&router, access, "phone").await;
+
+    let (status, refused) = call(
+        &router,
+        "POST",
+        "com.atproto.server.createAppPassword",
+        Some(access),
+        Some(json!({ "name": "phone" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"], "InvalidRequest");
 }

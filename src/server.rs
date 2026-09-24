@@ -17,6 +17,7 @@ use tower_http::{
 };
 
 mod admin;
+mod app_password;
 mod identity;
 mod session;
 mod signup;
@@ -145,6 +146,18 @@ fn routes(context: Context) -> Router {
         .route(
             "/xrpc/com.atproto.server.createAccount",
             xrpc::procedure(signup::create),
+        )
+        .route(
+            "/xrpc/com.atproto.server.createAppPassword",
+            xrpc::procedure(app_password::create),
+        )
+        .route(
+            "/xrpc/com.atproto.server.listAppPasswords",
+            xrpc::query(app_password::list),
+        )
+        .route(
+            "/xrpc/com.atproto.server.revokeAppPassword",
+            xrpc::procedure(app_password::revoke),
         )
         .route(
             "/xrpc/com.atproto.server.createSession",

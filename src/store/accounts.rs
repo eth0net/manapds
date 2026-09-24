@@ -10,7 +10,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::syntax::{Did, Handle};
 
-use super::{Error, db};
+use super::{Error, db, stamp};
 
 /// The schema as the reference's first migration leaves it.
 const INIT: &str = r#"
@@ -484,7 +484,8 @@ impl Accounts {
         )
     }
 
-    /// Writes an app password, under the hash a session will be looked up by.
+    /// Writes an app password, under the hash a session will be looked up by,
+    /// and hands back when the row says it was written.
     ///
     /// # Errors
     ///
@@ -494,20 +495,27 @@ impl Accounts {
         did: &Did,
         password: &AppPassword,
         hash: &str,
-    ) -> Result<(), Error> {
-        self.db.execute(
-            r#"insert into "app_password"
-               ("did", "name", "passwordScrypt", "createdAt", "privileged")
-               values (?1, ?2, ?3, ?4, ?5)"#,
-            params![
-                did.as_str(),
-                password.name,
-                hash,
-                stamp(Timestamp::now()),
-                i64::from(password.privileged),
-            ],
-        )?;
-        Ok(())
+    ) -> Result<Timestamp, Error> {
+        let created_at = stamp(Timestamp::now());
+        self.db
+            .execute(
+                r#"insert into "app_password"
+                   ("did", "name", "passwordScrypt", "createdAt", "privileged")
+                   values (?1, ?2, ?3, ?4, ?5)"#,
+                params![
+                    did.as_str(),
+                    password.name,
+                    hash,
+                    created_at,
+                    i64::from(password.privileged),
+                ],
+            )
+            .map_err(reused)?;
+        // Read back off the string rather than off the clock, so the caller is
+        // told the time a listing will tell it later.
+        created_at
+            .parse()
+            .map_err(|_| Error::Malformed("a stamp that is not a timestamp"))
     }
 
     /// The app password with this hash, which is how one is checked: they are
@@ -662,6 +670,18 @@ impl Accounts {
     }
 }
 
+/// Names the key an app password shares with one the account already holds.
+fn reused(error: rusqlite::Error) -> Error {
+    match &error {
+        rusqlite::Error::SqliteFailure(code, _)
+            if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY =>
+        {
+            Error::AppPasswordTaken
+        }
+        _ => Error::Sqlite(error),
+    }
+}
+
 /// Names a unique index back as the thing it was protecting.
 ///
 /// Whether a handle or an email lost the race is only in the message SQLite
@@ -724,10 +744,4 @@ struct SessionRow {
     next_id: Option<String>,
     name: Option<String>,
     privileged: Option<i64>,
-}
-
-/// Milliseconds and a `Z`, which is what the other server writes and what
-/// makes a text column sort as time.
-fn stamp(at: Timestamp) -> String {
-    format!("{at:.3}")
 }

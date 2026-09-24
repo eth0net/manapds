@@ -65,7 +65,7 @@ pub enum Error {
     /// A password longer than anything anyone types.
     #[error("Password too long. Maximum length is {PASSWORD} characters.")]
     PasswordTooLong,
-    /// A handle or an email somebody else already holds.
+    /// A handle, an email or an app password name that is already held.
     #[error("{0} already taken")]
     Taken(&'static str),
     /// A server that only takes invited accounts, asked without one.
@@ -93,6 +93,7 @@ impl From<store::Error> for Error {
             store::Error::InviteUnavailable => Self::Invite,
             store::Error::HandleTaken => Self::Taken("Handle"),
             store::Error::EmailTaken => Self::Taken("Email"),
+            store::Error::AppPasswordTaken => Self::Taken("App password name"),
             other => Self::Storage(other),
         }
     }
@@ -150,6 +151,20 @@ pub struct Login {
     pub account: store::Account,
     /// The app password it was opened with, if a password was not.
     pub app_password: Option<store::AppPassword>,
+}
+
+/// An app password, and the one time anybody sees what it is.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppPassword {
+    /// What the account calls it.
+    pub name: String,
+    /// The password itself, which is stored only as a hash and so is never
+    /// handed out again.
+    pub password: String,
+    /// When it was written.
+    pub created_at: Timestamp,
+    /// Whether it reaches what a plain app password may not.
+    pub privileged: bool,
 }
 
 /// The pair of tokens a session is held open by.
@@ -653,6 +668,54 @@ impl Manager {
         })
     }
 
+    /// Writes an app password and hands back the only copy of it.
+    ///
+    /// # Errors
+    ///
+    /// If the account already holds one under that name, or storage will not
+    /// answer.
+    pub async fn create_app_password(
+        &self,
+        did: &Did,
+        name: String,
+        privileged: bool,
+    ) -> Result<AppPassword, Error> {
+        let password = app_password();
+        let account = did.clone();
+        let hash = self
+            .hashing(&password, move |password| password::app(&account, password))
+            .await;
+        let written = store::AppPassword { name, privileged };
+        let created_at = self.locked().create_app_password(did, &written, &hash)?;
+        Ok(AppPassword {
+            name: written.name,
+            password,
+            created_at,
+            privileged,
+        })
+    }
+
+    /// Every app password an account holds and when each was written, newest
+    /// first.
+    ///
+    /// # Errors
+    ///
+    /// If storage will not answer.
+    pub fn app_passwords(&self, did: &Did) -> Result<Vec<(store::AppPassword, Timestamp)>, Error> {
+        Ok(self.locked().app_passwords(did)?)
+    }
+
+    /// Takes an app password away, along with the sessions it opened, and says
+    /// whether there was one.
+    ///
+    /// # Errors
+    ///
+    /// If storage will not answer. Revoking one the account does not hold is
+    /// not one, since a client asking twice wanted the same thing both times.
+    pub fn revoke_app_password(&self, did: &Did, name: &str) -> Result<bool, Error> {
+        Ok(self.locked().revoke_app_password(did, name)?)
+    }
+
     /// The pair a session hands back, under the scope its password reaches.
     fn mint(&self, did: &Did, app_password: Option<&store::AppPassword>, id: &str) -> Credentials {
         let scope = match app_password {
@@ -697,6 +760,18 @@ impl Manager {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+}
+
+/// A new app password, four groups of four in lowercase base32, which is the
+/// shape the reference writes.
+fn app_password() -> String {
+    let mut bytes = [0u8; 16];
+    rand::fill(&mut bytes);
+    let token = crypto::base32(&bytes);
+    (0..4)
+        .map(|group| &token[group * 4..group * 4 + 4])
+        .collect::<Vec<&str>>()
+        .join("-")
 }
 
 /// How much longer work of this length waits before answering.

@@ -39,8 +39,8 @@ pub fn same(left: &[u8], right: &[u8]) -> bool {
             == 0
 }
 
-/// Lowercase base32 without padding, which is how an identifier and an invite
-/// code are both spelled.
+/// Lowercase base32 without padding, which is how an identifier, an invite
+/// code and an app password are all spelled.
 #[must_use]
 pub fn base32(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";

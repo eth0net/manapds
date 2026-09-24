@@ -37,6 +37,10 @@ pub enum Error {
     /// An email somebody else holds, refused by the index that pairs with it.
     #[error("email is already taken")]
     EmailTaken,
+    /// An app password name the account already uses, refused by the key that
+    /// pairs the two.
+    #[error("app password name is already taken")]
+    AppPasswordTaken,
     /// A blob whose bytes are not what its CID says.
     #[error("{0} is not the CID of the bytes under it")]
     WrongCid(ipld_core::cid::Cid),
@@ -58,6 +62,14 @@ pub use actor::{Actor, Root};
 pub use blobs::Blobs;
 pub use did_cache::{Cached, DidCache};
 pub use sequencer::{Entry, Event, Sequencer};
+
+/// Milliseconds and a `Z`, which is what the other server writes and what
+/// makes a text column sort as time. Everything these databases hold as a
+/// time is written this way, so anything reading one back says it the same.
+#[must_use]
+pub fn stamp(at: jiff::Timestamp) -> String {
+    format!("{at:.3}")
+}
 
 /// Makes a directory nobody else can look into, which is what everything
 /// holding an account's data wants to be.
