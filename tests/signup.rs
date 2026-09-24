@@ -203,6 +203,9 @@ async fn a_handle_nothing_here_holds_is_not_resolved_for_a_client() {
         // and therefore cannot say does not exist.
         ("handle=alice.example.com", "InvalidRequest"),
         ("handle=not%20a%20handle", "InvalidHandle"),
+        // Nothing asked at all, which axum refuses before the handler and in
+        // plain text unless it is made to answer like everything else.
+        ("", "InvalidRequest"),
     ] {
         let (status, body) = call(
             &router,

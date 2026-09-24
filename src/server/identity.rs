@@ -2,14 +2,11 @@
 
 use std::sync::Arc;
 
-use axum::{
-    Json,
-    extract::{Query, State},
-};
+use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
 
 use crate::account::Manager;
-use crate::xrpc;
+use crate::xrpc::{self, Params};
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct Resolve {
@@ -29,7 +26,7 @@ pub(crate) struct Resolved {
 /// answer.
 pub(crate) async fn resolve_handle(
     State(accounts): State<Arc<Manager>>,
-    Query(query): Query<Resolve>,
+    Params(query): Params<Resolve>,
 ) -> xrpc::Result<Json<Resolved>> {
     let handle = accounts
         .rules()

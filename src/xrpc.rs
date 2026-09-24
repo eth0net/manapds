@@ -14,7 +14,7 @@ mod input;
 pub mod limit;
 mod route;
 
-pub use input::Input;
+pub use input::{Input, Params};
 pub use route::{fallback, procedure, query};
 
 /// The result an XRPC method hands back.
