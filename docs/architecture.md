@@ -71,6 +71,13 @@ and keyed by address. Off unless asked for, because a server behind a proxy is
 usually already counted there and one counting twice is worse than one counting
 nowhere.
 
+Signing in and signing up each hold a second, much smaller budget on top of
+that one, and a request is refused by whichever of the budgets it spends from
+has least left. Signing in is counted against the account named as well as the
+address, which is why the body is read before the handler sees it: one machine
+behind a shared line locking the whole line out of every account is a worse
+failure than the guessing the budget is there to stop.
+
 Whoever runs the server can be let past, by a key in a header or by address.
 That is what makes a bulk import possible without turning the budgets off for
 everyone.

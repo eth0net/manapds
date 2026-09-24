@@ -49,7 +49,9 @@ fn context_from(config: Config) -> server::Context {
         accounts,
         store::Sequencer::memory().expect("a log"),
         tokens(),
-    );
+    )
+    // Nothing here is timed, and the pad is what makes signing in slow.
+    .answering_in(std::time::Duration::ZERO);
     server::Context::new(config, Arc::new(manager), tokens())
 }
 
@@ -735,6 +737,98 @@ async fn the_one_path_with_its_own_budget_is_not_counted_here() {
 
     let response = router.oneshot(request).await.expect("an answer");
     assert!(response.headers().get("ratelimit-limit").is_none());
+}
+
+#[tokio::test]
+async fn signing_in_spends_a_budget_the_account_it_names_holds() {
+    let mut config = config();
+    config.rate_limits = true;
+    let router = server::router(context_from(config));
+
+    let sign_in = async |identifier: &str, peer: &str| {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/xrpc/com.atproto.server.createSession")
+            .header("content-type", "application/json")
+            .body(Body::from(format!(
+                r#"{{"identifier":"{identifier}","password":"hunter2"}}"#
+            )))
+            .expect("a request");
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(peer.parse::<SocketAddr>().expect("an address")));
+        router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("an answer")
+            .status()
+    };
+
+    // Thirty tries per five minutes, whatever the answer was.
+    for _ in 0..30 {
+        assert_eq!(
+            sign_in("alice.pds.example.com", "1.2.3.4:9").await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    assert_eq!(
+        sign_in("alice.pds.example.com", "1.2.3.4:9").await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // Spelling the same account another way is not a budget of its own.
+    assert_eq!(
+        sign_in("ALICE.pds.example.com", "1.2.3.4:9").await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+
+    // Another account from the same line still has its own, and so does the
+    // same account from somewhere else: one line signing in to one account is
+    // what the budget counts.
+    assert_eq!(
+        sign_in("bob.pds.example.com", "1.2.3.4:9").await,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        sign_in("alice.pds.example.com", "5.6.7.8:9").await,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn signing_up_spends_a_budget_of_its_own() {
+    let mut config = config();
+    config.rate_limits = true;
+    // Refused before anything is written, which is the cheapest hundred
+    // signups a test can make.
+    config.invite_required = true;
+    let router = server::router(context_from(config));
+
+    let sign_up = async |peer: &str| {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/xrpc/com.atproto.server.createAccount")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"handle":"alice.pds.example.com","email":"alice@example.com","password":"hunter2"}"#,
+            ))
+            .expect("a request");
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(peer.parse::<SocketAddr>().expect("an address")));
+        router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("an answer")
+            .status()
+    };
+
+    for _ in 0..100 {
+        assert_eq!(sign_up("1.2.3.4:9").await, StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(sign_up("1.2.3.4:9").await, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(sign_up("5.6.7.8:9").await, StatusCode::BAD_REQUEST);
 }
 
 #[test]

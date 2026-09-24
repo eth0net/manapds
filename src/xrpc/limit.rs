@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::{
+    body::Body,
     extract::{ConnectInfo, Request, State},
     http::{HeaderMap, HeaderName, HeaderValue},
     middleware::Next,
@@ -36,10 +37,25 @@ const KEYS: usize = 100_000;
 
 /// A sync path large enough that one call would eat a shared budget, so it
 /// is left to the budget its own method holds.
-// todo(per-method budgets): upstream pairs this exemption with 6000 points per
-// five minutes on the method itself. Serving getRepo before that exists would
-// leave the most expensive read here the only one nothing counts.
+// todo(getRepo): upstream pairs this exemption with 6000 points per five
+// minutes on the method itself, which belongs beside the two budgets below
+// once there is a handler to hang it on.
 const UNBUDGETED: &str = "/xrpc/com.atproto.sync.getRepo";
+
+/// What signing in costs, on two windows at once.
+const SESSION: [(u32, Duration); 2] = [
+    (30, Duration::from_mins(5)),
+    (300, Duration::from_hours(24)),
+];
+
+/// What signing up costs.
+const SIGNUP: (u32, Duration) = (100, Duration::from_mins(5));
+
+const CREATE_SESSION: &str = "/xrpc/com.atproto.server.createSession";
+const CREATE_ACCOUNT: &str = "/xrpc/com.atproto.server.createAccount";
+
+/// How much of a sign-in is read to find the account it names.
+const SIGN_IN: usize = 8 * 1024;
 
 /// The header a caller with the bypass key sends it in.
 const BYPASS: HeaderName = HeaderName::from_static("x-ratelimit-bypass");
@@ -203,8 +219,16 @@ impl Reading {
 #[derive(Debug)]
 pub struct Limits {
     global: Limiter,
+    session: Vec<Limiter>,
+    signup: Limiter,
     bypass_key: Option<Secret>,
     bypass_ips: Vec<IpAddr>,
+}
+
+/// Just enough of a sign-in to know which account it is for.
+#[derive(serde::Deserialize)]
+struct SigningIn {
+    identifier: String,
 }
 
 impl Limits {
@@ -217,9 +241,38 @@ impl Limits {
     pub fn new(config: &Config) -> Option<Self> {
         config.rate_limits.then(|| Self {
             global: Limiter::new(GLOBAL_POINTS, GLOBAL_WINDOW),
+            session: SESSION
+                .into_iter()
+                .map(|(points, window)| Limiter::new(points, window))
+                .collect(),
+            signup: Limiter::new(SIGNUP.0, SIGNUP.1),
             bypass_key: config.rate_limit_bypass_key.clone(),
             bypass_ips: config.rate_limit_bypass_ips.clone(),
         })
+    }
+
+    /// Counts a request against whatever budget its own method holds.
+    ///
+    /// Hands the request back, because finding out who is signing in means
+    /// reading the body it was going to be read from.
+    async fn method(&self, caller: &str, request: Request) -> (Request, Vec<Reading>) {
+        match request.uri().path() {
+            CREATE_ACCOUNT => {
+                let reading = self.signup.consume(caller, 1);
+                (request, vec![reading])
+            }
+            CREATE_SESSION => {
+                let (request, named) = signing_in(request).await;
+                let key = format!("{named}-{caller}");
+                let readings = self
+                    .session
+                    .iter()
+                    .map(|budget| budget.consume(&key, 1))
+                    .collect();
+                (request, readings)
+            }
+            _ => (request, Vec::new()),
+        }
     }
 
     fn bypassed(&self, caller: IpAddr, headers: &HeaderMap) -> bool {
@@ -235,7 +288,8 @@ impl Limits {
     }
 }
 
-/// Counts a request against the global budget before anything else looks at it.
+/// Counts a request against every budget it spends from, before anything else
+/// looks at it.
 pub async fn global(
     State(limits): State<Arc<Limits>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -243,7 +297,7 @@ pub async fn global(
     next: Next,
 ) -> Response {
     let path = request.uri().path();
-    if !path.starts_with("/xrpc/") || path == UNBUDGETED {
+    if !path.starts_with("/xrpc/") {
         return next.run(request).await;
     }
 
@@ -252,7 +306,18 @@ pub async fn global(
         return next.run(request).await;
     }
 
-    let reading = limits.global.consume(&budget(caller), 1);
+    let key = budget(caller);
+    let mut readings = if path == UNBUDGETED {
+        Vec::new()
+    } else {
+        vec![limits.global.consume(&key, 1)]
+    };
+    let (request, method) = limits.method(&key, request).await;
+    readings.extend(method);
+
+    let Some(reading) = tightest(readings) else {
+        return next.run(request).await;
+    };
     let mut response = if reading.exceeded {
         Error::new(Status::RateLimitExceeded).into_response()
     } else {
@@ -260,6 +325,32 @@ pub async fn global(
     };
     reading.write(response.headers_mut());
     response
+}
+
+/// The budget with least left, which is the one the caller is held to and the
+/// one it is told about.
+///
+/// A budget already gone outranks one merely empty, since both read as nothing
+/// remaining and only one of them refuses.
+fn tightest(readings: Vec<Reading>) -> Option<Reading> {
+    readings
+        .into_iter()
+        .min_by_key(|reading| (!reading.exceeded, reading.remaining))
+}
+
+/// Who a sign-in says it is, and the request with its body still on it.
+///
+/// Lowercased, since a name differing only in case is the same account. A body
+/// too large to be a sign-in is counted under no name and left for the handler
+/// to refuse.
+async fn signing_in(request: Request) -> (Request, String) {
+    let (parts, body) = request.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, SIGN_IN).await else {
+        return (Request::from_parts(parts, Body::empty()), String::new());
+    };
+    let named = serde_json::from_slice::<SigningIn>(&bytes)
+        .map_or_else(|_| String::new(), |body| body.identifier.to_lowercase());
+    (Request::from_parts(parts, Body::from(bytes)), named)
 }
 
 /// Who to count a request against.

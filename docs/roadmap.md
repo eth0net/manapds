@@ -48,8 +48,9 @@ and neither is something a running server can be asked for — one of them has t
 open the files while nothing else is holding them.
 
 Three things are owed to steps that have not started. `getRepo` may not be
-served before the per-method budgets exist, or the one exemption in the global
-budget becomes a hole. `createAccount` needs `reserved_keys/` and the `did-op`
+served without the budget of its own that its exemption from the shared one
+assumes, which is a pair of numbers beside the two `limit.rs` already holds.
+`createAccount` needs `reserved_keys/` and the `did-op`
 file beside an actor's key, since both are part of reading a directory the
 reference left behind. And whatever first verifies a service token has to allow
 a malleable signature on that path alone — upstream issues them, account
