@@ -170,6 +170,22 @@ async fn a_body_that_will_not_read_is_refused_the_way_everything_else_is() {
 }
 
 #[tokio::test]
+async fn a_body_longer_than_anything_this_takes_says_that_and_not_something_else() {
+    let router = server();
+
+    let (status, body) = call(
+        &router,
+        "POST",
+        "com.atproto.server.createSession",
+        None,
+        Some(json!({ "identifier": "a".repeat(4 * 1024 * 1024), "password": "x" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
+    assert_eq!(body["error"], "PayloadTooLarge");
+}
+
+#[tokio::test]
 async fn a_session_reads_itself_back_and_only_with_its_own_token() {
     let router = server();
     let session = sign_in(&router).await;

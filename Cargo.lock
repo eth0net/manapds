@@ -811,6 +811,7 @@ dependencies = [
  "bs58",
  "bytes",
  "clap",
+ "futures-util",
  "hex",
  "hmac",
  "http-body-util",

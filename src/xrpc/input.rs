@@ -2,7 +2,7 @@
 //! is refused.
 
 use axum::extract::{FromRequest, FromRequestParts, Query, Request, rejection::JsonRejection};
-use axum::{Json, http::request::Parts};
+use axum::{Json, http::StatusCode, http::request::Parts};
 use serde::de::DeserializeOwned;
 
 use super::{Error, Status};
@@ -22,6 +22,11 @@ impl<T: DeserializeOwned, S: Send + Sync> FromRequest<S> for Input<T> {
             Ok(Json(value)) => Ok(Self(value)),
             Err(JsonRejection::MissingJsonContentType(_)) => {
                 Err(Error::new(Status::UnsupportedMediaType).saying("Expected application/json"))
+            }
+            // Asked of the rejection rather than matched, since which variant
+            // carries a body that ran long is axum's to change.
+            Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+                Err(Error::new(Status::PayloadTooLarge).saying(rejection.body_text()))
             }
             Err(rejection) => Err(Error::invalid_request(rejection.body_text())),
         }

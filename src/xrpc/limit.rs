@@ -17,6 +17,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
+use hyper::body::Body as _;
+
 use crate::config::{Config, Secret};
 
 use super::{Error, Status};
@@ -354,8 +356,20 @@ fn tightest(readings: Vec<Reading>) -> Option<Reading> {
 ///
 /// Lowercased, since a name differing only in case is the same account. A body
 /// too large to be a sign-in is counted under no name and left for the handler
-/// to refuse.
+/// to refuse for what it is.
 async fn signing_in(request: Request) -> (Request, String) {
+    // Only a body that says how long it is, and says it is short enough, is
+    // read at all. One that does not is counted under no name and handed on
+    // whole, since a body read and found too long is a body destroyed.
+    if request
+        .body()
+        .size_hint()
+        .upper()
+        .is_none_or(|length| length > SIGN_IN as u64)
+    {
+        return (request, String::new());
+    }
+
     let (parts, body) = request.into_parts();
     let Ok(bytes) = axum::body::to_bytes(body, SIGN_IN).await else {
         return (Request::from_parts(parts, Body::empty()), String::new());

@@ -807,6 +807,59 @@ async fn signing_in_spends_a_budget_the_account_it_names_holds() {
 }
 
 #[tokio::test]
+async fn a_sign_in_too_large_to_read_still_reaches_the_method() {
+    let mut config = config();
+    config.rate_limits = true;
+    let router = server::router(context_from(config));
+
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/xrpc/com.atproto.server.createSession")
+        .header("content-type", "application/json")
+        .body(Body::from(format!(
+            r#"{{"identifier":"{}","password":"hunter2"}}"#,
+            "a".repeat(64 * 1024)
+        )))
+        .expect("a request");
+    request.extensions_mut().insert(ConnectInfo(
+        "1.2.3.4:9".parse::<SocketAddr>().expect("an address"),
+    ));
+
+    // Counted under no name, and handed on whole rather than emptied, so the
+    // answer is the method's own and not one about a body it never saw.
+    let answer = router.oneshot(request).await.expect("an answer");
+    assert_eq!(answer.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn a_sign_in_that_will_not_say_how_long_it_is_still_reaches_the_method() {
+    let mut config = config();
+    config.rate_limits = true;
+    let router = server::router(context_from(config));
+
+    let body = format!(
+        r#"{{"identifier":"{}","password":"hunter2"}}"#,
+        "a".repeat(64 * 1024)
+    );
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/xrpc/com.atproto.server.createSession")
+        .header("content-type", "application/json")
+        // A stream says nothing about its length, which is what a chunked
+        // body looks like from here.
+        .body(Body::from_stream(futures_util::stream::once(async move {
+            Ok::<_, std::convert::Infallible>(body)
+        })))
+        .expect("a request");
+    request.extensions_mut().insert(ConnectInfo(
+        "1.2.3.4:9".parse::<SocketAddr>().expect("an address"),
+    ));
+
+    let answer = router.oneshot(request).await.expect("an answer");
+    assert_eq!(answer.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn signing_up_spends_a_budget_of_its_own() {
     let mut config = config();
     config.rate_limits = true;
