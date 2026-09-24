@@ -45,6 +45,9 @@ const PASSWORD: usize = 256;
 /// held to: a longer one matches nothing this server could be holding.
 const STORED_PASSWORD: usize = 512;
 
+/// The floor on how many passwords are hashed at once.
+const HASHES: usize = 4;
+
 /// What went wrong signing in.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -750,8 +753,13 @@ impl Drop for Undo<'_> {
 /// Each one holds 16MB for as long as it runs and a blocking task goes to a
 /// pool 512 deep, so without a bound a burst of sign-ins is a memory limit
 /// rather than a processor one.
+///
+/// Never fewer than [`HASHES`], since one core would otherwise put every
+/// sign-in behind one hash for the 64MB that costs.
 fn hashes_at_once() -> usize {
-    std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get)
+    std::thread::available_parallelism()
+        .map_or(HASHES, std::num::NonZeroUsize::get)
+        .max(HASHES)
 }
 
 /// A refresh token's `jti`, which is also the row the session is kept under.
