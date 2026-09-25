@@ -86,6 +86,13 @@ pub enum Error {
     /// The directory would not register the identifier.
     #[error("{0}")]
     Plc(#[from] plc::Error),
+    /// An account with no repository behind it, which is a signup that never
+    /// finished.
+    #[error("Could not find repo for {0}")]
+    NoRepo(Did),
+    /// The commit the caller expected to be replacing is not the one there.
+    #[error("Commit was at {0}")]
+    Swap(Cid),
     /// The repository would not be built.
     #[error("{0}")]
     Repo(#[from] repo::Error),
@@ -121,6 +128,8 @@ impl Error {
             Self::InviteRequired | Self::Invite => "InvalidInviteCode",
             Self::Credentials => "AuthenticationRequired",
             Self::Plc(_) | Self::Repo(_) | Self::Storage(_) => "InternalServerError",
+            Self::NoRepo(_) => "RepoNotFound",
+            Self::Swap(_) => "InvalidSwap",
             Self::Email | Self::PasswordTooLong | Self::Taken(_) | Self::TooManyInvites => {
                 "InvalidRequest"
             }
@@ -175,6 +184,26 @@ pub struct AppPassword {
     pub created_at: Timestamp,
     /// Whether it reaches what a plain app password may not.
     pub privileged: bool,
+}
+
+/// Where one write landed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Applied {
+    /// The record's address.
+    pub uri: String,
+    /// The block it is in, absent where the write took a record out.
+    pub cid: Option<Cid>,
+}
+
+/// What one commit wrote.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Written {
+    /// Where each write landed, in the order they were asked for.
+    pub results: Vec<Applied>,
+    /// The commit they went in under.
+    pub commit: Cid,
+    /// The revision it carries.
+    pub rev: Tid,
 }
 
 /// The pair of tokens a session is held open by.
@@ -486,6 +515,107 @@ impl Manager {
             .accounts(move |accounts| accounts.by_handle(&handle))
             .await?
             .map(|account| account.did))
+    }
+
+    /// Applies a set of writes under one commit, and says where each landed.
+    ///
+    /// # Errors
+    ///
+    /// If the account holds no repository, `swap` names a commit that is not
+    /// the one there, a key is taken or missing, or storage will not answer.
+    pub async fn write(
+        &self,
+        did: &Did,
+        writes: Vec<repo::Write>,
+        swap: Option<Cid>,
+    ) -> Result<Written, Error> {
+        let key = self.directory.actor_key(did);
+        let path = self.directory.actor_store(did);
+        let clock = Arc::clone(&self.clock);
+        let account = did.clone();
+        let landed = blocking(move || {
+            let signing_key = store::keys::read(&key)?;
+            let mut actor = store::Actor::open(&path, account.clone())?;
+            let Some(root) = actor.root()? else {
+                return Err(Error::NoRepo(account));
+            };
+            if let Some(wanted) = swap
+                && wanted != root.cid
+            {
+                return Err(Error::Swap(root.cid));
+            }
+
+            let mut repo = Repo::load(&actor, root.cid)?;
+            let since = repo.rev().clone();
+            let prev_data = repo.commit().data;
+            let planned = plan(&mut repo, &actor, &account, &writes)?;
+            let blocks = repo.apply(
+                &actor,
+                &writes,
+                &signing_key,
+                &mut clock
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            )?;
+            let root = store::Root {
+                cid: repo.cid(),
+                rev: repo.rev().clone(),
+            };
+            actor.commit(&root, &blocks, &planned.index)?;
+            Ok(Landed {
+                written: Written {
+                    results: planned.results,
+                    commit: root.cid,
+                    rev: root.rev.clone(),
+                },
+                root,
+                blocks,
+                ops: planned.ops,
+                since,
+                prev_data,
+            })
+        })
+        .await?;
+
+        // Both of these follow a commit that has already landed, so neither is
+        // worth failing the call over.
+        //
+        // todo: nothing tries the log again, so a consumer can miss a commit.
+        if let Err(error) = self.log_commit(did, &landed).await {
+            tracing::error!(%did, %error, "a commit was written and not logged");
+        }
+        let (account, root) = (did.clone(), landed.root.clone());
+        if let Err(error) = self
+            .accounts(move |accounts| accounts.update_root(&account, &root))
+            .await
+        {
+            tracing::error!(%did, %error, "a commit was written and the root beside it was not moved");
+        }
+        Ok(landed.written)
+    }
+
+    /// Puts one commit in the log.
+    async fn log_commit(&self, did: &Did, landed: &Landed) -> Result<(), Error> {
+        let entry = event::records_written(
+            &event::Commit {
+                did,
+                commit: landed.root.cid,
+                rev: &landed.root.rev,
+                since: Some(&landed.since),
+                prev_data: Some(landed.prev_data),
+                ops: &landed.ops,
+            },
+            &landed.blocks,
+        )?;
+        let (did, sequencer) = (did.clone(), Arc::clone(&self.sequencer));
+        blocking(move || {
+            sequencer
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .append(&did, entry.event, &entry.bytes)
+        })
+        .await?;
+        Ok(())
     }
 
     /// Writes fresh invite codes for every account named, and says what each
@@ -816,6 +946,81 @@ impl Manager {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+}
+
+/// One commit, and everything the log and the answer want from it.
+#[derive(Debug)]
+struct Landed {
+    written: Written,
+    root: store::Root,
+    blocks: repo::BlockMap,
+    ops: Vec<event::Op>,
+    since: Tid,
+    prev_data: Cid,
+}
+
+/// What a set of writes leaves in the index, in the log and in the answer.
+#[derive(Debug)]
+struct Plan {
+    index: Vec<store::Indexed>,
+    ops: Vec<event::Op>,
+    results: Vec<Applied>,
+}
+
+/// Works out all three before any of the writes lands, since the CID a record
+/// replaces is only there until the one on top of it.
+///
+/// todo: two writes to one key in a batch leave the second naming what the
+/// first replaced.
+fn plan(
+    repo: &mut Repo,
+    store: &dyn repo::Store,
+    did: &Did,
+    writes: &[repo::Write],
+) -> Result<Plan, Error> {
+    let mut index = Vec::with_capacity(writes.len());
+    let mut ops = Vec::with_capacity(writes.len());
+    let mut results = Vec::with_capacity(writes.len());
+    for write in writes {
+        let (collection, rkey) = write.target();
+        let path = write.key();
+        let prev = repo.get(store, collection, rkey)?;
+        let (action, cid) = match write {
+            repo::Write::Create { record, .. } => {
+                ("create", Some(repo::cid_for(&repo::encode(record)?)))
+            }
+            repo::Write::Update { record, .. } => {
+                ("update", Some(repo::cid_for(&repo::encode(record)?)))
+            }
+            repo::Write::Delete { .. } => ("delete", None),
+        };
+        index.push(match cid {
+            Some(cid) => store::Indexed::Put {
+                collection: collection.clone(),
+                rkey: rkey.clone(),
+                cid,
+            },
+            None => store::Indexed::Delete {
+                collection: collection.clone(),
+                rkey: rkey.clone(),
+            },
+        });
+        results.push(Applied {
+            uri: format!("at://{did}/{path}"),
+            cid,
+        });
+        ops.push(event::Op {
+            action,
+            path,
+            cid,
+            prev,
+        });
+    }
+    Ok(Plan {
+        index,
+        ops,
+        results,
+    })
 }
 
 /// Runs work that has no way not to block on a thread that is allowed to,

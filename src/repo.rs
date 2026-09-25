@@ -98,6 +98,19 @@ pub enum Write {
 }
 
 impl Write {
+    /// The collection and key this operation is about.
+    #[must_use]
+    pub fn target(&self) -> (&Nsid, &RecordKey) {
+        let (Self::Create {
+            collection, rkey, ..
+        }
+        | Self::Update {
+            collection, rkey, ..
+        }
+        | Self::Delete { collection, rkey }) = self;
+        (collection, rkey)
+    }
+
     /// Where in the tree this operation lands.
     #[must_use]
     pub fn key(&self) -> String {

@@ -315,6 +315,28 @@ impl Accounts {
         Ok(())
     }
 
+    /// Moves this server's copy of where an account's repository has got to.
+    ///
+    /// The actor's own database is the one that decides; this row is what a
+    /// listing across every account reads, so it is allowed to lag.
+    ///
+    /// # Errors
+    ///
+    /// If the write fails.
+    pub fn update_root(&self, did: &Did, root: &super::Root) -> Result<(), Error> {
+        self.db.execute(
+            r#"insert into "repo_root" ("did", "cid", "rev", "indexedAt") values (?1, ?2, ?3, ?4)
+               on conflict("did") do update set "cid" = ?2, "rev" = ?3, "indexedAt" = ?4"#,
+            params![
+                did.as_str(),
+                root.cid.to_string(),
+                root.rev.as_str(),
+                super::stamp(jiff::Timestamp::now())
+            ],
+        )?;
+        Ok(())
+    }
+
     /// The account with this DID.
     ///
     /// # Errors

@@ -10,9 +10,9 @@ use std::time::Duration;
 
 use manapds::account::{self, email, handle, password};
 use manapds::crypto::{Algorithm, Keypair};
-use manapds::repo::Repo;
+use manapds::repo::{Ipld, Repo, Write};
 use manapds::store;
-use manapds::syntax::{Did, TidClock};
+use manapds::syntax::{Did, Nsid, RecordKey, TidClock};
 use manapds::xrpc::auth::{Expired, Scope, Tokens};
 use serde::Deserialize;
 use tempfile::TempDir;
@@ -489,6 +489,81 @@ fn signup(handle: &str) -> account::Signup {
         invite: None,
         recovery_key: None,
     }
+}
+
+/// One record in a collection this server has no lexicon for, which is every
+/// collection as far as it is concerned.
+fn record(rkey: &str, text: &str) -> Write {
+    Write::Create {
+        collection: "com.example.record".parse::<Nsid>().expect("an NSID"),
+        rkey: rkey.parse::<RecordKey>().expect("a record key"),
+        record: Ipld::Map(std::collections::BTreeMap::from([
+            (
+                "$type".to_owned(),
+                Ipld::String("com.example.record".to_owned()),
+            ),
+            ("text".to_owned(), Ipld::String(text.to_owned())),
+        ])),
+    }
+}
+
+#[tokio::test]
+async fn a_write_lands_under_one_commit_and_moves_the_root() {
+    let (manager, data, _seen) = empty(false).await;
+    let created = manager
+        .create(&signup("alice.pds.test"))
+        .await
+        .expect("an account");
+    let path = store::Directory::new(data.path()).actor_store(&created.did);
+    let before = store::Actor::open(&path, created.did.clone())
+        .expect("opens")
+        .root()
+        .expect("reads")
+        .expect("a root");
+
+    let written = manager
+        .write(&created.did, vec![record("3jqfcqzm4fc2j", "first")], None)
+        .await
+        .expect("a commit");
+    assert_eq!(
+        written
+            .results
+            .iter()
+            .map(|r| r.uri.as_str())
+            .collect::<Vec<_>>(),
+        [format!(
+            "at://{}/com.example.record/3jqfcqzm4fc2j",
+            created.did
+        )]
+    );
+    assert_ne!(written.commit, before.cid);
+    assert!(written.rev > before.rev);
+
+    // The tree, the index and the root all moved together.
+    let store = store::Actor::open(&path, created.did.clone()).expect("reopens");
+    let root = store.root().expect("reads").expect("a root");
+    assert_eq!(root.cid, written.commit);
+    let held = store
+        .record(
+            &"com.example.record".parse().expect("an NSID"),
+            &"3jqfcqzm4fc2j".parse().expect("a record key"),
+        )
+        .expect("reads")
+        .expect("held");
+    assert_eq!(Some(held.cid), written.results[0].cid);
+
+    // And a caller naming the commit it thought it was replacing is refused.
+    let refused = manager
+        .write(
+            &created.did,
+            vec![record("3jqfcqzm4fd2j", "second")],
+            Some(before.cid),
+        )
+        .await;
+    assert!(
+        matches!(&refused, Err(account::Error::Swap(at)) if *at == written.commit),
+        "{refused:?}"
+    );
 }
 
 #[tokio::test]

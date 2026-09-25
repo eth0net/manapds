@@ -76,6 +76,47 @@ struct Sync<'a> {
     blocks: Vec<u8>,
 }
 
+/// One commit, as the log carries it.
+#[derive(Debug)]
+pub struct Commit<'a> {
+    /// Whose repository moved.
+    pub did: &'a Did,
+    /// The commit block it moved onto.
+    pub commit: Cid,
+    /// The revision that commit carries.
+    pub rev: &'a Tid,
+    /// The revision before it, absent only on the first.
+    pub since: Option<&'a Tid>,
+    /// The tree the revision before it held, which is what lets a consumer
+    /// check it did not miss one.
+    pub prev_data: Option<Cid>,
+    /// What the commit did, one entry per record.
+    pub ops: &'a [Op],
+}
+
+/// The entry one commit puts in the log.
+///
+/// # Errors
+///
+/// If the body will not encode, or `blocks` is missing the commit.
+pub fn records_written(written: &Commit<'_>, blocks: &BlockMap) -> Result<Body, Error> {
+    Ok(Body {
+        event: Event::Append,
+        bytes: encode(&Append {
+            repo: written.did,
+            commit: written.commit,
+            rev: written.rev,
+            since: written.since,
+            blocks: car::write(written.commit, blocks)?,
+            ops: written.ops,
+            prev_data: written.prev_data,
+            rebase: false,
+            too_big: false,
+            blobs: &[],
+        })?,
+    })
+}
+
 /// The four entries a new account puts in the log.
 ///
 /// They are built together because they have to be written together: a
