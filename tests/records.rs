@@ -83,7 +83,7 @@ fn standing(
     };
     store::Actor::open(&directory.actor_store(&did), did.clone())
         .expect("a store")
-        .commit(&root, &blocks, &[])
+        .commit(None, &root, &blocks, &[])
         .expect("a commit");
 
     let mut accounts = store::Accounts::memory().expect("a database");
@@ -547,4 +547,49 @@ async fn an_account_past_its_write_budget_is_told_when_to_come_back() {
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     // Refused with the one header that tells a client what to do about it.
     assert!(response.headers().contains_key("retry-after"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn writes_from_two_callers_at_once_all_land() {
+    let (_router, manager, _data) = served();
+    let did = account();
+
+    // Whether these overlap is up to the scheduler, so this says that nothing
+    // is lost when they do rather than making them. The store's own test is
+    // where a commit built on a moved root is refused.
+    for round in 0..10 {
+        let (one, other) = (Arc::clone(&manager), Arc::clone(&manager));
+        let (left, right) = (did.clone(), did.clone());
+        let first = tokio::spawn(async move {
+            one.write(
+                &left,
+                vec![record(&format!("3jqfcqzm4f{round}2j"), "mine").into()],
+                None,
+            )
+            .await
+        });
+        let second = tokio::spawn(async move {
+            other
+                .write(
+                    &right,
+                    vec![record(&format!("3jqfcqzm4g{round}2j"), "theirs").into()],
+                    None,
+                )
+                .await
+        });
+        first.await.expect("a task").expect("one lands");
+        second.await.expect("a task").expect("the other lands");
+    }
+
+    let held = manager
+        .records(
+            &did,
+            &"com.example.record".parse().expect("an NSID"),
+            100,
+            None,
+            false,
+        )
+        .await
+        .expect("reads");
+    assert_eq!(held.len(), 20);
 }

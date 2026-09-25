@@ -159,15 +159,21 @@ impl Actor {
     /// The index goes in under the same transaction because a listing that
     /// disagrees with the tree is worse than either being a revision behind.
     ///
+    /// `from` is the root this revision was built on, and the move only lands
+    /// while that is still the one there. Answering `false` means somebody
+    /// else committed in between and this revision is built on a tree that has
+    /// moved, which the caller has to work out again rather than overwrite.
+    ///
     /// # Errors
     ///
     /// If the write fails.
     pub fn commit(
         &mut self,
+        from: Option<&Root>,
         root: &Root,
         blocks: &BlockMap,
         records: &[Indexed],
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         let stamp = jiff::Timestamp::now();
         let did = &self.did;
         let transaction = self.db.transaction()?;
@@ -210,18 +216,34 @@ impl Actor {
                 };
             }
         }
-        transaction.execute(
-            r#"insert into "repo_root" ("did", "cid", "rev", "indexedAt") values (?1, ?2, ?3, ?4)
-               on conflict("did") do update set "cid" = ?2, "rev" = ?3, "indexedAt" = ?4"#,
-            params![
-                self.did.as_str(),
-                root.cid.to_string(),
-                root.rev.as_str(),
-                format!("{stamp:.3}")
-            ],
-        )?;
+        let moved = match from {
+            Some(from) => transaction.execute(
+                r#"update "repo_root" set "cid" = ?2, "rev" = ?3, "indexedAt" = ?4
+                   where "did" = ?1 and "cid" = ?5"#,
+                params![
+                    self.did.as_str(),
+                    root.cid.to_string(),
+                    root.rev.as_str(),
+                    format!("{stamp:.3}"),
+                    from.cid.to_string()
+                ],
+            )?,
+            None => transaction.execute(
+                r#"insert into "repo_root" ("did", "cid", "rev", "indexedAt") values (?1, ?2, ?3, ?4)"#,
+                params![
+                    self.did.as_str(),
+                    root.cid.to_string(),
+                    root.rev.as_str(),
+                    format!("{stamp:.3}")
+                ],
+            )?,
+        };
+        if moved == 0 {
+            transaction.rollback()?;
+            return Ok(false);
+        }
         transaction.commit()?;
-        Ok(())
+        Ok(true)
     }
 
     /// The record at a key, if the index holds one there.

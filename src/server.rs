@@ -112,6 +112,8 @@ impl From<account::Error> for xrpc::Error {
             Error::Plc(_) | Error::Repo(_) | Error::Storage(_) => {
                 return Self::internal(error.to_string());
             }
+            // Not a budget, but the same answer: come back and it will land.
+            Error::Contended => xrpc::Status::RateLimitExceeded,
             _ => xrpc::Status::InvalidRequest,
         };
         Self::new(status)

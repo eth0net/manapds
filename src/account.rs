@@ -48,6 +48,11 @@ const STORED_PASSWORD: usize = 512;
 /// The floor on how many passwords are hashed at once.
 const HASHES: usize = 4;
 
+/// How many times a write works itself out again against a root somebody else
+/// moved first. Past this, the account is taking writes faster than one at a
+/// time can be applied, and the caller is better told to come back.
+const ATTEMPTS: usize = 8;
+
 /// The most invite codes one call writes, across every account it names.
 ///
 /// Well past what anyone hands out at once, and a bound on what a mistyped
@@ -96,6 +101,9 @@ pub enum Error {
     /// The key holds something other than what the caller expected.
     #[error("Record was at {0}")]
     SwapRecord(String),
+    /// Too many writes at once for any one of them to land.
+    #[error("Repository is being written to too quickly")]
+    Contended,
     /// The repository would not be built.
     #[error("{0}")]
     Repo(#[from] repo::Error),
@@ -133,6 +141,7 @@ impl Error {
             Self::Plc(_) | Self::Repo(_) | Self::Storage(_) => "InternalServerError",
             Self::NoRepo(_) => "RepoNotFound",
             Self::Swap(_) | Self::SwapRecord(_) => "InvalidSwap",
+            Self::Contended => "RateLimitExceeded",
             Self::Email | Self::PasswordTooLong | Self::Taken(_) | Self::TooManyInvites => {
                 "InvalidRequest"
             }
@@ -488,7 +497,7 @@ impl Manager {
                 rev: repo.rev().clone(),
             };
             // A first commit holds no records, so there is nothing to index.
-            actor.commit(&root, &blocks, &[])?;
+            actor.commit(None, &root, &blocks, &[])?;
             Ok((root, blocks))
         })
         .await
@@ -570,45 +579,53 @@ impl Manager {
         let landed = blocking(move || {
             let signing_key = store::keys::read(&key)?;
             let mut actor = store::Actor::open(&path, account.clone())?;
-            let Some(root) = actor.root()? else {
-                return Err(Error::NoRepo(account));
-            };
-            if let Some(wanted) = swap
-                && wanted != root.cid
-            {
-                return Err(Error::Swap(root.cid));
-            }
+            for _ in 0..ATTEMPTS {
+                let Some(from) = actor.root()? else {
+                    return Err(Error::NoRepo(account));
+                };
+                if let Some(wanted) = swap
+                    && wanted != from.cid
+                {
+                    return Err(Error::Swap(from.cid));
+                }
 
-            let mut repo = Repo::load(&actor, root.cid)?;
-            let since = repo.rev().clone();
-            let prev_data = repo.commit().data;
-            let planned = plan(&mut repo, &actor, &account, &requested)?;
-            let writes: Vec<repo::Write> = requested.into_iter().map(|asked| asked.write).collect();
-            let blocks = repo.apply(
-                &actor,
-                &writes,
-                &signing_key,
-                &mut clock
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-            )?;
-            let root = store::Root {
-                cid: repo.cid(),
-                rev: repo.rev().clone(),
-            };
-            actor.commit(&root, &blocks, &planned.index)?;
-            Ok(Landed {
-                written: Written {
-                    results: planned.results,
-                    commit: root.cid,
-                    rev: root.rev.clone(),
-                },
-                root,
-                blocks,
-                ops: planned.ops,
-                since,
-                prev_data,
-            })
+                let mut repo = Repo::load(&actor, from.cid)?;
+                let since = repo.rev().clone();
+                let prev_data = repo.commit().data;
+                let planned = plan(&mut repo, &actor, &account, &requested)?;
+                let writes: Vec<repo::Write> =
+                    requested.iter().map(|asked| asked.write.clone()).collect();
+                let blocks = repo.apply(
+                    &actor,
+                    &writes,
+                    &signing_key,
+                    &mut clock
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner),
+                )?;
+                let root = store::Root {
+                    cid: repo.cid(),
+                    rev: repo.rev().clone(),
+                };
+                // Somebody else moved the root while this was being worked
+                // out, so it is worked out again against where they left it.
+                if !actor.commit(Some(&from), &root, &blocks, &planned.index)? {
+                    continue;
+                }
+                return Ok(Landed {
+                    written: Written {
+                        results: planned.results,
+                        commit: root.cid,
+                        rev: root.rev.clone(),
+                    },
+                    root,
+                    blocks,
+                    ops: planned.ops,
+                    since,
+                    prev_data,
+                });
+            }
+            Err(Error::Contended)
         })
         .await?;
 

@@ -214,6 +214,7 @@ fn a_repository_round_trips_through_a_file() {
         let mut store = Actor::open(&path, account()).expect("opens");
         store
             .commit(
+                None,
                 &Root {
                     cid: repo.cid(),
                     rev: repo.rev().clone(),
@@ -223,6 +224,7 @@ fn a_repository_round_trips_through_a_file() {
             )
             .expect("commits");
 
+        let from = at(&repo);
         let written = repo
             .apply(
                 &store,
@@ -236,6 +238,7 @@ fn a_repository_round_trips_through_a_file() {
             .expect("applies");
         store
             .commit(
+                Some(&from),
                 &Root {
                     cid: repo.cid(),
                     rev: repo.rev().clone(),
@@ -302,9 +305,12 @@ fn the_index_follows_what_the_commit_did() {
 
     let (mut repo, blocks) = Repo::create(account(), &key, &mut clock).expect("creates");
     let mut store = Actor::open(&path, account()).expect("opens");
-    store.commit(&at(&repo), &blocks, &[]).expect("commits");
+    store
+        .commit(None, &at(&repo), &blocks, &[])
+        .expect("commits");
     assert_eq!(indexed_rows(&path), vec![]);
 
+    let from = at(&repo);
     let written = repo
         .apply(
             &store,
@@ -314,7 +320,12 @@ fn the_index_follows_what_the_commit_did() {
         )
         .expect("applies");
     store
-        .commit(&at(&repo), &written, &[indexed("3jqfcqzm4fc2j", "first")])
+        .commit(
+            Some(&from),
+            &at(&repo),
+            &written,
+            &[indexed("3jqfcqzm4fc2j", "first")],
+        )
         .expect("commits");
     assert_eq!(
         indexed_rows(&path),
@@ -326,6 +337,7 @@ fn the_index_follows_what_the_commit_did() {
         )]
     );
 
+    let from = at(&repo);
     let written = repo
         .apply(
             &store,
@@ -339,7 +351,12 @@ fn the_index_follows_what_the_commit_did() {
         )
         .expect("applies");
     store
-        .commit(&at(&repo), &written, &[indexed("3jqfcqzm4fc2j", "second")])
+        .commit(
+            Some(&from),
+            &at(&repo),
+            &written,
+            &[indexed("3jqfcqzm4fc2j", "second")],
+        )
         .expect("commits");
     // The same row, moved on rather than written twice.
     assert_eq!(
@@ -352,6 +369,7 @@ fn the_index_follows_what_the_commit_did() {
         )]
     );
 
+    let from = at(&repo);
     let written = repo
         .apply(
             &store,
@@ -365,12 +383,73 @@ fn the_index_follows_what_the_commit_did() {
         .expect("applies");
     store
         .commit(
+            Some(&from),
             &at(&repo),
             &written,
             &[Indexed::Delete { collection, rkey }],
         )
         .expect("commits");
     assert_eq!(indexed_rows(&path), vec![]);
+}
+
+#[test]
+fn a_commit_built_on_a_root_somebody_else_moved_is_refused() {
+    let key = Keypair::generate(Algorithm::Secp256k1);
+    let mut clock = TidClock::new();
+
+    let (repo, blocks) = Repo::create(account(), &key, &mut clock).expect("creates");
+    let mut store = Actor::memory(account()).expect("opens");
+    store
+        .commit(None, &at(&repo), &blocks, &[])
+        .expect("commits");
+
+    // Two writers, both working from the root the genesis left.
+    let from = at(&repo);
+    let (mut first, mut second) = (repo.clone(), repo);
+    let one = first
+        .apply(&store, &[create("3jqfcqzm4fa2j", "mine")], &key, &mut clock)
+        .expect("applies");
+    let other = second
+        .apply(
+            &store,
+            &[create("3jqfcqzm4fb2j", "theirs")],
+            &key,
+            &mut clock,
+        )
+        .expect("applies");
+
+    assert!(
+        store
+            .commit(
+                Some(&from),
+                &at(&first),
+                &one,
+                &[indexed("3jqfcqzm4fa2j", "mine")]
+            )
+            .expect("commits")
+    );
+    // The second was worked out against a tree that has moved, so taking it
+    // would drop the first write rather than land beside it.
+    assert!(
+        !store
+            .commit(
+                Some(&from),
+                &at(&second),
+                &other,
+                &[indexed("3jqfcqzm4fb2j", "theirs")]
+            )
+            .expect("answers")
+    );
+
+    assert_eq!(store.root().expect("reads"), Some(at(&first)));
+    let collection = "com.example.record".parse::<Nsid>().expect("an NSID");
+    assert_eq!(
+        store
+            .records(&collection, 10, None, false)
+            .expect("reads")
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -381,8 +460,11 @@ fn a_collection_pages_newest_first_unless_asked_the_other_way() {
 
     let (mut repo, blocks) = Repo::create(account(), &key, &mut clock).expect("creates");
     let mut store = Actor::memory(account()).expect("opens");
-    store.commit(&at(&repo), &blocks, &[]).expect("commits");
+    store
+        .commit(None, &at(&repo), &blocks, &[])
+        .expect("commits");
 
+    let from = at(&repo);
     let written = repo
         .apply(
             &store,
@@ -398,6 +480,7 @@ fn a_collection_pages_newest_first_unless_asked_the_other_way() {
         .expect("applies");
     store
         .commit(
+            Some(&from),
             &at(&repo),
             &written,
             &[
