@@ -6,7 +6,7 @@ use std::path::Path;
 use manapds::crypto::{Algorithm, Keypair};
 use manapds::repo::{self, Ipld, Repo, Store, Write};
 use manapds::store::{
-    Account, Accounts, Actor, AppPassword, DidCache, Directory, Error, Event, Indexed,
+    Account, Accounts, Actor, AppPassword, DidCache, Directory, Error, Event, Indexed, Record,
     Registration, Root, Sequencer, Session,
 };
 use manapds::store::{blobs, keys};
@@ -28,8 +28,12 @@ fn post(text: &str) -> Ipld {
 }
 
 fn indexed(rkey: &str, text: &str) -> Indexed {
+    indexed_in("com.example.record", rkey, text)
+}
+
+fn indexed_in(collection: &str, rkey: &str, text: &str) -> Indexed {
     Indexed::Put {
-        collection: "com.example.record".parse::<Nsid>().expect("an NSID"),
+        collection: collection.parse::<Nsid>().expect("an NSID"),
         rkey: rkey.parse::<RecordKey>().expect("a record key"),
         cid: repo::cid_for(&repo::encode(&post(text)).expect("encodes")),
     }
@@ -57,11 +61,23 @@ fn indexed_rows(path: &Path) -> Vec<(String, String, String, String)> {
 }
 
 fn create(rkey: &str, text: &str) -> Write {
+    create_in("com.example.record", rkey, text)
+}
+
+fn create_in(collection: &str, rkey: &str, text: &str) -> Write {
     Write::Create {
-        collection: "com.example.record".parse::<Nsid>().expect("an NSID"),
+        collection: collection.parse::<Nsid>().expect("an NSID"),
         rkey: rkey.parse::<RecordKey>().expect("a record key"),
         record: post(text),
     }
+}
+
+/// The keys a page came back in, which is what its order is about.
+fn keys(records: &[Record]) -> Vec<&str> {
+    records
+        .iter()
+        .map(|record| record.uri.rsplit('/').next().expect("a key"))
+        .collect()
 }
 
 #[test]
@@ -339,6 +355,86 @@ fn the_index_follows_what_the_commit_did() {
         )
         .expect("commits");
     assert_eq!(indexed_rows(&path), vec![]);
+}
+
+#[test]
+fn a_collection_pages_newest_first_unless_asked_the_other_way() {
+    let key = Keypair::generate(Algorithm::Secp256k1);
+    let mut clock = TidClock::new();
+    let collection = "com.example.record".parse::<Nsid>().expect("an NSID");
+
+    let (mut repo, blocks) = Repo::create(account(), &key, &mut clock).expect("creates");
+    let mut store = Actor::memory(account()).expect("opens");
+    store.commit(&at(&repo), &blocks, &[]).expect("commits");
+
+    let written = repo
+        .apply(
+            &store,
+            &[
+                create("3jqfcqzm4fa2j", "first"),
+                create("3jqfcqzm4fb2j", "second"),
+                create("3jqfcqzm4fc2j", "third"),
+                create_in("com.example.other", "3jqfcqzm4fd2j", "elsewhere"),
+            ],
+            &key,
+            &mut clock,
+        )
+        .expect("applies");
+    store
+        .commit(
+            &at(&repo),
+            &written,
+            &[
+                indexed("3jqfcqzm4fa2j", "first"),
+                indexed("3jqfcqzm4fb2j", "second"),
+                indexed("3jqfcqzm4fc2j", "third"),
+                indexed_in("com.example.other", "3jqfcqzm4fd2j", "elsewhere"),
+            ],
+        )
+        .expect("commits");
+
+    assert_eq!(
+        store.collections().expect("reads"),
+        ["com.example.other", "com.example.record"]
+            .map(|nsid| nsid.parse::<Nsid>().expect("an NSID"))
+    );
+
+    // A TID sorts as time, so the default page is the most recent first and a
+    // collection nobody asked about stays out of it.
+    let page = store.records(&collection, 10, None, false).expect("reads");
+    assert_eq!(
+        keys(&page),
+        ["3jqfcqzm4fc2j", "3jqfcqzm4fb2j", "3jqfcqzm4fa2j"]
+    );
+
+    let page = store.records(&collection, 2, None, false).expect("reads");
+    assert_eq!(keys(&page), ["3jqfcqzm4fc2j", "3jqfcqzm4fb2j"]);
+    let next = store
+        .records(&collection, 2, Some("3jqfcqzm4fb2j"), false)
+        .expect("reads");
+    assert_eq!(keys(&next), ["3jqfcqzm4fa2j"]);
+
+    let page = store.records(&collection, 10, None, true).expect("reads");
+    assert_eq!(
+        keys(&page),
+        ["3jqfcqzm4fa2j", "3jqfcqzm4fb2j", "3jqfcqzm4fc2j"]
+    );
+    let next = store
+        .records(&collection, 10, Some("3jqfcqzm4fb2j"), true)
+        .expect("reads");
+    assert_eq!(keys(&next), ["3jqfcqzm4fc2j"]);
+
+    let held = store
+        .record(&collection, &"3jqfcqzm4fb2j".parse().expect("a record key"))
+        .expect("reads")
+        .expect("held");
+    assert_eq!(repo::decode::<Ipld>(&held.value), Ok(post("second")));
+    assert_eq!(
+        store
+            .record(&collection, &"3jqfcqzm4fz2j".parse().expect("a record key"))
+            .expect("reads"),
+        None
+    );
 }
 
 #[test]

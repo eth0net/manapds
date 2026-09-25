@@ -48,6 +48,17 @@ pub struct Root {
     pub rev: Tid,
 }
 
+/// A record as the index holds it, beside the block it points at.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Record {
+    /// Where it is, as a client is told.
+    pub uri: String,
+    /// The block the record is in.
+    pub cid: Cid,
+    /// That block, which is the record in dag-cbor.
+    pub value: Vec<u8>,
+}
+
 /// Where one commit leaves a record in the index.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Indexed {
@@ -202,6 +213,70 @@ impl Actor {
         Ok(())
     }
 
+    /// The record at a key, if the index holds one there.
+    ///
+    /// # Errors
+    ///
+    /// If the read fails, or the row names a block that is not a CID.
+    pub fn record(&self, collection: &Nsid, rkey: &RecordKey) -> Result<Option<Record>, Error> {
+        self.db
+            .query_row(
+                r#"select "record"."uri", "record"."cid", "repo_block"."content"
+                   from "record" join "repo_block" on "repo_block"."cid" = "record"."cid"
+                   where "record"."uri" = ?1"#,
+                params![uri(&self.did, collection, rkey)],
+                read,
+            )
+            .optional()?
+            .transpose()
+    }
+
+    /// One page of a collection, newest key first unless `reverse` asks for the
+    /// other end, starting after `cursor` in whichever direction that is.
+    ///
+    /// # Errors
+    ///
+    /// If the read fails, or a row names a block that is not a CID.
+    pub fn records(
+        &self,
+        collection: &Nsid,
+        limit: u32,
+        cursor: Option<&str>,
+        reverse: bool,
+    ) -> Result<Vec<Record>, Error> {
+        let query = format!(
+            r#"select "record"."uri", "record"."cid", "repo_block"."content"
+               from "record" join "repo_block" on "repo_block"."cid" = "record"."cid"
+               where "record"."collection" = ?1 and (?2 is null or "record"."rkey" {} ?2)
+               order by "record"."rkey" {} limit ?3"#,
+            if reverse { ">" } else { "<" },
+            if reverse { "asc" } else { "desc" },
+        );
+        self.db
+            .prepare(&query)?
+            .query_map(params![collection.as_str(), cursor, limit], read)?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .collect()
+    }
+
+    /// Every collection the index has a record in.
+    ///
+    /// # Errors
+    ///
+    /// If the read fails, or a row names a collection that is not an NSID.
+    pub fn collections(&self) -> Result<Vec<Nsid>, Error> {
+        self.db
+            .prepare(r#"select distinct "collection" from "record" order by "collection""#)?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .map(|collection| {
+                collection?
+                    .parse()
+                    .map_err(|_| Error::Malformed("an indexed collection that is not an NSID"))
+            })
+            .collect()
+    }
+
     /// Whose store this is.
     #[must_use]
     pub fn did(&self) -> &Did {
@@ -234,6 +309,15 @@ impl Store for Actor {
             .map(|found| found.unwrap_or(false))
             .map_err(|error| unreachable(&error))
     }
+}
+
+/// One indexed row, left for the caller to fault on the CID it holds.
+fn read(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Record, Error>> {
+    let (uri, cid, value): (String, String, Vec<u8>) = (row.get(0)?, row.get(1)?, row.get(2)?);
+    Ok(match cid.parse() {
+        Ok(cid) => Ok(Record { uri, cid, value }),
+        Err(_) => Err(Error::Malformed("an indexed record that is not a CID")),
+    })
 }
 
 /// What the index keys a record under, which is what a client is handed back
