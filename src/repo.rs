@@ -53,6 +53,9 @@ pub enum Error {
     /// The same, but waiting is what would help.
     #[error("store is busy")]
     StoreBusy,
+    /// A record holding something the data model has no room for.
+    #[error("not record data: {0}")]
+    NotRecordData(&'static str),
     /// A revision with nothing above it left in the field.
     #[error("no revision follows {0}")]
     NoRevisionAfter(Tid),
@@ -61,10 +64,12 @@ pub enum Error {
 mod block;
 pub mod car;
 mod commit;
+mod json;
 mod mst;
 
 pub use block::{BlockMap, Store, cid_for, decode, encode, read};
 pub use commit::{Commit, VERSION};
+pub use json::{from_json, to_json};
 pub use mst::{Leaf, Mst};
 
 /// One record operation, to be applied with others under a single commit.
