@@ -161,6 +161,22 @@ fn routes(context: Context) -> Router {
             xrpc::procedure(app_password::revoke),
         )
         .route(
+            "/xrpc/com.atproto.repo.createRecord",
+            xrpc::procedure(repo::create_record),
+        )
+        .route(
+            "/xrpc/com.atproto.repo.putRecord",
+            xrpc::procedure(repo::put_record),
+        )
+        .route(
+            "/xrpc/com.atproto.repo.deleteRecord",
+            xrpc::procedure(repo::delete_record),
+        )
+        .route(
+            "/xrpc/com.atproto.repo.applyWrites",
+            xrpc::procedure(repo::apply_writes),
+        )
+        .route(
             "/xrpc/com.atproto.repo.getRecord",
             xrpc::query(repo::get_record),
         )

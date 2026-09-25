@@ -93,6 +93,15 @@ pub enum Write {
         /// What to put there instead.
         record: Ipld,
     },
+    /// Writes a record whether or not the key is taken.
+    Put {
+        /// The collection it belongs to.
+        collection: Nsid,
+        /// Its key within that collection.
+        rkey: RecordKey,
+        /// The record itself.
+        record: Ipld,
+    },
     /// Takes the record at a key out.
     Delete {
         /// The collection it belonged to.
@@ -112,6 +121,9 @@ impl Write {
         | Self::Update {
             collection, rkey, ..
         }
+        | Self::Put {
+            collection, rkey, ..
+        }
         | Self::Delete { collection, rkey }) = self;
         (collection, rkey)
     }
@@ -119,13 +131,7 @@ impl Write {
     /// Where in the tree this operation lands.
     #[must_use]
     pub fn key(&self) -> String {
-        let (Self::Create {
-            collection, rkey, ..
-        }
-        | Self::Update {
-            collection, rkey, ..
-        }
-        | Self::Delete { collection, rkey }) = self;
+        let (collection, rkey) = self.target();
         format!("{collection}/{rkey}")
     }
 }
@@ -195,6 +201,15 @@ impl Repo {
             data = match write {
                 Write::Create { record, .. } => data.add(store, &key, blocks.add(record)?)?,
                 Write::Update { record, .. } => data.update(store, &key, blocks.add(record)?)?,
+                // The one write that does not care which of the two it is.
+                Write::Put { record, .. } => {
+                    let cid = blocks.add(record)?;
+                    if data.get(store, &key)?.is_some() {
+                        data.update(store, &key, cid)?
+                    } else {
+                        data.add(store, &key, cid)?
+                    }
+                }
                 Write::Delete { .. } => data.delete(store, &key)?,
             };
         }

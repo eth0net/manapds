@@ -93,6 +93,9 @@ pub enum Error {
     /// The commit the caller expected to be replacing is not the one there.
     #[error("Commit was at {0}")]
     Swap(Cid),
+    /// The key holds something other than what the caller expected.
+    #[error("Record was at {0}")]
+    SwapRecord(String),
     /// The repository would not be built.
     #[error("{0}")]
     Repo(#[from] repo::Error),
@@ -129,7 +132,7 @@ impl Error {
             Self::Credentials => "AuthenticationRequired",
             Self::Plc(_) | Self::Repo(_) | Self::Storage(_) => "InternalServerError",
             Self::NoRepo(_) => "RepoNotFound",
-            Self::Swap(_) => "InvalidSwap",
+            Self::Swap(_) | Self::SwapRecord(_) => "InvalidSwap",
             Self::Email | Self::PasswordTooLong | Self::Taken(_) | Self::TooManyInvites => {
                 "InvalidRequest"
             }
@@ -184,6 +187,37 @@ pub struct AppPassword {
     pub created_at: Timestamp,
     /// Whether it reaches what a plain app password may not.
     pub privileged: bool,
+}
+
+/// What a caller believes is at a key, and the write is refused without.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Expect {
+    /// Whatever is there, which is what a call that does not ask means.
+    #[default]
+    Anything,
+    /// Nothing at all.
+    Nothing,
+    /// This block and no other.
+    Block(Cid),
+}
+
+/// One write, and what has to be at its key for it to land.
+#[derive(Clone, Debug)]
+pub struct Requested {
+    /// The write itself.
+    pub write: repo::Write,
+    /// What the caller believes it is replacing.
+    pub expect: Expect,
+}
+
+impl From<repo::Write> for Requested {
+    /// A write that asks nothing of what it lands on.
+    fn from(write: repo::Write) -> Self {
+        Self {
+            write,
+            expect: Expect::Anything,
+        }
+    }
 }
 
 /// Where one write landed.
@@ -526,7 +560,7 @@ impl Manager {
     pub async fn write(
         &self,
         did: &Did,
-        writes: Vec<repo::Write>,
+        requested: Vec<Requested>,
         swap: Option<Cid>,
     ) -> Result<Written, Error> {
         let key = self.directory.actor_key(did);
@@ -548,7 +582,8 @@ impl Manager {
             let mut repo = Repo::load(&actor, root.cid)?;
             let since = repo.rev().clone();
             let prev_data = repo.commit().data;
-            let planned = plan(&mut repo, &actor, &account, &writes)?;
+            let planned = plan(&mut repo, &actor, &account, &requested)?;
+            let writes: Vec<repo::Write> = requested.into_iter().map(|asked| asked.write).collect();
             let blocks = repo.apply(
                 &actor,
                 &writes,
@@ -616,6 +651,22 @@ impl Manager {
         })
         .await?;
         Ok(())
+    }
+
+    /// A record key nothing has used, for a call that did not name one.
+    ///
+    /// # Panics
+    ///
+    /// Never: every TID is a record key.
+    #[must_use]
+    pub fn record_key(&self) -> RecordKey {
+        self.clock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .mint()
+            .as_str()
+            .parse()
+            .expect("a TID is a record key")
     }
 
     /// The account an identifier names, whichever of the two kinds it is.
@@ -1068,15 +1119,27 @@ fn plan(
     repo: &mut Repo,
     store: &dyn repo::Store,
     did: &Did,
-    writes: &[repo::Write],
+    requested: &[Requested],
 ) -> Result<Plan, Error> {
-    let mut index = Vec::with_capacity(writes.len());
-    let mut ops = Vec::with_capacity(writes.len());
-    let mut results = Vec::with_capacity(writes.len());
-    for write in writes {
+    let mut index = Vec::with_capacity(requested.len());
+    let mut ops = Vec::with_capacity(requested.len());
+    let mut results = Vec::with_capacity(requested.len());
+    for asked in requested {
+        let write = &asked.write;
         let (collection, rkey) = write.target();
         let path = write.key();
         let prev = repo.get(store, collection, rkey)?;
+        match (asked.expect, prev) {
+            (Expect::Anything, _) | (Expect::Nothing, None) => {}
+            (Expect::Block(wanted), Some(held)) if wanted == held => {}
+            // The message names what is there, since that is what the caller
+            // has to swap against to try again.
+            (_, held) => {
+                return Err(Error::SwapRecord(
+                    held.map_or_else(|| "null".to_owned(), |held| held.to_string()),
+                ));
+            }
+        }
         let (action, cid) = match write {
             repo::Write::Create { record, .. } => {
                 ("create", Some(repo::cid_for(&repo::encode(record)?)))
@@ -1084,6 +1147,11 @@ fn plan(
             repo::Write::Update { record, .. } => {
                 ("update", Some(repo::cid_for(&repo::encode(record)?)))
             }
+            // What was there decides which of the two this one was.
+            repo::Write::Put { record, .. } => (
+                if prev.is_some() { "update" } else { "create" },
+                Some(repo::cid_for(&repo::encode(record)?)),
+            ),
             repo::Write::Delete { .. } => ("delete", None),
         };
         index.push(match cid {

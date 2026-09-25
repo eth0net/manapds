@@ -522,7 +522,11 @@ async fn a_write_lands_under_one_commit_and_moves_the_root() {
         .expect("a root");
 
     let written = manager
-        .write(&created.did, vec![record("3jqfcqzm4fc2j", "first")], None)
+        .write(
+            &created.did,
+            vec![record("3jqfcqzm4fc2j", "first").into()],
+            None,
+        )
         .await
         .expect("a commit");
     assert_eq!(
@@ -556,7 +560,7 @@ async fn a_write_lands_under_one_commit_and_moves_the_root() {
     let refused = manager
         .write(
             &created.did,
-            vec![record("3jqfcqzm4fd2j", "second")],
+            vec![record("3jqfcqzm4fd2j", "second").into()],
             Some(before.cid),
         )
         .await;

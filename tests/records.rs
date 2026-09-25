@@ -17,7 +17,7 @@ use manapds::crypto::{Algorithm, Keypair};
 use manapds::repo::{Ipld, Repo, Write};
 use manapds::store;
 use manapds::syntax::{Did, Nsid, RecordKey, TidClock};
-use manapds::xrpc::auth::Tokens;
+use manapds::xrpc::auth::{Scope, Tokens};
 use manapds::{server, store::keys};
 use serde_json::Value;
 use tempfile::TempDir;
@@ -96,6 +96,33 @@ fn served() -> (NormalizePath<Router>, Arc<account::Manager>, TempDir) {
     (server::router(context), manager, data)
 }
 
+/// One procedure, answered, signed in as the account.
+async fn post(router: &NormalizePath<Router>, path: &str, body: Value) -> (StatusCode, Value) {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("content-type", "application/json")
+        .header(
+            "authorization",
+            format!("Bearer {}", tokens().access(&account(), Scope::Access)),
+        )
+        .body(Body::from(body.to_string()))
+        .expect("a request");
+    let peer: SocketAddr = "203.0.113.1:9000".parse().expect("an address");
+    request.extensions_mut().insert(ConnectInfo(peer));
+
+    let response = router
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), 256 * 1024)
+        .await
+        .expect("a body");
+    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+}
+
 /// One query, answered.
 async fn get(router: &NormalizePath<Router>, path: &str) -> (StatusCode, Value) {
     let mut request = Request::builder()
@@ -122,7 +149,11 @@ async fn get(router: &NormalizePath<Router>, path: &str) -> (StatusCode, Value) 
 async fn a_record_is_read_back_by_its_key() {
     let (router, manager, _data) = served();
     manager
-        .write(&account(), vec![record("3jqfcqzm4fc2j", "first")], None)
+        .write(
+            &account(),
+            vec![record("3jqfcqzm4fc2j", "first").into()],
+            None,
+        )
         .await
         .expect("a commit");
 
@@ -168,9 +199,9 @@ async fn a_collection_is_paged_newest_first_and_stops_saying_so() {
         .write(
             &account(),
             vec![
-                record("3jqfcqzm4fa2j", "first"),
-                record("3jqfcqzm4fb2j", "second"),
-                record("3jqfcqzm4fc2j", "third"),
+                record("3jqfcqzm4fa2j", "first").into(),
+                record("3jqfcqzm4fb2j", "second").into(),
+                record("3jqfcqzm4fc2j", "third").into(),
             ],
             None,
         )
@@ -207,4 +238,188 @@ async fn a_collection_is_paged_newest_first_and_stops_saying_so() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["records"].as_array().expect("records").len(), 1);
     assert_eq!(body["cursor"], Value::Null);
+}
+
+#[tokio::test]
+async fn a_record_is_written_read_replaced_and_taken_out() {
+    let (router, _manager, _data) = served();
+    let did = account();
+
+    let (status, written) = post(
+        &router,
+        "/xrpc/com.atproto.repo.createRecord",
+        serde_json::json!({
+            "repo": did.as_str(),
+            "collection": "com.example.record",
+            "rkey": "3jqfcqzm4fc2j",
+            "record": { "$type": "com.example.record", "text": "first" },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{written}");
+    assert_eq!(
+        written["uri"],
+        format!("at://{did}/com.example.record/3jqfcqzm4fc2j")
+    );
+    let first = written["cid"].as_str().expect("a cid").to_owned();
+
+    // Writing the same key again is a put, and the swap has to name what is
+    // there rather than what the caller first wrote.
+    let (status, refused) = post(
+        &router,
+        "/xrpc/com.atproto.repo.putRecord",
+        serde_json::json!({
+            "repo": did.as_str(),
+            "collection": "com.example.record",
+            "rkey": "3jqfcqzm4fc2j",
+            "record": { "$type": "com.example.record", "text": "second" },
+            "swapRecord": null,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"], "InvalidSwap");
+
+    let (status, replaced) = post(
+        &router,
+        "/xrpc/com.atproto.repo.putRecord",
+        serde_json::json!({
+            "repo": did.as_str(),
+            "collection": "com.example.record",
+            "rkey": "3jqfcqzm4fc2j",
+            "record": { "$type": "com.example.record", "text": "second" },
+            "swapRecord": first,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{replaced}");
+    assert_ne!(replaced["cid"], first);
+
+    let (status, body) = get(
+        &router,
+        "/xrpc/com.atproto.repo.getRecord\
+         ?repo=alice.pds.example.com&collection=com.example.record&rkey=3jqfcqzm4fc2j",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["value"]["text"], "second");
+
+    let (status, removed) = post(
+        &router,
+        "/xrpc/com.atproto.repo.deleteRecord",
+        serde_json::json!({
+            "repo": did.as_str(),
+            "collection": "com.example.record",
+            "rkey": "3jqfcqzm4fc2j",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert!(removed["commit"]["rev"].is_string());
+
+    let (status, _) = get(
+        &router,
+        "/xrpc/com.atproto.repo.getRecord\
+         ?repo=alice.pds.example.com&collection=com.example.record&rkey=3jqfcqzm4fc2j",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn a_set_of_writes_lands_under_one_commit_and_answers_in_order() {
+    let (router, _manager, _data) = served();
+    let did = account();
+
+    let (status, applied) = post(
+        &router,
+        "/xrpc/com.atproto.repo.applyWrites",
+        serde_json::json!({
+            "repo": did.as_str(),
+            "writes": [
+                {
+                    "$type": "com.atproto.repo.applyWrites#create",
+                    "collection": "com.example.record",
+                    "rkey": "3jqfcqzm4fa2j",
+                    "value": { "$type": "com.example.record", "text": "first" },
+                },
+                {
+                    "$type": "com.atproto.repo.applyWrites#create",
+                    "collection": "com.example.record",
+                    "rkey": "3jqfcqzm4fb2j",
+                    "value": { "$type": "com.example.record", "text": "second" },
+                },
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    let results = applied["results"].as_array().expect("results");
+    assert_eq!(results.len(), 2);
+    assert_eq!(
+        results[0]["$type"],
+        "com.atproto.repo.applyWrites#createResult"
+    );
+
+    // Both went in under one revision, which is the point of the method.
+    let (_, page) = get(
+        &router,
+        "/xrpc/com.atproto.repo.listRecords\
+         ?repo=alice.pds.example.com&collection=com.example.record",
+    )
+    .await;
+    assert_eq!(page["records"].as_array().expect("records").len(), 2);
+
+    // A delete beside an update answers with the shape each one is owed.
+    let (status, applied) = post(
+        &router,
+        "/xrpc/com.atproto.repo.applyWrites",
+        serde_json::json!({
+            "repo": did.as_str(),
+            "writes": [
+                {
+                    "$type": "com.atproto.repo.applyWrites#update",
+                    "collection": "com.example.record",
+                    "rkey": "3jqfcqzm4fa2j",
+                    "value": { "$type": "com.example.record", "text": "again" },
+                },
+                {
+                    "$type": "com.atproto.repo.applyWrites#delete",
+                    "collection": "com.example.record",
+                    "rkey": "3jqfcqzm4fb2j",
+                },
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    let results = applied["results"].as_array().expect("results");
+    assert_eq!(
+        results[0]["$type"],
+        "com.atproto.repo.applyWrites#updateResult"
+    );
+    assert_eq!(
+        results[1]["$type"],
+        "com.atproto.repo.applyWrites#deleteResult"
+    );
+    assert!(results[1].get("uri").is_none());
+}
+
+#[tokio::test]
+async fn a_caller_may_only_write_to_the_repository_it_signed_in_as() {
+    let (router, _manager, _data) = served();
+
+    let (status, refused) = post(
+        &router,
+        "/xrpc/com.atproto.repo.createRecord",
+        serde_json::json!({
+            "repo": "did:plc:mav423b24thku7ezkx7yaray",
+            "collection": "com.example.record",
+            "record": { "$type": "com.example.record", "text": "not mine" },
+        }),
+    )
+    .await;
+    // Nothing on this server answers to it, so it never reaches the check.
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"], "RepoNotFound");
 }

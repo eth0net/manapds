@@ -6,17 +6,145 @@ use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::account::{self, Manager};
+use crate::account::{self, Expect, Manager, Requested};
 use crate::repo;
+use crate::repo::Write;
 use crate::store;
 use crate::syntax::{AtIdentifier, Did, Handle, Nsid, RecordKey};
-use crate::xrpc::{self, Params};
+use crate::xrpc::{self, Input, Params, auth::Access};
 
 /// The most records one page holds, and what a page holds unasked.
 const PAGE: u32 = 50;
 
 /// The most any page holds, however many are asked for.
 const LONGEST_PAGE: u32 = 100;
+
+/// The most writes one call applies, which is the reference's own cap.
+const WRITES: usize = 200;
+
+/// A record to write to a key nothing holds.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Creating {
+    repo: String,
+    collection: String,
+    rkey: Option<String>,
+    record: Value,
+    swap_commit: Option<String>,
+}
+
+/// What a caller believes is at a key.
+///
+/// The three cases are three answers: a field left out asks nothing of the
+/// key, an explicit null asks for one holding nothing, and a CID asks for that
+/// block. `Nothing` is declared before `Unasked` because both read a null and
+/// the first match wins.
+#[derive(Debug, Default, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum Swap {
+    /// The block that has to be there.
+    Block(String),
+    /// Nothing, which is what an explicit null asks for.
+    Nothing,
+    /// Not asked at all.
+    #[default]
+    Unasked,
+}
+
+/// A record to write whether or not the key holds one.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Putting {
+    repo: String,
+    collection: String,
+    rkey: String,
+    record: Value,
+    #[serde(default)]
+    swap_record: Swap,
+    swap_commit: Option<String>,
+}
+
+/// A record to take out.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Deleting {
+    repo: String,
+    collection: String,
+    rkey: String,
+    #[serde(default)]
+    swap_record: Swap,
+    swap_commit: Option<String>,
+}
+
+/// A set of writes to apply under one commit.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Applying {
+    repo: String,
+    writes: Vec<Asked>,
+    swap_commit: Option<String>,
+}
+
+/// One write in such a set, named by the lexicon it belongs to.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "$type")]
+pub(crate) enum Asked {
+    #[serde(rename = "com.atproto.repo.applyWrites#create")]
+    Create {
+        collection: String,
+        rkey: Option<String>,
+        value: Value,
+    },
+    #[serde(rename = "com.atproto.repo.applyWrites#update")]
+    Update {
+        collection: String,
+        rkey: String,
+        value: Value,
+    },
+    #[serde(rename = "com.atproto.repo.applyWrites#delete")]
+    Delete { collection: String, rkey: String },
+}
+
+/// Where a commit left the repository.
+#[derive(Debug, Serialize)]
+pub(crate) struct At {
+    cid: String,
+    rev: String,
+}
+
+/// What writing one record answers with.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Landed {
+    uri: String,
+    cid: String,
+    commit: At,
+}
+
+/// What taking one out answers with.
+#[derive(Debug, Serialize)]
+pub(crate) struct Removed {
+    commit: At,
+}
+
+/// What a set of writes answers with.
+#[derive(Debug, Serialize)]
+pub(crate) struct Applied {
+    commit: At,
+    results: Vec<Outcome>,
+}
+
+/// What one write in such a set did, named the way its lexicon names it.
+#[derive(Debug, Serialize)]
+#[serde(tag = "$type")]
+pub(crate) enum Outcome {
+    #[serde(rename = "com.atproto.repo.applyWrites#createResult")]
+    Create { uri: String, cid: String },
+    #[serde(rename = "com.atproto.repo.applyWrites#updateResult")]
+    Update { uri: String, cid: String },
+    #[serde(rename = "com.atproto.repo.applyWrites#deleteResult")]
+    Delete {},
+}
 
 /// Which record to read.
 #[derive(Debug, Deserialize)]
@@ -72,6 +200,183 @@ pub(crate) struct Description {
     /// Whether the document the directory holds names the handle this server
     /// does, which is the whole reason a client is shown both.
     handle_is_correct: bool,
+}
+
+/// `com.atproto.repo.createRecord`
+///
+/// # Errors
+///
+/// If the caller is not the repository it names, the key is taken, a swap
+/// names a commit that is not the one there, or storage will not answer.
+pub(crate) async fn create_record(
+    State(accounts): State<Arc<Manager>>,
+    access: Access,
+    Input(input): Input<Creating>,
+) -> xrpc::Result<Json<Landed>> {
+    let did = owned(&accounts, &access, &input.repo).await?;
+    let write = Write::Create {
+        collection: collection(&input.collection)?,
+        rkey: match &input.rkey {
+            Some(rkey) => record_key(rkey)?,
+            None => accounts.record_key(),
+        },
+        record: record(input.record)?,
+    };
+    landed(
+        accounts
+            .write(
+                &did,
+                vec![write.into()],
+                swap(input.swap_commit.as_deref())?,
+            )
+            .await?,
+    )
+}
+
+/// `com.atproto.repo.putRecord`
+///
+/// # Errors
+///
+/// If the caller is not the repository it names, a swap names something that
+/// is not there, or storage will not answer.
+pub(crate) async fn put_record(
+    State(accounts): State<Arc<Manager>>,
+    access: Access,
+    Input(input): Input<Putting>,
+) -> xrpc::Result<Json<Landed>> {
+    let did = owned(&accounts, &access, &input.repo).await?;
+    let asked = Requested {
+        write: Write::Put {
+            collection: collection(&input.collection)?,
+            rkey: record_key(&input.rkey)?,
+            record: record(input.record)?,
+        },
+        expect: expected(&input.swap_record)?,
+    };
+    landed(
+        accounts
+            .write(&did, vec![asked], swap(input.swap_commit.as_deref())?)
+            .await?,
+    )
+}
+
+/// `com.atproto.repo.deleteRecord`
+///
+/// # Errors
+///
+/// If the caller is not the repository it names, nothing is at the key, a swap
+/// names something that is not there, or storage will not answer.
+pub(crate) async fn delete_record(
+    State(accounts): State<Arc<Manager>>,
+    access: Access,
+    Input(input): Input<Deleting>,
+) -> xrpc::Result<Json<Removed>> {
+    let did = owned(&accounts, &access, &input.repo).await?;
+    let asked = Requested {
+        write: Write::Delete {
+            collection: collection(&input.collection)?,
+            rkey: record_key(&input.rkey)?,
+        },
+        expect: expected(&input.swap_record)?,
+    };
+    let written = accounts
+        .write(&did, vec![asked], swap(input.swap_commit.as_deref())?)
+        .await?;
+    Ok(Json(Removed {
+        commit: At {
+            cid: written.commit.to_string(),
+            rev: written.rev.as_str().to_owned(),
+        },
+    }))
+}
+
+/// `com.atproto.repo.applyWrites`
+///
+/// # Errors
+///
+/// If the caller is not the repository it names, the call asks for more writes
+/// than one commit takes, a key is taken or missing, or storage will not
+/// answer.
+pub(crate) async fn apply_writes(
+    State(accounts): State<Arc<Manager>>,
+    access: Access,
+    Input(input): Input<Applying>,
+) -> xrpc::Result<Json<Applied>> {
+    let did = owned(&accounts, &access, &input.repo).await?;
+    if input.writes.len() > WRITES {
+        return Err(xrpc::Error::invalid_request(format!(
+            "Too many writes. Max: {WRITES}"
+        )));
+    }
+
+    let mut requested = Vec::with_capacity(input.writes.len());
+    for asked in input.writes {
+        requested.push(Requested::from(match asked {
+            Asked::Create {
+                collection: nsid,
+                rkey,
+                value,
+            } => Write::Create {
+                collection: collection(&nsid)?,
+                rkey: match &rkey {
+                    Some(rkey) => record_key(rkey)?,
+                    None => accounts.record_key(),
+                },
+                record: record(value)?,
+            },
+            Asked::Update {
+                collection: nsid,
+                rkey,
+                value,
+            } => Write::Update {
+                collection: collection(&nsid)?,
+                rkey: record_key(&rkey)?,
+                record: record(value)?,
+            },
+            Asked::Delete {
+                collection: nsid,
+                rkey,
+            } => Write::Delete {
+                collection: collection(&nsid)?,
+                rkey: record_key(&rkey)?,
+            },
+        }));
+    }
+
+    let kinds: Vec<&'static str> = requested
+        .iter()
+        .map(|asked| match asked.write {
+            Write::Delete { .. } => "delete",
+            Write::Update { .. } => "update",
+            _ => "create",
+        })
+        .collect();
+    let written = accounts
+        .write(&did, requested, swap(input.swap_commit.as_deref())?)
+        .await?;
+
+    Ok(Json(Applied {
+        commit: At {
+            cid: written.commit.to_string(),
+            rev: written.rev.as_str().to_owned(),
+        },
+        results: written
+            .results
+            .into_iter()
+            .zip(kinds)
+            .map(|(result, kind)| match (kind, result.cid) {
+                ("update", Some(cid)) => Outcome::Update {
+                    uri: result.uri,
+                    cid: cid.to_string(),
+                },
+                (_, Some(cid)) => Outcome::Create {
+                    uri: result.uri,
+                    cid: cid.to_string(),
+                },
+                (_, None) => Outcome::Delete {},
+            })
+            .collect(),
+    }))
 }
 
 /// `com.atproto.repo.getRecord`
@@ -151,6 +456,62 @@ pub(crate) async fn describe_repo(
         did: account.did.as_str().to_owned(),
         did_doc: document,
         collections: collections.into_iter().map(Nsid::into_string).collect(),
+    }))
+}
+
+/// The repository a caller named, which has to be the one it signed in as.
+async fn owned(accounts: &Manager, access: &Access, repo: &str) -> xrpc::Result<Did> {
+    let did = repository(accounts, repo).await?;
+    if did != access.did {
+        return Err(xrpc::Error::new(xrpc::Status::Forbidden)
+            .saying("Not the repository this session reaches"));
+    }
+    Ok(did)
+}
+
+/// A record as it was sent, in the shape it is stored in.
+fn record(value: Value) -> xrpc::Result<crate::repo::Ipld> {
+    repo::from_json(value)
+        .map_err(|invalid| xrpc::Error::invalid_request(format!("Invalid record: {invalid}")))
+}
+
+/// The commit a caller believes the repository is on.
+fn swap(cid: Option<&str>) -> xrpc::Result<Option<crate::repo::Cid>> {
+    cid.map(|cid| {
+        cid.parse()
+            .map_err(|_| xrpc::Error::invalid_request("Invalid swapCommit").named("InvalidSwap"))
+    })
+    .transpose()
+}
+
+/// What a caller believes is at the key, where an absent field asks nothing
+/// and an explicit null asks for a key holding nothing.
+fn expected(swap: &Swap) -> xrpc::Result<Expect> {
+    match swap {
+        Swap::Unasked => Ok(Expect::Anything),
+        Swap::Nothing => Ok(Expect::Nothing),
+        Swap::Block(cid) => cid
+            .parse()
+            .map(Expect::Block)
+            .map_err(|_| xrpc::Error::invalid_request("Invalid swapRecord").named("InvalidSwap")),
+    }
+}
+
+/// What one record landing answers with.
+fn landed(written: crate::account::Written) -> xrpc::Result<Json<Landed>> {
+    let at = At {
+        cid: written.commit.to_string(),
+        rev: written.rev.as_str().to_owned(),
+    };
+    let one = written
+        .results
+        .into_iter()
+        .next()
+        .ok_or_else(|| xrpc::Error::new(xrpc::Status::InternalServerError))?;
+    Ok(Json(Landed {
+        uri: one.uri,
+        cid: one.cid.unwrap_or_default().to_string(),
+        commit: at,
     }))
 }
 
