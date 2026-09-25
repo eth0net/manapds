@@ -49,17 +49,19 @@ open the files while nothing else is holding them.
 
 Three things are owed to steps that have not started. `getRepo` may not be
 served without the budget of its own that its exemption from the shared one
-assumes, which is a pair of numbers beside the two `limit.rs` already holds.
+assumes, which is a pair of numbers beside the ones `limit.rs` already holds.
 `createAccount` needs `reserved_keys/` and the `did-op` file beside an actor's
 key, since both are part of reading a directory the reference left behind. And
 whatever first verifies a service token has to allow a malleable signature on
 that path alone — upstream issues them, account commits stay strict, and
 conflating the two would loosen the wrong one.
 
-Rate limits land with step 6 rather than later, at the reference's numbers:
-`applyWrites` capped at 200 operations, and the hourly and daily point budgets
-that decide how long a large import takes. An importer tuned against limits
-this server does not enforce would fall over on any other one.
+Records left three of their own standing. A record is stored as it arrives
+rather than checked against the lexicon it names, so `validate` is answered by
+not refusing anything. Nothing clears a blob's `tempKey` when a record names it
+and nothing sweeps one no record ever did, which is a disk that only grows. And
+a write that would break a backlink the reference enforces — one like per
+subject, one follow per account — is taken as written.
 
 ## After v0
 

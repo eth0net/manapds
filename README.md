@@ -12,8 +12,9 @@ has untested assumptions rather than none.
 ## Status
 
 Early. An account can be created against the real PLC directory, signed in to,
-and resolved by handle; nothing can be written to its repository yet, and there
-is no OAuth. [`docs/roadmap.md`](docs/roadmap.md) is the order of work and
+resolved by handle, and written to: records go in and come back out, and blobs
+with them. There is no OAuth yet and nothing is broadcast to the network.
+[`docs/roadmap.md`](docs/roadmap.md) is the order of work and
 [`docs/`](docs/architecture.md) carries the reasoning.
 
 ## Running it
