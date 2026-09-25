@@ -1043,3 +1043,26 @@ fn a_budget_holding_every_key_it_will_counts_nobody_new() {
     // A key already in there is still held to its budget.
     assert!(limiter.consume("0", 1).exceeded);
 }
+
+#[test]
+fn a_repository_write_spends_a_budget_the_account_holds() {
+    let mut config = config();
+    config.rate_limits = true;
+    let limits = limit::Limits::new(&config).expect("budgets");
+
+    // The hourly budget is spent in the currency the three methods cost in,
+    // so what it allows is what it says it allows.
+    assert_eq!(limits.writing(&account(), 4998), None);
+    assert_eq!(limits.writing(&account(), limit::DELETE), None);
+    assert_eq!(limits.writing(&account(), limit::DELETE), None);
+    let past = limits
+        .writing(&account(), limit::CREATE)
+        .expect("one write too many");
+    assert_eq!(past.limit, 5000);
+    assert!(past.exceeded);
+    assert_eq!(past.remaining, 0);
+
+    // And it is the account's, not the caller's: another one is untouched.
+    let other: Did = "did:plc:mav423b24thku7ezkx7yaray".parse().expect("a DID");
+    assert_eq!(limits.writing(&other, limit::CREATE), None);
+}

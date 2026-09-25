@@ -11,6 +11,7 @@ use crate::repo;
 use crate::repo::Write;
 use crate::store;
 use crate::syntax::{AtIdentifier, Did, Handle, Nsid, RecordKey};
+use crate::xrpc::limit::{self, Limits};
 use crate::xrpc::{self, Input, Params, auth::Access};
 
 /// The most records one page holds, and what a page holds unasked.
@@ -210,10 +211,12 @@ pub(crate) struct Description {
 /// names a commit that is not the one there, or storage will not answer.
 pub(crate) async fn create_record(
     State(accounts): State<Arc<Manager>>,
+    State(limits): State<Option<Arc<Limits>>>,
     access: Access,
     Input(input): Input<Creating>,
 ) -> xrpc::Result<Json<Landed>> {
     let did = owned(&accounts, &access, &input.repo).await?;
+    spend(limits.as_deref(), &did, limit::CREATE)?;
     let write = Write::Create {
         collection: collection(&input.collection)?,
         rkey: match &input.rkey {
@@ -241,10 +244,12 @@ pub(crate) async fn create_record(
 /// is not there, or storage will not answer.
 pub(crate) async fn put_record(
     State(accounts): State<Arc<Manager>>,
+    State(limits): State<Option<Arc<Limits>>>,
     access: Access,
     Input(input): Input<Putting>,
 ) -> xrpc::Result<Json<Landed>> {
     let did = owned(&accounts, &access, &input.repo).await?;
+    spend(limits.as_deref(), &did, limit::PUT)?;
     let asked = Requested {
         write: Write::Put {
             collection: collection(&input.collection)?,
@@ -268,10 +273,12 @@ pub(crate) async fn put_record(
 /// names something that is not there, or storage will not answer.
 pub(crate) async fn delete_record(
     State(accounts): State<Arc<Manager>>,
+    State(limits): State<Option<Arc<Limits>>>,
     access: Access,
     Input(input): Input<Deleting>,
 ) -> xrpc::Result<Json<Removed>> {
     let did = owned(&accounts, &access, &input.repo).await?;
+    spend(limits.as_deref(), &did, limit::DELETE)?;
     let asked = Requested {
         write: Write::Delete {
             collection: collection(&input.collection)?,
@@ -299,6 +306,7 @@ pub(crate) async fn delete_record(
 /// answer.
 pub(crate) async fn apply_writes(
     State(accounts): State<Arc<Manager>>,
+    State(limits): State<Option<Arc<Limits>>>,
     access: Access,
     Input(input): Input<Applying>,
 ) -> xrpc::Result<Json<Applied>> {
@@ -308,6 +316,16 @@ pub(crate) async fn apply_writes(
             "Too many writes. Max: {WRITES}"
         )));
     }
+    let points = input
+        .writes
+        .iter()
+        .map(|asked| match asked {
+            Asked::Create { .. } => limit::CREATE,
+            Asked::Update { .. } => limit::PUT,
+            Asked::Delete { .. } => limit::DELETE,
+        })
+        .sum();
+    spend(limits.as_deref(), &did, points)?;
 
     let mut requested = Vec::with_capacity(input.writes.len());
     for asked in input.writes {
@@ -457,6 +475,14 @@ pub(crate) async fn describe_repo(
         did_doc: document,
         collections: collections.into_iter().map(Nsid::into_string).collect(),
     }))
+}
+
+/// Counts a write against what the account may spend on its own repository.
+fn spend(limits: Option<&Limits>, did: &Did, points: u32) -> xrpc::Result<()> {
+    match limits.and_then(|limits| limits.writing(did, points)) {
+        None => Ok(()),
+        Some(reading) => Err(xrpc::Error::new(xrpc::Status::RateLimitExceeded).limited(reading)),
+    }
 }
 
 /// The repository a caller named, which has to be the one it signed in as.

@@ -38,6 +38,8 @@ pub struct Context {
     pub accounts: Arc<account::Manager>,
     /// The secret every session token is signed under.
     pub tokens: Tokens,
+    /// The budgets every caller is held to, or `None` where they are off.
+    pub limits: Option<Arc<Limits>>,
 }
 
 impl Context {
@@ -70,6 +72,7 @@ impl Context {
     #[must_use]
     pub fn new(config: Arc<Config>, accounts: Arc<account::Manager>, tokens: Tokens) -> Self {
         Self {
+            limits: Limits::new(&config).map(Arc::new),
             config,
             accounts,
             tokens,
@@ -92,6 +95,12 @@ impl FromRef<Context> for Arc<Config> {
 impl FromRef<Context> for Arc<account::Manager> {
     fn from_ref(context: &Context) -> Self {
         Arc::clone(&context.accounts)
+    }
+}
+
+impl FromRef<Context> for Option<Arc<Limits>> {
+    fn from_ref(context: &Context) -> Self {
+        context.limits.clone()
     }
 }
 
@@ -124,7 +133,7 @@ pub fn router(context: Context) -> NormalizePath<Router> {
 }
 
 fn routes(context: Context) -> Router {
-    let limits = Limits::new(&context.config).map(Arc::new);
+    let limits = context.limits.clone();
     // Only the blob route takes a body this large; every other one is a small
     // JSON object and keeps axum's own limit.
     let uploads = usize::try_from(context.config.blob_upload_limit).unwrap_or(usize::MAX);

@@ -18,6 +18,7 @@ use manapds::repo::{Ipld, Repo, Write};
 use manapds::store;
 use manapds::syntax::{Did, Nsid, RecordKey, TidClock};
 use manapds::xrpc::auth::{Scope, Tokens};
+use manapds::xrpc::limit::{self, Limits};
 use manapds::{server, store::keys};
 use serde_json::Value;
 use tempfile::TempDir;
@@ -50,6 +51,25 @@ fn record(rkey: &str, text: &str) -> Write {
 /// A server holding one account whose repository is already on disk, which is
 /// what signing up would have left behind.
 fn served() -> (NormalizePath<Router>, Arc<account::Manager>, TempDir) {
+    let (router, manager, data, _) = standing(false);
+    (router, manager, data)
+}
+
+/// The same, with the budgets on and the context they are held in, so a test
+/// can spend one without making five thousand requests.
+fn budgeted() -> (NormalizePath<Router>, Arc<Limits>, TempDir) {
+    let (router, _, data, limits) = standing(true);
+    (router, limits.expect("budgets"), data)
+}
+
+fn standing(
+    rate_limits: bool,
+) -> (
+    NormalizePath<Router>,
+    Arc<account::Manager>,
+    TempDir,
+    Option<Arc<Limits>>,
+) {
     let data = tempfile::tempdir().expect("a directory");
     let directory = store::Directory::new(data.path());
     let did = account();
@@ -81,11 +101,9 @@ fn served() -> (NormalizePath<Router>, Arc<account::Manager>, TempDir) {
         })
         .expect("an account");
 
-    let config = Arc::new(common::config(
-        "pds.example.com",
-        data.path(),
-        "http://127.0.0.1:1",
-    ));
+    let mut config = common::config("pds.example.com", data.path(), "http://127.0.0.1:1");
+    config.rate_limits = rate_limits;
+    let config = Arc::new(config);
     let manager = Arc::new(account::Manager::new(
         Arc::clone(&config),
         accounts,
@@ -93,7 +111,8 @@ fn served() -> (NormalizePath<Router>, Arc<account::Manager>, TempDir) {
         tokens(),
     ));
     let context = server::Context::new(config, Arc::clone(&manager), tokens());
-    (server::router(context), manager, data)
+    let limits = context.limits.clone();
+    (server::router(context), manager, data, limits)
 }
 
 /// One procedure, answered, signed in as the account.
@@ -489,4 +508,43 @@ async fn a_blob_is_taken_in_and_handed_back_as_it_was_sent() {
         .await
         .expect("a body");
     assert_eq!(served.to_vec(), vec![1u8, 2, 3, 4]);
+}
+
+#[tokio::test]
+async fn an_account_past_its_write_budget_is_told_when_to_come_back() {
+    let (router, limits, _data) = budgeted();
+    let did = account();
+
+    // Spent here rather than over five thousand requests, against the same
+    // budget the handler reaches.
+    while limits.writing(&did, limit::CREATE).is_none() {}
+
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/xrpc/com.atproto.repo.createRecord")
+        .header("content-type", "application/json")
+        .header(
+            "authorization",
+            format!("Bearer {}", tokens().access(&did, Scope::Access)),
+        )
+        .body(Body::from(
+            serde_json::json!({
+                "repo": did.as_str(),
+                "collection": "com.example.record",
+                "record": { "$type": "com.example.record", "text": "one too many" },
+            })
+            .to_string(),
+        ))
+        .expect("a request");
+    let peer: SocketAddr = "203.0.113.1:9000".parse().expect("an address");
+    request.extensions_mut().insert(ConnectInfo(peer));
+
+    let response = router
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    // Refused with the one header that tells a client what to do about it.
+    assert!(response.headers().contains_key("retry-after"));
 }

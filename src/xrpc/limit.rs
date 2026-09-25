@@ -20,6 +20,7 @@ use axum::{
 use hyper::body::Body as _;
 
 use crate::config::{Config, Secret};
+use crate::syntax::Did;
 
 use super::{Error, Status};
 
@@ -51,6 +52,19 @@ const SESSION: [(u32, Duration); 2] = [
 
 /// What signing up costs.
 const SIGNUP: (u32, Duration) = (100, Duration::from_mins(5));
+
+/// What one account may spend writing to its own repository, by the hour and
+/// by the day. A create costs three, a put two and a delete one, which is what
+/// makes the two numbers mean what the reference means by them.
+const WRITES: [(u32, Duration); 2] = [
+    (5000, Duration::from_hours(1)),
+    (35000, Duration::from_hours(24)),
+];
+
+/// What each kind of write costs against those.
+pub const CREATE: u32 = 3;
+pub const PUT: u32 = 2;
+pub const DELETE: u32 = 1;
 
 const CREATE_SESSION: &str = "/xrpc/com.atproto.server.createSession";
 const CREATE_ACCOUNT: &str = "/xrpc/com.atproto.server.createAccount";
@@ -228,6 +242,7 @@ pub struct Limits {
     global: Limiter,
     session: Vec<Limiter>,
     signup: Limiter,
+    writes: Vec<Limiter>,
     bypass_key: Option<Secret>,
     bypass_ips: Vec<IpAddr>,
 }
@@ -253,6 +268,10 @@ impl Limits {
                 .map(|(points, window)| Limiter::new(points, window))
                 .collect(),
             signup: Limiter::new(SIGNUP.0, SIGNUP.1),
+            writes: WRITES
+                .into_iter()
+                .map(|(points, window)| Limiter::new(points, window))
+                .collect(),
             bypass_key: config.rate_limit_bypass_key.clone(),
             bypass_ips: config.rate_limit_bypass_ips.clone(),
         })
@@ -280,6 +299,18 @@ impl Limits {
             }
             _ => (request, Vec::new()),
         }
+    }
+
+    /// Counts a write against what the account may spend on its own
+    /// repository, and says which budget it went past if it did.
+    ///
+    /// Keyed by the account rather than by the caller, since the budget is on
+    /// what a repository takes and not on where it is written from.
+    pub fn writing(&self, did: &Did, points: u32) -> Option<Reading> {
+        self.writes
+            .iter()
+            .map(|budget| budget.consume(did.as_str(), points))
+            .find(|reading| reading.exceeded)
     }
 
     fn bypassed(&self, caller: IpAddr, headers: &HeaderMap) -> bool {

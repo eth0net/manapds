@@ -123,6 +123,7 @@ pub struct Error {
     status: Status,
     name: Option<String>,
     message: Option<String>,
+    limit: Option<limit::Reading>,
 }
 
 impl Error {
@@ -133,6 +134,7 @@ impl Error {
             status,
             name: None,
             message: None,
+            limit: None,
         }
     }
 
@@ -160,6 +162,14 @@ impl Error {
     #[must_use]
     pub fn named(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
+        self
+    }
+
+    /// The budget this call went past, so the caller is told when to return
+    /// rather than only that it was refused.
+    #[must_use]
+    pub fn limited(mut self, reading: limit::Reading) -> Self {
+        self.limit = Some(reading);
         self
     }
 
@@ -220,6 +230,10 @@ impl IntoResponse for Error {
             error: self.name(),
             message: self.message(),
         };
-        (self.status.code(), Json(payload)).into_response()
+        let mut response = (self.status.code(), Json(payload)).into_response();
+        if let Some(reading) = self.limit {
+            reading.write(response.headers_mut());
+        }
+        response
     }
 }
