@@ -117,6 +117,13 @@ transaction that has to find every row.
 The reference implementation splits the same way, so the shapes are worth
 reading across where a table is unclear.
 
+A write reads the repository root, works out a revision from it and writes it
+back, and two of them at once would leave whichever finished second standing on
+a tree the first had already moved. The root is therefore moved only while it
+is still the one the revision was built on, and a write that finds it moved
+starts over against where the other one left it. Nothing is held between the
+read and the write, so a slow write never blocks a fast one.
+
 The data directory needs a POSIX filesystem. An account's files sit under its
 DID, a DID has colons in it, and Windows will not have a colon in a path
 component — so this runs where the reference runs and not on Windows, which
