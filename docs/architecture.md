@@ -95,6 +95,11 @@ operation inside one blocking task rather than holding a store across an await.
 That is why the store trait needs no `Sync` bound: an account's connection is
 moved into the task that uses it and moved back, never shared.
 
+The account database is a single connection the whole server shares, so every
+call to it runs in a task of that kind too, and the lock is taken and given up
+inside one. The rollback behind a dropped signup is the exception: it takes the
+lock where it stands, because `Drop` has no way to wait.
+
 ## Storage is split three ways
 
 - **One SQLite file per account**, holding that account's repository blocks,

@@ -38,7 +38,8 @@ pub(crate) async fn resolve_handle(
     // todo(resolver): a handle under somebody else's domain is theirs to
     // answer for, and reaching them needs DNS and an HTTP fetch.
     accounts
-        .resolve(&handle)?
+        .resolve(&handle)
+        .await?
         .map(|did| {
             Json(Resolved {
                 did: did.as_str().to_owned(),

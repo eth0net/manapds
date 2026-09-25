@@ -84,7 +84,8 @@ pub(crate) async fn list(
     access: Access,
 ) -> xrpc::Result<Json<Passwords>> {
     let passwords = accounts
-        .app_passwords(&access.did)?
+        .app_passwords(&access.did)
+        .await?
         .into_iter()
         .map(|(password, created_at)| Held {
             name: password.name,
@@ -105,6 +106,8 @@ pub(crate) async fn revoke(
     access: Access,
     Input(input): Input<Named>,
 ) -> xrpc::Result<()> {
-    accounts.revoke_app_password(&access.did, &input.name)?;
+    accounts
+        .revoke_app_password(&access.did, &input.name)
+        .await?;
     Ok(())
 }

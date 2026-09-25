@@ -192,7 +192,7 @@ pub struct Manager {
     config: Arc<Config>,
     login: Duration,
     directory: store::Directory,
-    accounts: Mutex<store::Accounts>,
+    accounts: Arc<Mutex<store::Accounts>>,
     hashing: Arc<tokio::sync::Semaphore>,
     sequencer: Mutex<store::Sequencer>,
     clock: Mutex<TidClock>,
@@ -215,7 +215,7 @@ impl Manager {
             directory: store::Directory::new(config.data_directory.clone()),
             plc: plc::Client::new(config.plc_url.clone()),
             rules: handle::Rules::new(&config.handle_domains, &config.reserved_handles),
-            accounts: Mutex::new(accounts),
+            accounts: Arc::new(Mutex::new(accounts)),
             hashing: Arc::new(tokio::sync::Semaphore::new(hashes_at_once())),
             sequencer: Mutex::new(sequencer),
             clock: Mutex::new(TidClock::new()),
@@ -261,7 +261,7 @@ impl Manager {
             return Err(Error::Email);
         }
         let handle = self.rules.signup(&signup.handle)?;
-        self.available(&handle, signup)?;
+        self.available(&handle, signup).await?;
 
         let signing_key = Keypair::generate(Algorithm::Secp256k1);
         // The account's own key first, then the server operator's: the
@@ -346,11 +346,9 @@ impl Manager {
         let (root, blocks) = self.start_repo(did, signing_key)?;
         let (commit, rev) = (root.cid, root.rev.clone());
 
-        // Hashed before the lock is taken, and not only by preference: a guard
-        // cannot be held across the await this now is.
         let password_scrypt = self.hashing(&signup.password, password::hash).await;
         let id = token_id();
-        self.locked().create(&store::Registration {
+        let registration = store::Registration {
             account: store::Account {
                 did: did.clone(),
                 handle: Some(handle.clone()),
@@ -366,7 +364,9 @@ impl Manager {
                 next_id: None,
                 app_password: None,
             }),
-        })?;
+        };
+        self.accounts(move |accounts| accounts.create(&registration))
+            .await?;
 
         Ok((self.mint(did, None, &id), blocks, commit, rev))
     }
@@ -425,20 +425,24 @@ impl Manager {
     }
 
     /// Whether the code, the handle and the email are all still free.
-    fn available(&self, handle: &Handle, signup: &Signup) -> Result<(), Error> {
-        let accounts = self.locked();
-        if let Some(code) = &signup.invite
-            && !accounts.invite_available(code)?
-        {
-            return Err(Error::Invite);
-        }
-        if accounts.by_handle(handle)?.is_some() {
-            return Err(Error::Taken("Handle"));
-        }
-        if accounts.by_email(&signup.email)?.is_some() {
-            return Err(Error::Taken("Email"));
-        }
-        Ok(())
+    async fn available(&self, handle: &Handle, signup: &Signup) -> Result<(), Error> {
+        let handle = handle.clone();
+        let (invite, email) = (signup.invite.clone(), signup.email.clone());
+        self.accounts(move |accounts| {
+            if let Some(code) = &invite
+                && !accounts.invite_available(code)?
+            {
+                return Err(Error::Invite);
+            }
+            if accounts.by_handle(&handle)?.is_some() {
+                return Err(Error::Taken("Handle"));
+            }
+            if accounts.by_email(&email)?.is_some() {
+                return Err(Error::Taken("Email"));
+            }
+            Ok(())
+        })
+        .await
     }
 
     /// Takes a half-finished signup back out, best effort: what is left behind
@@ -459,8 +463,9 @@ impl Manager {
     /// # Errors
     ///
     /// If storage will not answer.
-    pub fn account(&self, did: &Did) -> Result<Option<store::Account>, Error> {
-        Ok(self.locked().by_did(did)?)
+    pub async fn account(&self, did: &Did) -> Result<Option<store::Account>, Error> {
+        let did = did.clone();
+        Ok(self.accounts(move |accounts| accounts.by_did(&did)).await?)
     }
 
     /// The account a handle names, whatever case it is asked in.
@@ -468,8 +473,12 @@ impl Manager {
     /// # Errors
     ///
     /// If storage will not answer.
-    pub fn resolve(&self, handle: &Handle) -> Result<Option<Did>, Error> {
-        Ok(self.locked().by_handle(handle)?.map(|account| account.did))
+    pub async fn resolve(&self, handle: &Handle) -> Result<Option<Did>, Error> {
+        let handle = handle.clone();
+        Ok(self
+            .accounts(move |accounts| accounts.by_handle(&handle))
+            .await?
+            .map(|account| account.did))
     }
 
     /// Writes fresh invite codes for every account named, and says what each
@@ -478,7 +487,7 @@ impl Manager {
     /// # Errors
     ///
     /// If the call asks for more codes than one hands out, or a write fails.
-    pub fn mint_invites(
+    pub async fn mint_invites(
         &self,
         for_accounts: &[String],
         count: u32,
@@ -488,15 +497,23 @@ impl Manager {
         if count.saturating_mul(named) > INVITES {
             return Err(Error::TooManyInvites);
         }
-        for_accounts
+        let minted: Vec<(String, Vec<String>)> = for_accounts
             .iter()
             .map(|for_account| {
-                let codes: Vec<String> = (0..count).map(|_| self.invite_code()).collect();
-                self.locked()
-                    .create_invites(&codes, for_account, ADMINISTRATOR, uses)?;
-                Ok(codes)
+                let codes = (0..count).map(|_| self.invite_code()).collect();
+                (for_account.clone(), codes)
             })
-            .collect()
+            .collect();
+        self.accounts(move |accounts| {
+            minted
+                .into_iter()
+                .map(|(for_account, codes)| {
+                    accounts.create_invites(&codes, &for_account, ADMINISTRATOR, uses)?;
+                    Ok(codes)
+                })
+                .collect()
+        })
+        .await
     }
 
     /// `<hostname>-xxxxx-xxxxx`, with the dots in the hostname written as
@@ -533,7 +550,7 @@ impl Manager {
     /// # Errors
     ///
     /// If the write fails.
-    pub fn open_session(
+    pub async fn open_session(
         &self,
         did: &Did,
         app_password: Option<&store::AppPassword>,
@@ -546,7 +563,8 @@ impl Manager {
             next_id: None,
             app_password: app_password.cloned(),
         };
-        self.locked().store_session(&session)?;
+        self.accounts(move |accounts| accounts.store_session(&session))
+            .await?;
         Ok(self.mint(did, app_password, &id))
     }
 
@@ -560,47 +578,19 @@ impl Manager {
     /// # Errors
     ///
     /// If storage will not answer.
-    pub fn refresh_session(&self, id: &str) -> Result<Option<Credentials>, Error> {
-        loop {
-            let mut accounts = self.locked();
-            let Some(session) = accounts.session(id)? else {
-                return Ok(None);
-            };
-
-            // Housekeeping, and best-effort: an expired token is refused
-            // whether or not its row was still there to delete.
-            let now = Timestamp::now();
-            accounts.expire_sessions(&session.did, now)?;
-
-            // The token keeps whichever of its own expiry and the grace period
-            // comes first, so exchanging one never lengthens it.
-            let expires_at = session.expires_at.min(now + GRACE);
-            if expires_at <= now {
-                return Ok(None);
-            }
-
-            let next = store::Session {
-                id: session.next_id.clone().unwrap_or_else(token_id),
-                did: session.did.clone(),
-                expires_at: now + REFRESH_LIFETIME,
-                next_id: None,
-                app_password: session.app_password.clone(),
-            };
-            if !accounts.rotate(id, expires_at, &next)? {
-                // Another exchange named a different successor. Its row says
-                // which, so read it again rather than guessing.
-                drop(accounts);
-                continue;
-            }
-            drop(accounts);
-            let next = next.id;
-
-            return Ok(Some(self.mint(
-                &session.did,
-                session.app_password.as_ref(),
-                &next,
-            )));
-        }
+    pub async fn refresh_session(&self, id: &str) -> Result<Option<Credentials>, Error> {
+        let wanted = id.to_owned();
+        let Some(session) = self
+            .accounts(move |accounts| rotate(accounts, &wanted))
+            .await?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(self.mint(
+            &session.did,
+            session.app_password.as_ref(),
+            &session.id,
+        )))
     }
 
     /// Ends a session, whether or not its token had already run out.
@@ -608,8 +598,11 @@ impl Manager {
     /// # Errors
     ///
     /// If the write fails.
-    pub fn revoke_session(&self, id: &str) -> Result<bool, Error> {
-        Ok(self.locked().revoke_session(id)?)
+    pub async fn revoke_session(&self, id: &str) -> Result<bool, Error> {
+        let id = id.to_owned();
+        Ok(self
+            .accounts(move |accounts| accounts.revoke_session(&id))
+            .await?)
     }
 
     /// Ends every session an account holds.
@@ -617,8 +610,11 @@ impl Manager {
     /// # Errors
     ///
     /// If the write fails.
-    pub fn revoke_sessions(&self, did: &Did) -> Result<usize, Error> {
-        Ok(self.locked().revoke_sessions(did)?)
+    pub async fn revoke_sessions(&self, did: &Did) -> Result<usize, Error> {
+        let did = did.clone();
+        Ok(self
+            .accounts(move |accounts| accounts.revoke_sessions(&did))
+            .await?)
     }
 
     /// The account and app password a password proves, without the padding
@@ -631,20 +627,21 @@ impl Manager {
             return Err(Error::Credentials);
         }
         let identifier = identifier.to_ascii_lowercase();
-        // Scoped so that the hashing below, which is the expensive half, is not
-        // done holding the database every other request is waiting for.
-        let account = {
-            let accounts = self.locked();
-            if identifier.contains('@') {
-                accounts.by_email(&identifier)?
-            } else {
-                match identifier.parse::<AtIdentifier>() {
-                    Ok(AtIdentifier::Did(did)) => accounts.by_did(&did)?,
-                    Ok(AtIdentifier::Handle(handle)) => accounts.by_handle(&handle)?,
-                    Err(_) => None,
+        // The lock is given up before the hashing below, which is the expensive
+        // half, so it is not held while every other request waits for it.
+        let account = self
+            .accounts(move |accounts| {
+                if identifier.contains('@') {
+                    accounts.by_email(&identifier)
+                } else {
+                    match identifier.parse::<AtIdentifier>() {
+                        Ok(AtIdentifier::Did(did)) => accounts.by_did(&did),
+                        Ok(AtIdentifier::Handle(handle)) => accounts.by_handle(&handle),
+                        Err(_) => Ok(None),
+                    }
                 }
-            }
-        };
+            })
+            .await?;
         let Some(account) = account else {
             // Twice, because that is what a wrong password costs: the row is
             // checked, then the app passwords are looked up by hash. An
@@ -675,9 +672,10 @@ impl Manager {
         let offered = self
             .hashing(password, move |password| password::app(&did, password))
             .await;
+        let did = account.did.clone();
         let app_password = self
-            .locked()
-            .app_password(&account.did, &offered)?
+            .accounts(move |accounts| accounts.app_password(&did, &offered))
+            .await?
             .ok_or(Error::Credentials)?;
         Ok(Login {
             account,
@@ -703,7 +701,10 @@ impl Manager {
             .hashing(&password, move |password| password::app(&account, password))
             .await;
         let written = store::AppPassword { name, privileged };
-        let created_at = self.locked().create_app_password(did, &written, &hash)?;
+        let (account, stored) = (did.clone(), written.clone());
+        let created_at = self
+            .accounts(move |accounts| accounts.create_app_password(&account, &stored, &hash))
+            .await?;
         Ok(AppPassword {
             name: written.name,
             password,
@@ -718,8 +719,14 @@ impl Manager {
     /// # Errors
     ///
     /// If storage will not answer.
-    pub fn app_passwords(&self, did: &Did) -> Result<Vec<(store::AppPassword, Timestamp)>, Error> {
-        Ok(self.locked().app_passwords(did)?)
+    pub async fn app_passwords(
+        &self,
+        did: &Did,
+    ) -> Result<Vec<(store::AppPassword, Timestamp)>, Error> {
+        let did = did.clone();
+        Ok(self
+            .accounts(move |accounts| accounts.app_passwords(&did))
+            .await?)
     }
 
     /// Takes an app password away, along with the sessions it opened, and says
@@ -729,8 +736,11 @@ impl Manager {
     ///
     /// If storage will not answer. Naming one the account does not hold is not
     /// an error: a client asking twice wanted the same thing both times.
-    pub fn revoke_app_password(&self, did: &Did, name: &str) -> Result<bool, Error> {
-        Ok(self.locked().revoke_app_password(did, name)?)
+    pub async fn revoke_app_password(&self, did: &Did, name: &str) -> Result<bool, Error> {
+        let (did, name) = (did.clone(), name.to_owned());
+        Ok(self
+            .accounts(move |accounts| accounts.revoke_app_password(&did, &name))
+            .await?)
     }
 
     /// The pair a session hands back, under the scope its password reaches.
@@ -744,6 +754,25 @@ impl Manager {
             access: self.tokens.access(did, scope),
             refresh: self.tokens.refresh(did, id),
         }
+    }
+
+    /// Runs one call against the account database on a thread that is allowed
+    /// to block, which is every call it takes: SQLite offers no other way to
+    /// wait for a lock.
+    async fn accounts<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&mut store::Accounts) -> T + Send + 'static,
+    ) -> T {
+        let accounts = Arc::clone(&self.accounts);
+        tokio::task::spawn_blocking(move || {
+            work(
+                &mut accounts
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            )
+        })
+        .await
+        .expect("the account database thread")
     }
 
     /// Runs one scrypt on a thread that is allowed to block, waiting for a turn
@@ -770,12 +799,55 @@ impl Manager {
         .expect("the hashing thread")
     }
 
-    /// The account database. A poisoned lock is a panic somewhere else, and
-    /// the rows it was holding are as good as they ever were.
+    /// The account database, taken on whatever thread asks. Only the rollback
+    /// uses this: `Drop` cannot await, so it blocks where everything else
+    /// hands the work to a thread that may.
+    ///
+    /// A poisoned lock is a panic somewhere else, and the rows it was holding
+    /// are as good as they ever were.
     fn locked(&self) -> std::sync::MutexGuard<'_, store::Accounts> {
         self.accounts
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// Exchanges a refresh token for the session that replaces it, or nothing if
+/// there is none to exchange.
+///
+/// A client that retries is handed the same successor rather than a second
+/// session: the row names what replaces it in the same write that creates it,
+/// so both attempts arrive at one answer.
+fn rotate(accounts: &mut store::Accounts, id: &str) -> Result<Option<store::Session>, Error> {
+    loop {
+        let Some(session) = accounts.session(id)? else {
+            return Ok(None);
+        };
+
+        // Housekeeping, and best-effort: an expired token is refused whether or
+        // not its row was still there to delete.
+        let now = Timestamp::now();
+        accounts.expire_sessions(&session.did, now)?;
+
+        // The token keeps whichever of its own expiry and the grace period
+        // comes first, so exchanging one never lengthens it.
+        let expires_at = session.expires_at.min(now + GRACE);
+        if expires_at <= now {
+            return Ok(None);
+        }
+
+        let next = store::Session {
+            id: session.next_id.clone().unwrap_or_else(token_id),
+            did: session.did.clone(),
+            expires_at: now + REFRESH_LIFETIME,
+            next_id: None,
+            app_password: session.app_password.clone(),
+        };
+        // Another exchange named a different successor. Its row says which, so
+        // read it again rather than guessing.
+        if accounts.rotate(id, expires_at, &next)? {
+            return Ok(Some(next));
+        }
     }
 }
 

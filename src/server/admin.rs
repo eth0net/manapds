@@ -75,7 +75,8 @@ pub(crate) async fn create_invite_code(
         .for_account
         .unwrap_or_else(|| ADMINISTRATOR.to_owned());
     let code = accounts
-        .mint_invites(std::slice::from_ref(&account), 1, input.use_count)?
+        .mint_invites(std::slice::from_ref(&account), 1, input.use_count)
+        .await?
         .pop()
         .and_then(|mut codes| codes.pop())
         .ok_or_else(|| xrpc::Error::internal("asked for one invite code and was given none"))?;
@@ -96,7 +97,9 @@ pub(crate) async fn create_invite_codes(
         .for_accounts
         .unwrap_or_else(|| vec![ADMINISTRATOR.to_owned()]);
 
-    let minted = accounts.mint_invites(&for_accounts, input.code_count, input.use_count)?;
+    let minted = accounts
+        .mint_invites(&for_accounts, input.code_count, input.use_count)
+        .await?;
     let codes = for_accounts
         .into_iter()
         .zip(minted)

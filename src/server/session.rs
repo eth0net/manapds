@@ -85,7 +85,9 @@ pub(crate) async fn create(
     Input(input): Input<SignIn>,
 ) -> xrpc::Result<Json<Session>> {
     let login = accounts.login(&input.identifier, &input.password).await?;
-    let credentials = accounts.open_session(&login.account.did, login.app_password.as_ref())?;
+    let credentials = accounts
+        .open_session(&login.account.did, login.app_password.as_ref())
+        .await?;
     Ok(Json(Session::new(credentials, login.account)))
 }
 
@@ -99,7 +101,7 @@ pub(crate) async fn get(
     State(accounts): State<Arc<Manager>>,
     access: Access,
 ) -> xrpc::Result<Json<Account>> {
-    let account = accounts.account(&access.did)?.ok_or_else(missing)?;
+    let account = accounts.account(&access.did).await?.ok_or_else(missing)?;
     Ok(Json(account.into()))
 }
 
@@ -113,10 +115,13 @@ pub(crate) async fn refresh(
     State(accounts): State<Arc<Manager>>,
     refresh: Refresh,
 ) -> xrpc::Result<Json<Session>> {
-    let account = accounts.account(&refresh.did)?.ok_or_else(missing)?;
-    let credentials = accounts.refresh_session(&refresh.id)?.ok_or_else(|| {
-        xrpc::Error::invalid_request("Token has been revoked").named("ExpiredToken")
-    })?;
+    let account = accounts.account(&refresh.did).await?.ok_or_else(missing)?;
+    let credentials = accounts
+        .refresh_session(&refresh.id)
+        .await?
+        .ok_or_else(|| {
+            xrpc::Error::invalid_request("Token has been revoked").named("ExpiredToken")
+        })?;
     Ok(Json(Session::new(credentials, account)))
 }
 
@@ -130,7 +135,7 @@ pub(crate) async fn delete(
     State(accounts): State<Arc<Manager>>,
     Closing(refresh): Closing,
 ) -> xrpc::Result<()> {
-    accounts.revoke_session(&refresh.id)?;
+    accounts.revoke_session(&refresh.id).await?;
     Ok(())
 }
 

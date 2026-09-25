@@ -369,6 +369,7 @@ async fn an_app_password_opens_a_session_that_may_do_less() {
 
     let credentials = manager
         .open_session(&did, Some(app_password))
+        .await
         .expect("a session");
     let tokens = tokens();
     assert!(
@@ -384,11 +385,11 @@ async fn an_app_password_opens_a_session_that_may_do_less() {
     );
 }
 
-#[test]
-fn a_session_is_named_the_way_the_reference_names_one() {
+#[tokio::test]
+async fn a_session_is_named_the_way_the_reference_names_one() {
     let (manager, did, _data) = manager();
     let tokens = tokens();
-    let opened = manager.open_session(&did, None).expect("a session");
+    let opened = manager.open_session(&did, None).await.expect("a session");
     let id = tokens
         .verify_refresh(&opened.refresh, Expired::Refuse)
         .expect("a refresh token")
@@ -399,11 +400,11 @@ fn a_session_is_named_the_way_the_reference_names_one() {
     assert!(!id.contains('='));
 }
 
-#[test]
-fn a_session_is_exchanged_for_the_next_one_and_the_old_token_stops_working() {
+#[tokio::test]
+async fn a_session_is_exchanged_for_the_next_one_and_the_old_token_stops_working() {
     let (manager, did, _data) = manager();
     let tokens = tokens();
-    let opened = manager.open_session(&did, None).expect("a session");
+    let opened = manager.open_session(&did, None).await.expect("a session");
     let id = |token: &str| {
         tokens
             .verify_refresh(token, Expired::Refuse)
@@ -413,6 +414,7 @@ fn a_session_is_exchanged_for_the_next_one_and_the_old_token_stops_working() {
 
     let refreshed = manager
         .refresh_session(&id(&opened.refresh))
+        .await
         .expect("no failure")
         .expect("a new session");
     assert_ne!(id(&refreshed.refresh), id(&opened.refresh));
@@ -421,34 +423,41 @@ fn a_session_is_exchanged_for_the_next_one_and_the_old_token_stops_working() {
     // opening a second session beside it.
     let again = manager
         .refresh_session(&id(&opened.refresh))
+        .await
         .expect("no failure")
         .expect("the same session");
     assert_eq!(id(&again.refresh), id(&refreshed.refresh));
 }
 
-#[test]
-fn a_revoked_session_cannot_be_exchanged_for_anything() {
+#[tokio::test]
+async fn a_revoked_session_cannot_be_exchanged_for_anything() {
     let (manager, did, _data) = manager();
     let tokens = tokens();
-    let opened = manager.open_session(&did, None).expect("a session");
+    let opened = manager.open_session(&did, None).await.expect("a session");
     let id = tokens
         .verify_refresh(&opened.refresh, Expired::Refuse)
         .expect("a refresh token")
         .id;
 
-    assert!(manager.revoke_session(&id).expect("no failure"));
-    assert!(manager.refresh_session(&id).expect("no failure").is_none());
+    assert!(manager.revoke_session(&id).await.expect("no failure"));
+    assert!(
+        manager
+            .refresh_session(&id)
+            .await
+            .expect("no failure")
+            .is_none()
+    );
     // And revoking it twice is not an error, only a second answer of no.
-    assert!(!manager.revoke_session(&id).expect("no failure"));
+    assert!(!manager.revoke_session(&id).await.expect("no failure"));
 }
 
-#[test]
-fn changing_what_signs_in_ends_every_session_at_once() {
+#[tokio::test]
+async fn changing_what_signs_in_ends_every_session_at_once() {
     let (manager, did, _data) = manager();
-    manager.open_session(&did, None).expect("a session");
-    manager.open_session(&did, None).expect("another");
+    manager.open_session(&did, None).await.expect("a session");
+    manager.open_session(&did, None).await.expect("another");
 
-    assert_eq!(manager.revoke_sessions(&did).expect("no failure"), 2);
+    assert_eq!(manager.revoke_sessions(&did).await.expect("no failure"), 2);
 }
 
 /// A server nobody has signed up to yet, and the directory it registers at.
@@ -495,6 +504,7 @@ async fn signing_up_writes_an_identity_a_repository_and_a_session() {
     // The account reads back, and the session it was handed opens.
     let account = manager
         .account(&created.did)
+        .await
         .expect("reads")
         .expect("an account");
     assert_eq!(account.email, "alice@example.com");
@@ -502,7 +512,13 @@ async fn signing_up_writes_an_identity_a_repository_and_a_session() {
         .verify_refresh(&created.credentials.refresh, Expired::Refuse)
         .expect("a refresh token")
         .id;
-    assert!(manager.refresh_session(&id).expect("no failure").is_some());
+    assert!(
+        manager
+            .refresh_session(&id)
+            .await
+            .expect("no failure")
+            .is_some()
+    );
 
     // Its key and its repository are on disk under the shard the DID hashes
     // to, rather than beside every other account.
@@ -541,6 +557,7 @@ async fn a_signup_the_directory_will_not_take_leaves_nothing_behind() {
     assert!(
         manager
             .resolve(&"alice.pds.test".parse().expect("a handle"))
+            .await
             .expect("reads")
             .is_none()
     );
@@ -587,6 +604,7 @@ async fn a_signup_the_directory_would_not_speak_for_is_left_standing() {
     assert!(
         manager
             .resolve(&"alice.pds.test".parse().expect("a handle"))
+            .await
             .expect("reads")
             .is_some()
     );
@@ -652,6 +670,7 @@ async fn a_signup_whose_identifier_is_retired_is_taken_back_out() {
     assert!(
         manager
             .resolve(&"alice.pds.test".parse().expect("a handle"))
+            .await
             .expect("reads")
             .is_none()
     );
@@ -700,12 +719,12 @@ async fn a_signup_the_caller_gives_up_on_mid_registration_is_left_standing() {
             _ = &mut attempt => panic!("the directory answered after all"),
             () = tokio::time::sleep(Duration::from_millis(25)) => {}
         }
-        if manager.resolve(&handle).expect("reads").is_some() {
+        if manager.resolve(&handle).await.expect("reads").is_some() {
             break;
         }
     }
     assert!(
-        manager.resolve(&handle).expect("reads").is_some(),
+        manager.resolve(&handle).await.expect("reads").is_some(),
         "the signup never got as far as the directory"
     );
 
@@ -714,7 +733,7 @@ async fn a_signup_the_caller_gives_up_on_mid_registration_is_left_standing() {
 
     // Kept: hanging up says nothing about what the directory did with the
     // operation.
-    assert!(manager.resolve(&handle).expect("reads").is_some());
+    assert!(manager.resolve(&handle).await.expect("reads").is_some());
     assert!(!files(data.path()).is_empty());
 }
 
@@ -748,6 +767,7 @@ async fn a_server_that_asks_for_an_invite_spends_it_once() {
 
     let minted = manager
         .mint_invites(&["admin".to_owned()], 1, 1)
+        .await
         .expect("a code");
     let codes = &minted[0];
     // The code names the server it is good for, so one pasted at the wrong
