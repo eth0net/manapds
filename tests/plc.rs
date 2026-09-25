@@ -257,7 +257,7 @@ fn document(uri: &Uri) -> String {
 }
 
 /// A directory that takes the first `lost` registrations and never answers
-/// them, which is what an answer going missing looks like from here.
+/// them.
 ///
 /// `admits` says whether a read back owns up to what it took, since a
 /// directory that has the operation and one that never received it are told
@@ -344,7 +344,7 @@ async fn an_operation_the_directory_never_had_is_sent_again() {
 }
 
 #[tokio::test]
-async fn a_directory_that_answers_nothing_fails_the_signup() {
+async fn a_directory_that_answers_nothing_gives_up() {
     let (fixture, rotation) = fixture();
     let operation = create(&fixture, &rotation);
     let did = operation.did().expect("hashes");
@@ -354,8 +354,8 @@ async fn a_directory_that_answers_nothing_fails_the_signup() {
         .send(&did, &operation)
         .await
         .expect_err("nothing answered");
-    // Uncertain rather than refused: the reads answered, so the operation is
-    // known not to have landed, but neither attempt was ever acknowledged.
+    // The reads answered, so it is known not to have landed, and neither
+    // attempt was ever acknowledged.
     assert!(matches!(error, Error::Uncertain(_)), "{error:?}");
     assert_eq!(asked(&seen), ["POST", "GET", "POST", "GET"]);
 }
@@ -395,8 +395,7 @@ async fn a_tombstone_the_directory_never_took_frees_nothing() {
     // what a directory looks like while an operation is still on its way in.
     let (url, seen) = unreliable(usize::MAX, false).await;
 
-    // The reads agree the identifier is free and they are both answering about
-    // a moment the operation had not reached yet.
+    // Nothing was taken, so nothing is read and nothing is freed.
     assert!(!lost(&url).retire(&did, &tombstone).await);
     assert_eq!(asked(&seen), ["POST"]);
 }

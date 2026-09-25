@@ -239,7 +239,7 @@ impl Tombstone {
     ///
     /// # Errors
     ///
-    /// If either operation will not encode, which neither of these can.
+    /// If either operation will not encode.
     pub fn create(previous: &Operation, rotation: &Keypair) -> Result<Self, Error> {
         let mut tombstone = Self {
             kind: TOMBSTONE.to_owned(),
@@ -297,8 +297,7 @@ impl Client {
     /// refuses what it is sent, or it will not say what it holds.
     pub async fn send(&self, did: &Did, operation: &Operation) -> Result<(), Error> {
         match self.attempt(did, operation, self.answer / ATTEMPT).await {
-            // Never connected, so it is not in there, and a read back that
-            // cannot connect either says as much.
+            // Never connected, so it never left.
             Err(Error::Unreachable(_)) => self.confirm(did, operation, false).await,
             // Connected, so it may be in there whatever fails to say so.
             Err(Error::Uncertain(_)) => self.confirm(did, operation, true).await,
@@ -311,9 +310,8 @@ impl Client {
     /// Retires an identifier a registration may have taken, and says whether
     /// the directory is left holding nothing under it.
     ///
-    /// Only a tombstone the directory took proves anything: one it refused may
-    /// have been refused because the operation it follows is still on its way
-    /// in, and a read back agreeing is answering about that same moment.
+    /// Only a tombstone the directory took proves anything;
+    /// `docs/architecture.md` has why.
     pub async fn retire(&self, did: &Did, tombstone: &Tombstone) -> bool {
         if self.attempt(did, tombstone, self.share()).await.is_err() {
             return false;
@@ -327,11 +325,10 @@ impl Client {
     }
 
     /// Finds out what became of an operation whose answer never arrived, and
-    /// sends it again if it never arrived either.
+    /// sends the operation again if it never arrived either.
     ///
-    /// `sent` says whether the first attempt reached the directory at all. An
-    /// operation that never left cannot be in there, which is what lets a read
-    /// back nobody answered still settle the question.
+    /// `sent` says whether the first attempt reached the directory at all,
+    /// which is what lets a read back nobody answered still settle it.
     async fn confirm(&self, did: &Did, operation: &Operation, sent: bool) -> Result<(), Error> {
         let each = self.share();
         if self.holds(did, each).await == Held::Yes {
@@ -372,7 +369,7 @@ impl Client {
     }
 
     /// The document under an identifier, read only far enough to see whose it
-    /// is. Anything short of an answer is no answer.
+    /// is.
     async fn document(&self, did: &Did, request: hyper::Request<Full<Bytes>>) -> Held {
         let Ok(response) = self.http.request(request).await else {
             return Held::Unknown;
@@ -410,7 +407,7 @@ impl Client {
         self.within(request, budget).await
     }
 
-    /// One exchange, held to what is left of the budget.
+    /// One exchange, held to the budget it is given.
     async fn within(
         &self,
         request: hyper::Request<Full<Bytes>>,
@@ -446,8 +443,8 @@ impl Client {
             .map(|body| String::from_utf8_lossy(&body.to_bytes()).into_owned())
             .unwrap_or_default();
         if status.is_server_error() {
-            // The directory failing to answer rather than answering, so what
-            // it did with the operation is still open.
+            // A failure to answer rather than an answer, so what it did with
+            // the operation is still open.
             return Err(Error::Uncertain(format!("{} {said}", status.as_u16())));
         }
         Err(Error::Refused(status.as_u16(), said))

@@ -64,8 +64,7 @@ pub use did_cache::{Cached, DidCache};
 pub use sequencer::{Entry, Event, Sequencer};
 
 /// Milliseconds and a `Z`, which is what the other server writes and what
-/// makes a text column sort as time. Everything these databases hold as a
-/// time is written this way, so anything reading one back says it the same.
+/// makes a text column sort as time. Every time these databases hold.
 #[must_use]
 pub fn stamp(at: jiff::Timestamp) -> String {
     format!("{at:.3}")

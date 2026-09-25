@@ -203,8 +203,7 @@ async fn a_handle_nothing_here_holds_is_not_resolved_for_a_client() {
         // and therefore cannot say does not exist.
         ("handle=alice.example.com", "InvalidRequest"),
         ("handle=not%20a%20handle", "InvalidHandle"),
-        // Nothing asked at all, which axum refuses before the handler and in
-        // plain text unless it is made to answer like everything else.
+        // Nothing asked at all, which axum refuses before the handler runs.
         ("", "InvalidRequest"),
     ] {
         let (status, body) = call(
@@ -330,7 +329,7 @@ async fn codes_are_written_in_bulk_for_the_accounts_named() {
 }
 
 #[tokio::test]
-async fn asking_for_more_codes_than_anyone_hands_out_is_refused_before_any_are_built() {
+async fn asking_for_more_codes_than_anyone_hands_out_is_refused() {
     let (router, _data, _seen) = server(true).await;
 
     let (status, body) = call_as(

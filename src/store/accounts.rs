@@ -485,7 +485,7 @@ impl Accounts {
     }
 
     /// Writes an app password, under the hash a session will be looked up by,
-    /// and hands back when the row says it was written.
+    /// and hands back the time the row records.
     ///
     /// # Errors
     ///

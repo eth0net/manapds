@@ -783,8 +783,7 @@ async fn signing_in_spends_a_budget_the_account_it_names_holds() {
     );
 
     // Another account from the same line still has its own, and so does the
-    // same account from somewhere else: one line signing in to one account is
-    // what the budget counts.
+    // same account from somewhere else.
     assert_eq!(
         sign_in("bob.pds.example.com", "1.2.3.4:9").await,
         StatusCode::UNAUTHORIZED
@@ -825,8 +824,8 @@ async fn a_sign_in_too_large_to_read_still_reaches_the_method() {
         "1.2.3.4:9".parse::<SocketAddr>().expect("an address"),
     ));
 
-    // Counted under no name, and handed on whole rather than emptied, so the
-    // answer is the method's own and not one about a body it never saw.
+    // Counted under no name and handed on whole, so the method answers for
+    // itself.
     let answer = router.oneshot(request).await.expect("an answer");
     assert_eq!(answer.status(), StatusCode::UNAUTHORIZED);
 }

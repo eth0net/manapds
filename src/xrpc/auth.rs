@@ -408,8 +408,8 @@ where
 
 /// A session an app password never opens.
 ///
-/// What the account is, rather than what it posts: an app password may write
-/// records under the account and may not change the account itself.
+/// An app password may write records under the account and may not change the
+/// account itself.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Full(pub Access);
 

@@ -170,7 +170,7 @@ async fn a_body_that_will_not_read_is_refused_the_way_everything_else_is() {
 }
 
 #[tokio::test]
-async fn a_body_longer_than_anything_this_takes_says_that_and_not_something_else() {
+async fn a_body_too_large_is_refused_for_being_too_large() {
     let router = server();
 
     let (status, body) = call(
@@ -335,7 +335,7 @@ async fn an_app_password_is_written_listed_and_signed_in_with() {
 }
 
 #[tokio::test]
-async fn a_revoked_app_password_opens_nothing_and_is_listed_no_longer() {
+async fn a_revoked_app_password_opens_nothing_and_is_not_listed() {
     let router = server();
     let session = sign_in(&router).await;
     let access = session["accessJwt"].as_str().expect("a token");

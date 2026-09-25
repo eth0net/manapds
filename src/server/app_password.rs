@@ -17,12 +17,11 @@ use crate::xrpc::{
 pub(crate) struct Wanted {
     /// What the account will call it, and what revoking it names.
     name: String,
-    /// Whether it reaches what a plain app password may not.
     #[serde(default)]
     privileged: bool,
 }
 
-/// One app password, including the password itself, which is said once.
+/// One app password, including the password itself.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Written {
@@ -32,7 +31,7 @@ pub(crate) struct Written {
     privileged: bool,
 }
 
-/// One app password as everything after that sees it.
+/// One app password as a listing shows it.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Held {
@@ -100,8 +99,7 @@ pub(crate) async fn list(
 ///
 /// # Errors
 ///
-/// If storage will not answer. Naming one the account does not hold is not
-/// one, since a client asking twice wanted the same thing both times.
+/// If storage will not answer.
 pub(crate) async fn revoke(
     State(accounts): State<Arc<Manager>>,
     access: Access,

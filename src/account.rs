@@ -169,8 +169,7 @@ pub struct Login {
 pub struct AppPassword {
     /// What the account calls it.
     pub name: String,
-    /// The password itself, which is stored only as a hash and so is never
-    /// handed out again.
+    /// The password itself, stored as a hash.
     pub password: String,
     /// When it was written.
     pub created_at: Timestamp,
@@ -293,8 +292,6 @@ impl Manager {
         undo.sending();
         let registered = self.plc.send(&did, &operation).await;
         let settled = match &registered {
-            // The directory would not say what it holds, so the identifier is
-            // retired to settle it.
             Err(plc::Error::Uncertain(_)) => self.retire(&did, &operation).await,
             // Anything it did say settles what it holds, a refusal included.
             _ => true,
@@ -325,10 +322,8 @@ impl Manager {
     /// Retires an identifier the directory would not speak for, and says
     /// whether the account behind it is this server's to take back out.
     ///
-    /// todo(operation): an identifier the caller brought is not this server's
-    /// to retire, and the reference guards the same call with that check.
-    /// Nothing here takes one yet, so every identifier reaching this was minted
-    /// a few lines above.
+    /// todo(imported identifiers): an identifier the caller brought is not
+    /// this server's to retire, and the reference guards the same call so.
     async fn retire(&self, did: &Did, operation: &plc::Operation) -> bool {
         match plc::Tombstone::create(operation, &self.config.plc_rotation_key) {
             Ok(tombstone) => self.plc.retire(did, &tombstone).await,
@@ -731,8 +726,8 @@ impl Manager {
     ///
     /// # Errors
     ///
-    /// If storage will not answer. Revoking one the account does not hold is
-    /// not one, since a client asking twice wanted the same thing both times.
+    /// If storage will not answer. Naming one the account does not hold is not
+    /// an error: a client asking twice wanted the same thing both times.
     pub fn revoke_app_password(&self, did: &Did, name: &str) -> Result<bool, Error> {
         Ok(self.locked().revoke_app_password(did, name)?)
     }
@@ -873,7 +868,7 @@ impl Drop for Undo<'_> {
 /// rather than a processor one.
 ///
 /// Never fewer than [`HASHES`], since one core would otherwise put every
-/// sign-in behind one hash for the 64MB that costs.
+/// sign-in behind one hash for the 48MB that saves.
 fn hashes_at_once() -> usize {
     std::thread::available_parallelism()
         .map_or(HASHES, std::num::NonZeroUsize::get)

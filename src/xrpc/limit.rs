@@ -40,8 +40,7 @@ const KEYS: usize = 100_000;
 /// A sync path large enough that one call would eat a shared budget, so it
 /// is left to the budget its own method holds.
 // todo(getRepo): upstream pairs this exemption with 6000 points per five
-// minutes on the method itself, which belongs beside the two budgets below
-// once there is a handler to hang it on.
+// minutes on the method itself.
 const UNBUDGETED: &str = "/xrpc/com.atproto.sync.getRepo";
 
 /// What signing in costs, on two windows at once.
@@ -62,8 +61,7 @@ const SIGN_IN: usize = 8 * 1024;
 /// How much of that name a budget is keyed by.
 ///
 /// Longer than any handle, DID or address an account here could answer to, so
-/// what it cuts short names nobody: a caller picks the key and only a bound on
-/// it bounds what a full table costs.
+/// what it cuts short names nobody.
 const NAMED: usize = 256;
 
 /// The header a caller with the bypass key sends it in.
@@ -263,7 +261,7 @@ impl Limits {
     /// Counts a request against whatever budget its own method holds.
     ///
     /// Hands the request back, because finding out who is signing in means
-    /// reading the body it was going to be read from.
+    /// reading its body.
     async fn method(&self, caller: &str, request: Request) -> (Request, Vec<Reading>) {
         match request.uri().path() {
             CREATE_ACCOUNT => {
@@ -354,9 +352,7 @@ fn tightest(readings: Vec<Reading>) -> Option<Reading> {
 
 /// Who a sign-in says it is, and the request with its body still on it.
 ///
-/// Lowercased, since a name differing only in case is the same account. A body
-/// too large to be a sign-in is counted under no name and left for the handler
-/// to refuse for what it is.
+/// Lowercased, since a name differing only in case is the same account.
 async fn signing_in(request: Request) -> (Request, String) {
     // Only a body that says how long it is, and says it is short enough, is
     // read at all. One that does not is counted under no name and handed on
@@ -386,8 +382,8 @@ fn shortened(named: &str) -> &str {
     if named.len() <= NAMED {
         return named;
     }
-    // Back to a character boundary, of which there is one within four bytes of
-    // anywhere and always at nothing.
+    // Back to a character boundary, which is never more than three bytes back
+    // and is always index zero.
     let mut end = NAMED;
     while !named.is_char_boundary(end) {
         end -= 1;

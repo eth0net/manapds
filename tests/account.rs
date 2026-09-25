@@ -713,7 +713,7 @@ async fn a_signup_the_caller_gives_up_on_mid_registration_is_left_standing() {
     drop(attempt);
 
     // Kept: hanging up says nothing about what the directory did with the
-    // operation, and an identifier it took is not this server's to give back.
+    // operation.
     assert!(manager.resolve(&handle).expect("reads").is_some());
     assert!(!files(data.path()).is_empty());
 }

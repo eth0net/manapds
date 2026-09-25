@@ -1,5 +1,5 @@
-//! What a method was sent, read the way XRPC says something that will not read
-//! is refused.
+//! A method's body and its query, refused in the XRPC error shape when they
+//! will not parse.
 
 use axum::extract::{FromRequest, FromRequestParts, Query, Request, rejection::JsonRejection};
 use axum::{Json, http::StatusCode, http::request::Parts};
@@ -35,8 +35,8 @@ impl<T: DeserializeOwned, S: Send + Sync> FromRequest<S> for Input<T> {
 
 /// What a query was asked with.
 ///
-/// Axum refuses a missing parameter the way it refuses a body, so this answers
-/// it the way [`Input`] does.
+/// Axum's own rejection is plain text, so this answers it in the shape
+/// [`Input`] uses.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Params<T>(pub T);
 

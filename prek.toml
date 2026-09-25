@@ -24,8 +24,7 @@ hooks = [
   { id = "mixed-line-ending", args = ["--fix=lf"], exclude = '^tests/fixtures/' },
   { id = "check-merge-conflict" },
   { id = "check-case-conflict" },
-  # Windows is not a target, but the source tree still has to check out on
-  # one: the paths it cannot hold are made at runtime rather than committed.
+  # Windows is not a target, but the source tree still has to check out on one.
   { id = "check-illegal-windows-names" },
   { id = "check-added-large-files" },
   { id = "check-toml" },
