@@ -4,6 +4,7 @@ mod common;
 
 use std::net::Ipv4Addr;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -679,7 +680,7 @@ async fn a_signup_whose_identifier_is_retired_is_taken_back_out() {
 
 /// A directory that accepts the connection and then says nothing, which is
 /// what a signup is waiting on when the caller gives up on it.
-async fn silent() -> String {
+async fn silent() -> (String, Arc<AtomicBool>) {
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .await
         .expect("a port");
@@ -687,20 +688,24 @@ async fn silent() -> String {
         "http://127.0.0.1:{}",
         listener.local_addr().expect("an address").port()
     );
+    let reached = Arc::new(AtomicBool::new(false));
+    let arrived = Arc::clone(&reached);
     tokio::spawn(async move {
         // Held, because dropping a socket would answer by closing it.
         let mut open = Vec::new();
         while let Ok((socket, _)) = listener.accept().await {
+            arrived.store(true, Ordering::Relaxed);
             open.push(socket);
         }
     });
-    url
+    (url, reached)
 }
 
 #[tokio::test]
 async fn a_signup_the_caller_gives_up_on_mid_registration_is_left_standing() {
     let data = tempfile::tempdir().expect("a directory");
-    let config = common::config("pds.test", data.path(), &silent().await);
+    let (plc, reached) = silent().await;
+    let config = common::config("pds.test", data.path(), &plc);
     let accounts = store::Accounts::memory().expect("a database");
     let manager = account::Manager::new(
         Arc::new(config),
@@ -712,21 +717,23 @@ async fn a_signup_the_caller_gives_up_on_mid_registration_is_left_standing() {
 
     let request = signup("alice.pds.test");
     let mut attempt = Box::pin(manager.create(&request));
-    // Driven until the account is written, which is the point the directory is
-    // being waited on and everything local is already there.
-    for _ in 0..200 {
+    // Driven until the operation reaches the directory, which is the point the
+    // rollback stops being a discard. Waiting for the account row instead would
+    // break out one step early, while hanging up still takes the signup back
+    // out. The deadline is there to stop a hang rather than to measure
+    // anything: every other test in this file is running scrypt too.
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    while std::time::Instant::now() < deadline && !reached.load(Ordering::Relaxed) {
         tokio::select! {
             _ = &mut attempt => panic!("the directory answered after all"),
             () = tokio::time::sleep(Duration::from_millis(25)) => {}
         }
-        if manager.resolve(&handle).await.expect("reads").is_some() {
-            break;
-        }
     }
     assert!(
-        manager.resolve(&handle).await.expect("reads").is_some(),
+        reached.load(Ordering::Relaxed),
         "the signup never got as far as the directory"
     );
+    assert!(manager.resolve(&handle).await.expect("reads").is_some());
 
     // The caller hangs up. Nothing else is going to run on this account's behalf.
     drop(attempt);
