@@ -275,6 +275,22 @@ fn a_repository_round_trips_through_a_file() {
 }
 
 #[test]
+fn a_database_already_at_the_schema_opens_under_somebody_else_s_write_lock() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let path = Directory::new(home.path()).actor_store(&account());
+    Actor::open(&path, account()).expect("opens");
+
+    let writer = Connection::open(&path).expect("opens");
+    writer
+        .execute_batch("begin immediate")
+        .expect("takes the write lock");
+
+    // Opening one that needs no migration writes nothing, so a lock somebody
+    // else is holding is not in the way of it. Every record read opens one.
+    Actor::open(&path, account()).expect("opens again");
+}
+
+#[test]
 fn the_index_follows_what_the_commit_did() {
     let home = tempfile::tempdir().expect("a temporary directory");
     let path = Directory::new(home.path()).actor_store(&account());

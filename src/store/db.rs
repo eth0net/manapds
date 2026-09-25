@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use super::Error;
 
@@ -51,8 +51,14 @@ fn prepare(db: Connection, migrations: &[Migration]) -> Result<Connection, Error
 
 /// Applies whatever the ledger says is outstanding, and refuses a database
 /// that has been taken somewhere this server cannot follow.
+///
+/// A database already at the schema is opened without a single write, which is
+/// what makes opening one per call affordable: every write here takes the lock
+/// that every other connection is waiting on.
 fn migrate(db: &mut Connection, migrations: &[Migration]) -> Result<(), Error> {
-    db.execute_batch(LEDGER)?;
+    if !holds_ledger(db)? {
+        db.execute_batch(LEDGER)?;
+    }
     let applied: Vec<String> = db
         .prepare(r#"select "name" from "kysely_migration" order by "name""#)?
         .query_map([], |row| row.get(0))?
@@ -65,12 +71,17 @@ fn migrate(db: &mut Connection, migrations: &[Migration]) -> Result<(), Error> {
         return Err(Error::TooNew(unknown.clone()));
     }
 
+    let outstanding: Vec<&Migration> = migrations
+        .iter()
+        .filter(|(name, _)| !applied.iter().any(|done| done == name))
+        .collect();
+    if outstanding.is_empty() {
+        return Ok(());
+    }
+
     let stamp = format!("{:.3}", jiff::Timestamp::now());
     let transaction = db.transaction()?;
-    for (name, apply) in migrations {
-        if applied.iter().any(|done| done == name) {
-            continue;
-        }
+    for (name, apply) in outstanding {
         apply(&transaction)?;
         transaction.execute(
             r#"insert into "kysely_migration" ("name", "timestamp") values (?1, ?2)"#,
@@ -79,4 +90,16 @@ fn migrate(db: &mut Connection, migrations: &[Migration]) -> Result<(), Error> {
     }
     transaction.commit()?;
     Ok(())
+}
+
+/// Whether the ledger is there to be read, asked without writing it.
+fn holds_ledger(db: &Connection) -> Result<bool, Error> {
+    Ok(db
+        .query_row(
+            r#"select 1 from "sqlite_master" where "type" = 'table' and "name" = 'kysely_migration'"#,
+            [],
+            |_| Ok(true),
+        )
+        .optional()?
+        .unwrap_or(false))
 }
