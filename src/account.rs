@@ -18,7 +18,7 @@ use crate::crypto::{self, Algorithm, Keypair, PublicKey};
 use crate::event;
 use crate::repo::{Cid, Repo};
 use crate::store;
-use crate::syntax::{AtIdentifier, Did, Handle, Tid, TidClock};
+use crate::syntax::{AtIdentifier, Did, Handle, Nsid, RecordKey, Tid, TidClock};
 use crate::xrpc::auth::{REFRESH_LIFETIME, Scope, Tokens};
 use crate::{plc, repo};
 
@@ -616,6 +616,98 @@ impl Manager {
         })
         .await?;
         Ok(())
+    }
+
+    /// The account an identifier names, whichever of the two kinds it is.
+    ///
+    /// # Errors
+    ///
+    /// If storage will not answer.
+    pub async fn lookup(&self, identifier: &AtIdentifier) -> Result<Option<store::Account>, Error> {
+        let identifier = identifier.clone();
+        Ok(self
+            .accounts(move |accounts| match &identifier {
+                AtIdentifier::Did(did) => accounts.by_did(did),
+                AtIdentifier::Handle(handle) => accounts.by_handle(handle),
+            })
+            .await?)
+    }
+
+    /// The document the directory holds for an account.
+    ///
+    /// # Errors
+    ///
+    /// If the directory will not answer for it.
+    pub async fn document(&self, did: &Did) -> Result<serde_json::Value, Error> {
+        Ok(self.plc.resolve(did).await?)
+    }
+
+    /// The record at a key, if the account holds one there.
+    ///
+    /// # Errors
+    ///
+    /// If the account holds no repository, or storage will not answer.
+    pub async fn record(
+        &self,
+        did: &Did,
+        collection: &Nsid,
+        rkey: &RecordKey,
+    ) -> Result<Option<store::Record>, Error> {
+        let (collection, rkey) = (collection.clone(), rkey.clone());
+        self.actor(did, move |actor| actor.record(&collection, &rkey))
+            .await
+    }
+
+    /// One page of a collection, newest key first unless `reverse` asks for
+    /// the other end.
+    ///
+    /// # Errors
+    ///
+    /// If the account holds no repository, or storage will not answer.
+    pub async fn records(
+        &self,
+        did: &Did,
+        collection: &Nsid,
+        limit: u32,
+        cursor: Option<String>,
+        reverse: bool,
+    ) -> Result<Vec<store::Record>, Error> {
+        let collection = collection.clone();
+        self.actor(did, move |actor| {
+            actor.records(&collection, limit, cursor.as_deref(), reverse)
+        })
+        .await
+    }
+
+    /// Every collection an account has a record in.
+    ///
+    /// # Errors
+    ///
+    /// If the account holds no repository, or storage will not answer.
+    pub async fn collections(&self, did: &Did) -> Result<Vec<Nsid>, Error> {
+        self.actor(did, store::Actor::collections).await
+    }
+
+    /// Runs one read against an account's own database, on a thread that is
+    /// allowed to block.
+    ///
+    /// # Errors
+    ///
+    /// If there is no database to open, which is a signup that never finished.
+    async fn actor<T: Send + 'static>(
+        &self,
+        did: &Did,
+        work: impl FnOnce(&store::Actor) -> Result<T, store::Error> + Send + 'static,
+    ) -> Result<T, Error> {
+        let path = self.directory.actor_store(did);
+        let account = did.clone();
+        blocking(move || {
+            if !path.exists() {
+                return Err(Error::NoRepo(account));
+            }
+            Ok(work(&store::Actor::open(&path, account)?)?)
+        })
+        .await
     }
 
     /// Writes fresh invite codes for every account named, and says what each

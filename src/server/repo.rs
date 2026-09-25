@@ -1,0 +1,204 @@
+//! Records: reading one, listing a collection, and describing a repository.
+
+use std::sync::Arc;
+
+use axum::{Json, extract::State};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::account::{self, Manager};
+use crate::repo;
+use crate::store;
+use crate::syntax::{AtIdentifier, Did, Handle, Nsid, RecordKey};
+use crate::xrpc::{self, Params};
+
+/// The most records one page holds, and what a page holds unasked.
+const PAGE: u32 = 50;
+
+/// The most any page holds, however many are asked for.
+const LONGEST_PAGE: u32 = 100;
+
+/// Which record to read.
+#[derive(Debug, Deserialize)]
+pub(crate) struct Wanted {
+    repo: String,
+    collection: String,
+    rkey: String,
+    /// The block it has to be in, for a caller that already knows.
+    cid: Option<String>,
+}
+
+/// Which collection to page through.
+#[derive(Debug, Deserialize)]
+pub(crate) struct Listing {
+    repo: String,
+    collection: String,
+    limit: Option<u32>,
+    cursor: Option<String>,
+    #[serde(default)]
+    reverse: bool,
+}
+
+/// Which repository to describe.
+#[derive(Debug, Deserialize)]
+pub(crate) struct Described {
+    repo: String,
+}
+
+/// One record as a client is shown it.
+#[derive(Debug, Serialize)]
+pub(crate) struct Held {
+    uri: String,
+    cid: String,
+    value: Value,
+}
+
+/// One page of a collection.
+#[derive(Debug, Serialize)]
+pub(crate) struct Page {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cursor: Option<String>,
+    records: Vec<Held>,
+}
+
+/// What a repository is and what is in it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Description {
+    handle: String,
+    did: String,
+    did_doc: Value,
+    collections: Vec<String>,
+    /// Whether the document the directory holds names the handle this server
+    /// does, which is the whole reason a client is shown both.
+    handle_is_correct: bool,
+}
+
+/// `com.atproto.repo.getRecord`
+///
+/// # Errors
+///
+/// If nothing answers to the repository, it holds no record at that key, or
+/// storage will not answer.
+pub(crate) async fn get_record(
+    State(accounts): State<Arc<Manager>>,
+    Params(query): Params<Wanted>,
+) -> xrpc::Result<Json<Held>> {
+    let did = repository(&accounts, &query.repo).await?;
+    let (collection, rkey) = (collection(&query.collection)?, record_key(&query.rkey)?);
+    let held = accounts
+        .record(&did, &collection, &rkey)
+        .await?
+        .filter(|held| {
+            query
+                .cid
+                .as_ref()
+                .is_none_or(|cid| *cid == held.cid.to_string())
+        })
+        .ok_or_else(|| {
+            xrpc::Error::invalid_request("Could not locate record").named("RecordNotFound")
+        })?;
+    Ok(Json(shown(held)?))
+}
+
+/// `com.atproto.repo.listRecords`
+///
+/// # Errors
+///
+/// If nothing answers to the repository, or storage will not answer.
+pub(crate) async fn list_records(
+    State(accounts): State<Arc<Manager>>,
+    Params(query): Params<Listing>,
+) -> xrpc::Result<Json<Page>> {
+    let did = repository(&accounts, &query.repo).await?;
+    let collection = collection(&query.collection)?;
+    let limit = query.limit.unwrap_or(PAGE).clamp(1, LONGEST_PAGE);
+    let held = accounts
+        .records(&did, &collection, limit, query.cursor, query.reverse)
+        .await?;
+
+    // The cursor is the last key on the page, so the next one starts after it.
+    // A short page has no next, and saying so is what stops a client asking.
+    let cursor = (u32::try_from(held.len()).unwrap_or(u32::MAX) == limit)
+        .then(|| held.last().map(|last| key_of(&last.uri).to_owned()))
+        .flatten();
+    Ok(Json(Page {
+        cursor,
+        records: held.into_iter().map(shown).collect::<Result<_, _>>()?,
+    }))
+}
+
+/// `com.atproto.repo.describeRepo`
+///
+/// # Errors
+///
+/// If nothing answers to the repository, the directory will not say what it
+/// holds for it, or storage will not answer.
+pub(crate) async fn describe_repo(
+    State(accounts): State<Arc<Manager>>,
+    Params(query): Params<Described>,
+) -> xrpc::Result<Json<Description>> {
+    let account = found(&accounts, &query.repo).await?;
+    let document = accounts.document(&account.did).await?;
+    let handle = account
+        .handle
+        .map_or_else(|| account::handle::INVALID.to_owned(), Handle::into_string);
+    let collections = accounts.collections(&account.did).await?;
+
+    Ok(Json(Description {
+        handle_is_correct: also_known_as(&document) == Some(handle.as_str()),
+        handle,
+        did: account.did.as_str().to_owned(),
+        did_doc: document,
+        collections: collections.into_iter().map(Nsid::into_string).collect(),
+    }))
+}
+
+/// The account an at-identifier names.
+async fn found(accounts: &Manager, repo: &str) -> xrpc::Result<store::Account> {
+    let identifier: AtIdentifier = repo
+        .parse()
+        .map_err(|_| xrpc::Error::invalid_request("Invalid repo"))?;
+    accounts.lookup(&identifier).await?.ok_or_else(|| {
+        xrpc::Error::invalid_request(format!("Could not find repo: {repo}")).named("RepoNotFound")
+    })
+}
+
+/// The same, where only the identifier behind it is wanted.
+async fn repository(accounts: &Manager, repo: &str) -> xrpc::Result<Did> {
+    Ok(found(accounts, repo).await?.did)
+}
+
+fn collection(nsid: &str) -> xrpc::Result<Nsid> {
+    nsid.parse()
+        .map_err(|_| xrpc::Error::invalid_request("Invalid collection"))
+}
+
+fn record_key(rkey: &str) -> xrpc::Result<RecordKey> {
+    rkey.parse()
+        .map_err(|_| xrpc::Error::invalid_request("Invalid record key"))
+}
+
+/// One stored record, turned back into what a client sent.
+fn shown(held: store::Record) -> Result<Held, account::Error> {
+    Ok(Held {
+        uri: held.uri,
+        cid: held.cid.to_string(),
+        value: repo::to_json(&repo::decode(&held.value)?)?,
+    })
+}
+
+/// The record key an address ends in.
+fn key_of(uri: &str) -> &str {
+    uri.rsplit('/').next().unwrap_or(uri)
+}
+
+/// The handle a document says the account answers to, without the scheme the
+/// directory writes it under.
+fn also_known_as(document: &Value) -> Option<&str> {
+    document
+        .get("alsoKnownAs")?
+        .as_array()?
+        .iter()
+        .find_map(|name| name.as_str()?.strip_prefix("at://"))
+}

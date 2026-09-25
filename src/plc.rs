@@ -307,6 +307,59 @@ impl Client {
         }
     }
 
+    /// The document the directory holds under an identifier.
+    ///
+    /// todo(did cache): every caller asking is a round trip to the directory,
+    /// and `did_cache.sqlite` is in the layout for exactly this.
+    ///
+    /// # Errors
+    ///
+    /// If the directory cannot be reached in time, holds nothing under the
+    /// identifier, or answers with a document that names another one.
+    pub async fn resolve(&self, did: &Did) -> Result<serde_json::Value, Error> {
+        let request = hyper::Request::builder()
+            .method(hyper::Method::GET)
+            .uri(format!("{}/{did}", self.url))
+            .body(Full::new(Bytes::new()))
+            .map_err(|error| Error::Unreachable(error.to_string()))?;
+        tokio::time::timeout(self.answer / ATTEMPT, self.fetch(did, request))
+            .await
+            .map_err(|elapsed| Error::Unreachable(elapsed.to_string()))?
+    }
+
+    /// The document itself, read far enough to see whose it is.
+    async fn fetch(
+        &self,
+        did: &Did,
+        request: hyper::Request<Full<Bytes>>,
+    ) -> Result<serde_json::Value, Error> {
+        let response = self
+            .http
+            .request(request)
+            .await
+            .map_err(|error| Error::Unreachable(error.to_string()))?;
+        let status = response.status();
+        let body = Limited::new(response.into_body(), DOCUMENT)
+            .collect()
+            .await
+            .map_err(|error| Error::Uncertain(error.to_string()))?
+            .to_bytes();
+        if !status.is_success() {
+            return Err(Error::Refused(
+                status.as_u16(),
+                String::from_utf8_lossy(&body).into_owned(),
+            ));
+        }
+        let document: serde_json::Value = serde_json::from_slice(&body)
+            .map_err(|error| Error::Uncertain(format!("not a document: {error}")))?;
+        if document.get("id").and_then(serde_json::Value::as_str) != Some(did.as_str()) {
+            return Err(Error::Uncertain(
+                "a document under another identifier".to_owned(),
+            ));
+        }
+        Ok(document)
+    }
+
     /// Retires an identifier a registration may have taken, and says whether
     /// the directory is left holding nothing under it.
     ///

@@ -9,6 +9,10 @@ mod reserved;
 
 use crate::syntax::Handle;
 
+/// What an account with no handle is shown as, which is a handle nothing can
+/// resolve and the same string the reference writes.
+pub const INVALID: &str = "handle.invalid";
+
 /// How short and how long the part in front of a service domain may be.
 const SHORTEST: usize = 3;
 const LONGEST: usize = 18;
