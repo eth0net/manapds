@@ -194,8 +194,8 @@ pub struct Manager {
     directory: store::Directory,
     accounts: Arc<Mutex<store::Accounts>>,
     hashing: Arc<tokio::sync::Semaphore>,
-    sequencer: Mutex<store::Sequencer>,
-    clock: Mutex<TidClock>,
+    sequencer: Arc<Mutex<store::Sequencer>>,
+    clock: Arc<Mutex<TidClock>>,
     plc: plc::Client,
     rules: handle::Rules,
     tokens: Tokens,
@@ -217,8 +217,8 @@ impl Manager {
             rules: handle::Rules::new(&config.handle_domains, &config.reserved_handles),
             accounts: Arc::new(Mutex::new(accounts)),
             hashing: Arc::new(tokio::sync::Semaphore::new(hashes_at_once())),
-            sequencer: Mutex::new(sequencer),
-            clock: Mutex::new(TidClock::new()),
+            sequencer: Arc::new(Mutex::new(sequencer)),
+            clock: Arc::new(Mutex::new(TidClock::new())),
             login: LOGIN,
             tokens,
             config,
@@ -308,7 +308,7 @@ impl Manager {
 
         // todo: nothing tries this again, so a consumer never learns about an
         // account whose entries were refused.
-        if let Err(error) = self.log(&did, &handle, commit, &rev, &blocks) {
+        if let Err(error) = self.log(&did, &handle, commit, &rev, &blocks).await {
             tracing::error!(%did, %error, "an account was created and not logged");
         }
 
@@ -343,7 +343,7 @@ impl Manager {
         signup: &Signup,
         signing_key: &Keypair,
     ) -> Result<(Credentials, repo::BlockMap, Cid, Tid), Error> {
-        let (root, blocks) = self.start_repo(did, signing_key)?;
+        let (root, blocks) = self.start_repo(did, signing_key).await?;
         let (commit, rev) = (root.cid, root.rev.clone());
 
         let password_scrypt = self.hashing(&signup.password, password::hash).await;
@@ -375,7 +375,7 @@ impl Manager {
     ///
     /// Separate from the writes that make it, because it happens after the
     /// point those can be taken back.
-    fn log(
+    async fn log(
         &self,
         did: &Did,
         handle: &Handle,
@@ -384,44 +384,51 @@ impl Manager {
         blocks: &repo::BlockMap,
     ) -> Result<(), Error> {
         let entries = event::account_created(did, handle, commit, rev, blocks)?;
-        self.sequencer
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .extend(
-                did,
-                entries
-                    .iter()
-                    .map(|entry| (entry.event, entry.bytes.as_slice())),
-            )?;
+        let (did, sequencer) = (did.clone(), Arc::clone(&self.sequencer));
+        blocking(move || {
+            sequencer
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend(
+                    &did,
+                    entries
+                        .iter()
+                        .map(|entry| (entry.event, entry.bytes.as_slice())),
+                )
+        })
+        .await?;
         Ok(())
     }
 
     /// Writes the account's key and its first commit.
-    // todo: this makes a file, migrates it and signs a commit on the thread
-    // answering the request, which is the shape `docs/architecture.md` rules
-    // out. It is milliseconds where the hashing was tenths, so it waits.
-    fn start_repo(
+    async fn start_repo(
         &self,
         did: &Did,
         signing_key: &Keypair,
     ) -> Result<(store::Root, repo::BlockMap), Error> {
-        store::keys::write(&self.directory.actor_key(did), signing_key)?;
-        let mut actor = store::Actor::open(&self.directory.actor_store(did), did.clone())?;
-        let (repo, blocks) = Repo::create(
-            did.clone(),
-            signing_key,
-            &mut self
-                .clock
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )?;
-        let root = store::Root {
-            cid: repo.cid(),
-            rev: repo.rev().clone(),
-        };
-        // A first commit holds no records, so there is nothing to index.
-        actor.commit(&root, &blocks, &[])?;
-        Ok((root, blocks))
+        let key = self.directory.actor_key(did);
+        let path = self.directory.actor_store(did);
+        let (did, signing_key) = (did.clone(), signing_key.clone());
+        let clock = Arc::clone(&self.clock);
+        blocking(move || {
+            store::keys::write(&key, &signing_key)?;
+            let mut actor = store::Actor::open(&path, did.clone())?;
+            let (repo, blocks) = Repo::create(
+                did,
+                &signing_key,
+                &mut clock
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            )?;
+            let root = store::Root {
+                cid: repo.cid(),
+                rev: repo.rev().clone(),
+            };
+            // A first commit holds no records, so there is nothing to index.
+            actor.commit(&root, &blocks, &[])?;
+            Ok((root, blocks))
+        })
+        .await
     }
 
     /// Whether the code, the handle and the email are all still free.
@@ -764,7 +771,7 @@ impl Manager {
         work: impl FnOnce(&mut store::Accounts) -> T + Send + 'static,
     ) -> T {
         let accounts = Arc::clone(&self.accounts);
-        tokio::task::spawn_blocking(move || {
+        blocking(move || {
             work(
                 &mut accounts
                     .lock()
@@ -772,7 +779,6 @@ impl Manager {
             )
         })
         .await
-        .expect("the account database thread")
     }
 
     /// Runs one scrypt on a thread that is allowed to block, waiting for a turn
@@ -810,6 +816,14 @@ impl Manager {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+}
+
+/// Runs work that has no way not to block on a thread that is allowed to,
+/// which is every SQLite call and every file this server writes.
+async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+    tokio::task::spawn_blocking(work)
+        .await
+        .expect("the storage thread")
 }
 
 /// Exchanges a refresh token for the session that replaces it, or nothing if
