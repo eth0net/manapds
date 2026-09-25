@@ -4,10 +4,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use manapds::crypto::{Algorithm, Keypair};
-use manapds::repo::{Ipld, Repo, Store, Write};
+use manapds::repo::{self, Ipld, Repo, Store, Write};
 use manapds::store::{
-    Account, Accounts, Actor, AppPassword, DidCache, Directory, Error, Event, Registration, Root,
-    Sequencer, Session,
+    Account, Accounts, Actor, AppPassword, DidCache, Directory, Error, Event, Indexed,
+    Registration, Root, Sequencer, Session,
 };
 use manapds::store::{blobs, keys};
 use manapds::syntax::{Did, Nsid, RecordKey, TidClock};
@@ -25,6 +25,35 @@ fn post(text: &str) -> Ipld {
         ),
         ("text".to_owned(), Ipld::String(text.to_owned())),
     ]))
+}
+
+fn indexed(rkey: &str, text: &str) -> Indexed {
+    Indexed::Put {
+        collection: "com.example.record".parse::<Nsid>().expect("an NSID"),
+        rkey: rkey.parse::<RecordKey>().expect("a record key"),
+        cid: repo::cid_for(&repo::encode(&post(text)).expect("encodes")),
+    }
+}
+
+/// Where the repository has got to, as the store wants it.
+fn at(repo: &Repo) -> Root {
+    Root {
+        cid: repo.cid(),
+        rev: repo.rev().clone(),
+    }
+}
+
+/// The index as it stands, read past the writer that keeps it.
+fn indexed_rows(path: &Path) -> Vec<(String, String, String, String)> {
+    let db = Connection::open(path).expect("opens");
+    db.prepare(r#"select "uri", "cid", "collection", "rkey" from "record" order by "rkey""#)
+        .expect("prepares")
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .expect("queries")
+        .collect::<Result<_, _>>()
+        .expect("reads")
 }
 
 fn create(rkey: &str, text: &str) -> Write {
@@ -174,6 +203,7 @@ fn a_repository_round_trips_through_a_file() {
                     rev: repo.rev().clone(),
                 },
                 &blocks,
+                &[],
             )
             .expect("commits");
 
@@ -195,6 +225,10 @@ fn a_repository_round_trips_through_a_file() {
                     rev: repo.rev().clone(),
                 },
                 &written,
+                &[
+                    indexed("3jqfcqzm4fc2j", "first"),
+                    indexed("3jqfcqzm4fd2j", "second"),
+                ],
             )
             .expect("commits");
     }
@@ -222,6 +256,89 @@ fn a_repository_round_trips_through_a_file() {
         manapds::repo::decode::<Ipld>(&store.get(&found).expect("stored")),
         Ok(post("first"))
     );
+}
+
+#[test]
+fn the_index_follows_what_the_commit_did() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let path = Directory::new(home.path()).actor_store(&account());
+    let key = Keypair::generate(Algorithm::Secp256k1);
+    let mut clock = TidClock::new();
+    let collection = "com.example.record".parse::<Nsid>().expect("an NSID");
+    let rkey = "3jqfcqzm4fc2j".parse::<RecordKey>().expect("a record key");
+    let uri = format!("at://{}/{collection}/{rkey}", account());
+
+    let (mut repo, blocks) = Repo::create(account(), &key, &mut clock).expect("creates");
+    let mut store = Actor::open(&path, account()).expect("opens");
+    store.commit(&at(&repo), &blocks, &[]).expect("commits");
+    assert_eq!(indexed_rows(&path), vec![]);
+
+    let written = repo
+        .apply(
+            &store,
+            &[create("3jqfcqzm4fc2j", "first")],
+            &key,
+            &mut clock,
+        )
+        .expect("applies");
+    store
+        .commit(&at(&repo), &written, &[indexed("3jqfcqzm4fc2j", "first")])
+        .expect("commits");
+    assert_eq!(
+        indexed_rows(&path),
+        vec![(
+            uri.clone(),
+            repo::cid_for(&repo::encode(&post("first")).expect("encodes")).to_string(),
+            collection.to_string(),
+            rkey.to_string(),
+        )]
+    );
+
+    let written = repo
+        .apply(
+            &store,
+            &[Write::Update {
+                collection: collection.clone(),
+                rkey: rkey.clone(),
+                record: post("second"),
+            }],
+            &key,
+            &mut clock,
+        )
+        .expect("applies");
+    store
+        .commit(&at(&repo), &written, &[indexed("3jqfcqzm4fc2j", "second")])
+        .expect("commits");
+    // The same row, moved on rather than written twice.
+    assert_eq!(
+        indexed_rows(&path),
+        vec![(
+            uri,
+            repo::cid_for(&repo::encode(&post("second")).expect("encodes")).to_string(),
+            collection.to_string(),
+            rkey.to_string(),
+        )]
+    );
+
+    let written = repo
+        .apply(
+            &store,
+            &[Write::Delete {
+                collection: collection.clone(),
+                rkey: rkey.clone(),
+            }],
+            &key,
+            &mut clock,
+        )
+        .expect("applies");
+    store
+        .commit(
+            &at(&repo),
+            &written,
+            &[Indexed::Delete { collection, rkey }],
+        )
+        .expect("commits");
+    assert_eq!(indexed_rows(&path), vec![]);
 }
 
 #[test]

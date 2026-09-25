@@ -7,7 +7,7 @@ use ipld_core::cid::Cid;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::repo::{BlockMap, Store};
-use crate::syntax::{Did, Tid};
+use crate::syntax::{Did, Nsid, RecordKey, Tid};
 
 use super::{Error, db};
 
@@ -46,6 +46,27 @@ pub struct Root {
     pub cid: Cid,
     /// The revision that commit carries.
     pub rev: Tid,
+}
+
+/// Where one commit leaves a record in the index.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Indexed {
+    /// The key this commit wrote, and the block it now points at.
+    Put {
+        /// The collection it belongs to.
+        collection: Nsid,
+        /// Its key within that collection.
+        rkey: RecordKey,
+        /// The block the record is in.
+        cid: Cid,
+    },
+    /// The key this commit emptied.
+    Delete {
+        /// The collection it belonged to.
+        collection: Nsid,
+        /// Its key within that collection.
+        rkey: RecordKey,
+    },
 }
 
 /// One account's store.
@@ -110,14 +131,23 @@ impl Actor {
         .transpose()
     }
 
-    /// Stores a revision's blocks and moves the root onto it, together or not
-    /// at all.
+    /// Stores a revision's blocks, indexes the records it touched, and moves
+    /// the root onto it, together or not at all.
+    ///
+    /// The index goes in under the same transaction because a listing that
+    /// disagrees with the tree is worse than either being a revision behind.
     ///
     /// # Errors
     ///
     /// If the write fails.
-    pub fn commit(&mut self, root: &Root, blocks: &BlockMap) -> Result<(), Error> {
+    pub fn commit(
+        &mut self,
+        root: &Root,
+        blocks: &BlockMap,
+        records: &[Indexed],
+    ) -> Result<(), Error> {
         let stamp = jiff::Timestamp::now();
+        let did = &self.did;
         let transaction = self.db.transaction()?;
         {
             let mut insert = transaction.prepare(
@@ -130,6 +160,32 @@ impl Actor {
                     i64::try_from(bytes.len()).unwrap_or(i64::MAX),
                     bytes
                 ])?;
+            }
+        }
+        {
+            let mut put = transaction.prepare(
+                r#"insert into "record" ("uri", "cid", "collection", "rkey", "repoRev", "indexedAt") values (?1, ?2, ?3, ?4, ?5, ?6)
+                   on conflict("uri") do update set "cid" = ?2, "repoRev" = ?5, "indexedAt" = ?6"#,
+            )?;
+            let mut remove = transaction.prepare(r#"delete from "record" where "uri" = ?1"#)?;
+            for record in records {
+                match record {
+                    Indexed::Put {
+                        collection,
+                        rkey,
+                        cid,
+                    } => put.execute(params![
+                        uri(did, collection, rkey),
+                        cid.to_string(),
+                        collection.as_str(),
+                        rkey.as_str(),
+                        root.rev.as_str(),
+                        format!("{stamp:.3}")
+                    ])?,
+                    Indexed::Delete { collection, rkey } => {
+                        remove.execute(params![uri(did, collection, rkey)])?
+                    }
+                };
             }
         }
         transaction.execute(
@@ -178,6 +234,12 @@ impl Store for Actor {
             .map(|found| found.unwrap_or(false))
             .map_err(|error| unreachable(&error))
     }
+}
+
+/// What the index keys a record under, which is what a client is handed back
+/// and what a backlink points at.
+fn uri(did: &Did, collection: &Nsid, rkey: &RecordKey) -> String {
+    format!("at://{did}/{collection}/{rkey}")
 }
 
 /// A database that would not answer. Whether waiting would help is the one

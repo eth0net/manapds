@@ -419,7 +419,8 @@ impl Manager {
             cid: repo.cid(),
             rev: repo.rev().clone(),
         };
-        actor.commit(&root, &blocks)?;
+        // A first commit holds no records, so there is nothing to index.
+        actor.commit(&root, &blocks, &[])?;
         Ok((root, blocks))
     }
 
