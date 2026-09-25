@@ -739,6 +739,54 @@ impl Manager {
         self.actor(did, store::Actor::collections).await
     }
 
+    /// Stores a blob and writes down what it is.
+    ///
+    /// # Errors
+    ///
+    /// If the account holds no repository, or storage will not answer.
+    pub async fn upload_blob(
+        &self,
+        did: &Did,
+        mime: String,
+        bytes: Vec<u8>,
+    ) -> Result<store::Blob, Error> {
+        let blobs = self.directory.blobs();
+        let account = did.clone();
+        let blob = store::Blob {
+            cid: store::blobs::cid_for(&bytes),
+            size: bytes.len() as u64,
+            mime,
+        };
+        let written = blob.clone();
+        self.actor(did, move |actor| {
+            blobs.put(&account, &written.cid, &bytes)?;
+            actor.add_blob(&written)
+        })
+        .await?;
+        Ok(blob)
+    }
+
+    /// A blob an account uploaded, and what it said it was.
+    ///
+    /// # Errors
+    ///
+    /// If the account holds no repository, or storage will not answer.
+    pub async fn blob(
+        &self,
+        did: &Did,
+        cid: &Cid,
+    ) -> Result<Option<(store::Blob, Vec<u8>)>, Error> {
+        let blobs = self.directory.blobs();
+        let (account, cid) = (did.clone(), *cid);
+        self.actor(did, move |actor| {
+            let Some(blob) = actor.blob(&cid)? else {
+                return Ok(None);
+            };
+            Ok(Some((blob, blobs.get(&account, &cid)?)))
+        })
+        .await
+    }
+
     /// Runs one read against an account's own database, on a thread that is
     /// allowed to block.
     ///

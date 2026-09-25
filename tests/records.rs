@@ -423,3 +423,70 @@ async fn a_caller_may_only_write_to_the_repository_it_signed_in_as() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
     assert_eq!(refused["error"], "RepoNotFound");
 }
+
+#[tokio::test]
+async fn a_blob_is_taken_in_and_handed_back_as_it_was_sent() {
+    let (router, _manager, _data) = served();
+    let did = account();
+
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/xrpc/com.atproto.repo.uploadBlob")
+        .header("content-type", "image/png")
+        .header(
+            "authorization",
+            format!("Bearer {}", tokens().access(&did, Scope::Access)),
+        )
+        .body(Body::from(vec![1u8, 2, 3, 4]))
+        .expect("a request");
+    let peer: SocketAddr = "203.0.113.1:9000".parse().expect("an address");
+    request.extensions_mut().insert(ConnectInfo(peer));
+    let response = router
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("a body");
+    let uploaded: Value = serde_json::from_slice(&body).expect("json");
+
+    // The answer is the shape a record refers to a blob by, rather than a
+    // bare CID: a client writes it straight into the record it is making.
+    assert_eq!(uploaded["blob"]["$type"], "blob");
+    assert_eq!(uploaded["blob"]["mimeType"], "image/png");
+    assert_eq!(uploaded["blob"]["size"], 4);
+    let cid = uploaded["blob"]["ref"]["$link"]
+        .as_str()
+        .expect("a link")
+        .to_owned();
+
+    let mut request = Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/xrpc/com.atproto.sync.getBlob?did={did}&cid={cid}"
+        ))
+        .body(Body::empty())
+        .expect("a request");
+    request.extensions_mut().insert(ConnectInfo(peer));
+    let response = router
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .expect("a type")
+            .to_str()
+            .expect("text"),
+        "image/png"
+    );
+    let served = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("a body");
+    assert_eq!(served.to_vec(), vec![1u8, 2, 3, 4]);
+}

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::{FromRef, State},
+    extract::{DefaultBodyLimit, FromRef, State},
     middleware,
     routing::get,
 };
@@ -18,6 +18,7 @@ use tower_http::{
 
 mod admin;
 mod app_password;
+mod blob;
 mod identity;
 mod repo;
 mod session;
@@ -124,6 +125,9 @@ pub fn router(context: Context) -> NormalizePath<Router> {
 
 fn routes(context: Context) -> Router {
     let limits = Limits::new(&context.config).map(Arc::new);
+    // Only the blob route takes a body this large; every other one is a small
+    // JSON object and keeps axum's own limit.
+    let uploads = usize::try_from(context.config.blob_upload_limit).unwrap_or(usize::MAX);
     let router = Router::new()
         .route("/", get(root))
         .route("/robots.txt", get(robots))
@@ -176,6 +180,11 @@ fn routes(context: Context) -> Router {
             "/xrpc/com.atproto.repo.applyWrites",
             xrpc::procedure(repo::apply_writes),
         )
+        .route(
+            "/xrpc/com.atproto.repo.uploadBlob",
+            xrpc::procedure(blob::upload).layer(DefaultBodyLimit::max(uploads)),
+        )
+        .route("/xrpc/com.atproto.sync.getBlob", xrpc::query(blob::get))
         .route(
             "/xrpc/com.atproto.repo.getRecord",
             xrpc::query(repo::get_record),

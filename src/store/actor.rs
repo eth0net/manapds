@@ -59,6 +59,17 @@ pub struct Record {
     pub value: Vec<u8>,
 }
 
+/// A blob this account has uploaded, as the index holds it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Blob {
+    /// What the bytes are addressed by.
+    pub cid: Cid,
+    /// What the uploader said they are.
+    pub mime: String,
+    /// How many of them there are.
+    pub size: u64,
+}
+
 /// Where one commit leaves a record in the index.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Indexed {
@@ -275,6 +286,63 @@ impl Actor {
                     .map_err(|_| Error::Malformed("an indexed collection that is not an NSID"))
             })
             .collect()
+    }
+
+    /// Writes down a blob that has been stored, or leaves the row that is
+    /// already there.
+    ///
+    /// `tempKey` is set because nothing has claimed it yet; a record naming it
+    /// is what clears that.
+    ///
+    /// todo(blob lifecycle): nothing clears the key and nothing sweeps a blob
+    /// no record ever named.
+    ///
+    /// # Errors
+    ///
+    /// If the write fails.
+    pub fn add_blob(&self, blob: &Blob) -> Result<(), Error> {
+        self.db.execute(
+            r#"insert or ignore into "blob" ("cid", "mimeType", "size", "tempKey", "createdAt") values (?1, ?2, ?3, ?4, ?5)"#,
+            params![
+                blob.cid.to_string(),
+                blob.mime,
+                i64::try_from(blob.size).unwrap_or(i64::MAX),
+                blob.cid.to_string(),
+                super::stamp(jiff::Timestamp::now())
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// What is known about a blob, if this account uploaded one.
+    ///
+    /// # Errors
+    ///
+    /// If the read fails, or the row names something that is not a CID.
+    pub fn blob(&self, cid: &Cid) -> Result<Option<Blob>, Error> {
+        self.db
+            .query_row(
+                r#"select "cid", "mimeType", "size" from "blob" where "cid" = ?1"#,
+                params![cid.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()?
+            .map(|(cid, mime, size)| {
+                Ok(Blob {
+                    cid: cid
+                        .parse()
+                        .map_err(|_| Error::Malformed("a blob that is not a CID"))?,
+                    mime,
+                    size: u64::try_from(size).unwrap_or_default(),
+                })
+            })
+            .transpose()
     }
 
     /// Whose store this is.
