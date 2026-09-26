@@ -117,6 +117,10 @@ transaction that has to find every row.
 The reference implementation splits the same way, so the shapes are worth
 reading across where a table is unclear.
 
+The budgets a repository's writes are held to are the reference's numbers, and
+the point costs behind them are too. An importer tuned against limits this
+server does not enforce would fall over on any other one.
+
 A write reads the repository root, works out a revision from it and writes it
 back, and two of them at once would leave whichever finished second standing on
 a tree the first had already moved. The root is therefore moved only while it

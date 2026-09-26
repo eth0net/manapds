@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::account::Manager;
 use crate::store;
-use crate::syntax::{AtIdentifier, Did};
 use crate::xrpc::{self, Params, auth::Access};
 
 /// What an upload is taken as when the caller says nothing.
@@ -83,7 +82,7 @@ pub(crate) async fn get(
     State(accounts): State<Arc<Manager>>,
     Params(query): Params<Wanted>,
 ) -> xrpc::Result<Response> {
-    let did = held(&accounts, &query.did).await?;
+    let did = super::repo::found(&accounts, &query.did).await?.did;
     let cid = query
         .cid
         .parse()
@@ -106,21 +105,6 @@ pub(crate) async fn get(
         bytes,
     )
         .into_response())
-}
-
-/// The account an at-identifier names.
-async fn held(accounts: &Manager, did: &str) -> xrpc::Result<Did> {
-    let identifier: AtIdentifier = did
-        .parse()
-        .map_err(|_| xrpc::Error::invalid_request("Invalid did"))?;
-    Ok(accounts
-        .lookup(&identifier)
-        .await?
-        .ok_or_else(|| {
-            xrpc::Error::invalid_request(format!("Could not find repo: {did}"))
-                .named("RepoNotFound")
-        })?
-        .did)
 }
 
 /// One stored blob, in the shape a record would name it.

@@ -14,7 +14,7 @@ use crate::syntax::{AtIdentifier, Did, Handle, Nsid, RecordKey};
 use crate::xrpc::limit::{self, Limits};
 use crate::xrpc::{self, Input, Params, auth::Access};
 
-/// The most records one page holds, and what a page holds unasked.
+/// What a page holds when the caller does not say.
 const PAGE: u32 = 50;
 
 /// The most any page holds, however many are asked for.
@@ -199,7 +199,7 @@ pub(crate) struct Description {
     did_doc: Value,
     collections: Vec<String>,
     /// Whether the document the directory holds names the handle this server
-    /// does, which is the whole reason a client is shown both.
+    /// does.
     handle_is_correct: bool,
 }
 
@@ -510,8 +510,6 @@ fn swap(cid: Option<&str>) -> xrpc::Result<Option<crate::repo::Cid>> {
     .transpose()
 }
 
-/// What a caller believes is at the key, where an absent field asks nothing
-/// and an explicit null asks for a key holding nothing.
 fn expected(swap: &Swap) -> xrpc::Result<Expect> {
     match swap {
         Swap::Unasked => Ok(Expect::Anything),
@@ -542,7 +540,7 @@ fn landed(written: crate::account::Written) -> xrpc::Result<Json<Landed>> {
 }
 
 /// The account an at-identifier names.
-async fn found(accounts: &Manager, repo: &str) -> xrpc::Result<store::Account> {
+pub(super) async fn found(accounts: &Manager, repo: &str) -> xrpc::Result<store::Account> {
     let identifier: AtIdentifier = repo
         .parse()
         .map_err(|_| xrpc::Error::invalid_request("Invalid repo"))?;

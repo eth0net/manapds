@@ -156,13 +156,9 @@ impl Actor {
     /// Stores a revision's blocks, indexes the records it touched, and moves
     /// the root onto it, together or not at all.
     ///
-    /// The index goes in under the same transaction because a listing that
-    /// disagrees with the tree is worse than either being a revision behind.
-    ///
-    /// `from` is the root this revision was built on, and the move only lands
-    /// while that is still the one there. Answering `false` means somebody
-    /// else committed in between and this revision is built on a tree that has
-    /// moved, which the caller has to work out again rather than overwrite.
+    /// `from` is the root this revision was built on, and the move lands only
+    /// while that is still the one there. Answering `false` leaves the caller
+    /// to work the revision out again; `docs/architecture.md` has why.
     ///
     /// # Errors
     ///
@@ -313,8 +309,7 @@ impl Actor {
     /// Writes down a blob that has been stored, or leaves the row that is
     /// already there.
     ///
-    /// `tempKey` is set because nothing has claimed it yet; a record naming it
-    /// is what clears that.
+    /// `tempKey` is set because no record has claimed it yet.
     ///
     /// todo(blob lifecycle): nothing clears the key and nothing sweeps a blob
     /// no record ever named.

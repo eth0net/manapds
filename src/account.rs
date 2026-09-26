@@ -198,7 +198,8 @@ pub struct AppPassword {
     pub privileged: bool,
 }
 
-/// What a caller believes is at a key, and the write is refused without.
+/// What a caller believes is at a key. A write that finds otherwise is
+/// refused.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Expect {
     /// Whatever is there, which is what a call that does not ask means.
@@ -607,8 +608,6 @@ impl Manager {
                     cid: repo.cid(),
                     rev: repo.rev().clone(),
                 };
-                // Somebody else moved the root while this was being worked
-                // out, so it is worked out again against where they left it.
                 if !actor.commit(Some(&from), &root, &blocks, &planned.index)? {
                     continue;
                 }
@@ -671,19 +670,13 @@ impl Manager {
     }
 
     /// A record key nothing has used, for a call that did not name one.
-    ///
-    /// # Panics
-    ///
-    /// Never: every TID is a record key.
     #[must_use]
     pub fn record_key(&self) -> RecordKey {
         self.clock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .mint()
-            .as_str()
-            .parse()
-            .expect("a TID is a record key")
+            .into()
     }
 
     /// The account an identifier names, whichever of the two kinds it is.
@@ -804,12 +797,13 @@ impl Manager {
         .await
     }
 
-    /// Runs one read against an account's own database, on a thread that is
+    /// Runs one call against an account's own database, on a thread that is
     /// allowed to block.
     ///
     /// # Errors
     ///
-    /// If there is no database to open, which is a signup that never finished.
+    /// If there is no database to open, which is a signup that never finished,
+    /// or the call itself fails.
     async fn actor<T: Send + 'static>(
         &self,
         did: &Did,
@@ -1102,8 +1096,7 @@ impl Manager {
     }
 
     /// Runs one call against the account database on a thread that is allowed
-    /// to block, which is every call it takes: SQLite offers no other way to
-    /// wait for a lock.
+    /// to block, since SQLite offers no other way to wait for a lock.
     async fn accounts<T: Send + 'static>(
         &self,
         work: impl FnOnce(&mut store::Accounts) -> T + Send + 'static,

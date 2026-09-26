@@ -33,7 +33,7 @@ fn tokens() -> Tokens {
     Tokens::new(common::SECRET, "did:web:pds.example.com")
 }
 
-/// A record in a collection this server holds no lexicon for.
+/// One record, in a collection nothing here has a lexicon for.
 fn record(rkey: &str, text: &str) -> Write {
     Write::Create {
         collection: "com.example.record".parse::<Nsid>().expect("an NSID"),
