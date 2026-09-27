@@ -174,7 +174,8 @@ async fn a_record_is_read_back_by_its_key() {
             None,
         )
         .await
-        .expect("a commit");
+        .expect("a commit")
+        .expect("a write");
 
     let (status, body) = get(
         &router,
@@ -225,7 +226,8 @@ async fn a_collection_is_paged_newest_first_and_stops_saying_so() {
             None,
         )
         .await
-        .expect("a commit");
+        .expect("a commit")
+        .expect("a write");
 
     let (status, body) = get(
         &router,
@@ -638,4 +640,72 @@ async fn taking_out_a_key_holding_nothing_is_what_the_caller_wanted() {
     .await;
     assert_eq!(status, StatusCode::OK, "{removed}");
     assert!(removed["commit"]["rev"].is_string());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn deletes_racing_for_one_key_all_answer() {
+    let (router, _manager, _data) = served();
+    let did = account();
+
+    for round in 0..20 {
+        let rkey = format!("3jqfcqzm4f{round:02}j");
+        let (status, _) = post(
+            &router,
+            "/xrpc/com.atproto.repo.createRecord",
+            serde_json::json!({
+                "repo": did.as_str(),
+                "collection": "com.example.record",
+                "rkey": rkey,
+                "record": { "$type": "com.example.record", "text": "first" },
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Only one of these takes the record out; the rest find the key empty
+        // by the time they look, which is what the caller asked for either way.
+        let racing: Vec<_> = (0..8)
+            .map(|_| {
+                let (router, rkey, did) = (router.clone(), rkey.clone(), did.clone());
+                tokio::spawn(async move {
+                    post(
+                        &router,
+                        "/xrpc/com.atproto.repo.deleteRecord",
+                        serde_json::json!({
+                            "repo": did.as_str(),
+                            "collection": "com.example.record",
+                            "rkey": rkey,
+                        }),
+                    )
+                    .await
+                })
+            })
+            .collect();
+
+        for attempt in racing {
+            let (status, body) = attempt.await.expect("a task");
+            assert_eq!(status, StatusCode::OK, "round {round}: {body}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_delete_that_finds_nothing_still_reads_what_it_was_sent() {
+    let (router, _manager, _data) = served();
+
+    // The swap is parsed before the key is looked at, so the same request is
+    // refused the same way whatever happens to be there.
+    let (status, refused) = post(
+        &router,
+        "/xrpc/com.atproto.repo.deleteRecord",
+        serde_json::json!({
+            "repo": account().as_str(),
+            "collection": "com.example.record",
+            "rkey": "3jqfcqzm4fc2j",
+            "swapCommit": "not a cid",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"], "InvalidSwap");
 }

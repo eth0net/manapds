@@ -528,7 +528,8 @@ async fn a_write_lands_under_one_commit_and_moves_the_root() {
             None,
         )
         .await
-        .expect("a commit");
+        .expect("a commit")
+        .expect("a write");
     assert_eq!(
         written
             .results

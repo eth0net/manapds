@@ -6,7 +6,7 @@ use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::account::{self, Expect, Manager, Requested};
+use crate::account::{self, Expect, Manager, Missing, Requested};
 use crate::repo;
 use crate::repo::Write;
 use crate::store;
@@ -259,6 +259,7 @@ pub(crate) async fn put_record(
             record: record(input.record)?,
         },
         expect: expected(&input.swap_record)?,
+        missing: Missing::Refuse,
     };
     landed(
         accounts
@@ -281,26 +282,26 @@ pub(crate) async fn delete_record(
 ) -> xrpc::Result<Json<Removed>> {
     let did = owned(&accounts, &access, &input.repo).await?;
     spend(limits.as_deref(), &did, limit::DELETE)?;
-    let (collection, rkey) = (collection(&input.collection)?, record_key(&input.rkey)?);
-
-    if accounts.record(&did, &collection, &rkey).await?.is_none() {
-        return Ok(Json(Removed { commit: None }));
-    }
-
     let asked = Requested {
-        write: Write::Delete { collection, rkey },
+        write: Write::Delete {
+            collection: collection(&input.collection)?,
+            rkey: record_key(&input.rkey)?,
+        },
         // An explicit null is no check here rather than a demand for an empty
         // key, which is how the reference reads it on this method alone.
         expect: match input.swap_record {
             Swap::Nothing => Expect::Anything,
             asked => expected(&asked)?,
         },
+        // A key holding nothing is what a delete was asking for, so it is
+        // answered rather than refused, with no commit because none was made.
+        missing: Missing::Skip,
     };
     let written = accounts
         .write(&did, vec![asked], swap(input.swap_commit.as_deref())?)
         .await?;
     Ok(Json(Removed {
-        commit: Some(At {
+        commit: written.map(|written| At {
             cid: written.commit.to_string(),
             rev: written.rev.as_str().to_owned(),
         }),
@@ -381,7 +382,8 @@ pub(crate) async fn apply_writes(
         .collect();
     let written = accounts
         .write(&did, requested, swap(input.swap_commit.as_deref())?)
-        .await?;
+        .await?
+        .ok_or_else(|| xrpc::Error::new(xrpc::Status::InternalServerError))?;
 
     Ok(Json(Applied {
         commit: At {
@@ -532,7 +534,8 @@ fn expected(swap: &Swap) -> xrpc::Result<Expect> {
 }
 
 /// What one record landing answers with.
-fn landed(written: crate::account::Written) -> xrpc::Result<Json<Landed>> {
+fn landed(written: Option<account::Written>) -> xrpc::Result<Json<Landed>> {
+    let written = written.ok_or_else(|| xrpc::Error::new(xrpc::Status::InternalServerError))?;
     let at = At {
         cid: written.commit.to_string(),
         rev: written.rev.as_str().to_owned(),

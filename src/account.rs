@@ -215,6 +215,17 @@ pub enum Expect {
     Block(Cid),
 }
 
+/// What a write whose key holds nothing should do.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Missing {
+    /// Refuse, which is what a method naming one record expects.
+    #[default]
+    Refuse,
+    /// Leave it out of the commit: a key with nothing at it is already what
+    /// taking a record out asked for.
+    Skip,
+}
+
 /// One write, and what has to be at its key for it to land.
 #[derive(Clone, Debug)]
 pub struct Requested {
@@ -222,6 +233,8 @@ pub struct Requested {
     pub write: repo::Write,
     /// What the caller believes it is replacing.
     pub expect: Expect,
+    /// What to do if its key holds nothing.
+    pub missing: Missing,
 }
 
 impl From<repo::Write> for Requested {
@@ -230,6 +243,7 @@ impl From<repo::Write> for Requested {
         Self {
             write,
             expect: Expect::Anything,
+            missing: Missing::Refuse,
         }
     }
 }
@@ -567,6 +581,9 @@ impl Manager {
 
     /// Applies a set of writes under one commit, and says where each landed.
     ///
+    /// Answers `None` where every write asked to be skipped and every one of
+    /// their keys held nothing, since there was nothing to commit.
+    ///
     /// # Errors
     ///
     /// If the account holds no repository, `swap` names a commit that is not
@@ -576,7 +593,7 @@ impl Manager {
         did: &Did,
         requested: Vec<Requested>,
         swap: Option<Cid>,
-    ) -> Result<Written, Error> {
+    ) -> Result<Option<Written>, Error> {
         let key = self.directory.actor_key(did);
         let path = self.directory.actor_store(did);
         let clock = Arc::clone(&self.clock);
@@ -598,11 +615,12 @@ impl Manager {
                 let since = repo.rev().clone();
                 let prev_data = repo.commit().data;
                 let planned = plan(&mut repo, &actor, &account, &requested)?;
-                let writes: Vec<repo::Write> =
-                    requested.iter().map(|asked| asked.write.clone()).collect();
+                if planned.writes.is_empty() {
+                    return Ok(None);
+                }
                 let blocks = repo.apply(
                     &actor,
-                    &writes,
+                    &planned.writes,
                     &signing_key,
                     &mut clock
                         .lock()
@@ -615,7 +633,7 @@ impl Manager {
                 if !actor.commit(Some(&from), &root, &blocks, &planned.index)? {
                     continue;
                 }
-                return Ok(Landed {
+                return Ok(Some(Landed {
                     written: Written {
                         results: planned.results,
                         commit: root.cid,
@@ -626,11 +644,14 @@ impl Manager {
                     ops: planned.ops,
                     since,
                     prev_data,
-                });
+                }));
             }
             Err(Error::Contended)
         })
         .await?;
+        let Some(landed) = landed else {
+            return Ok(None);
+        };
 
         // Both of these follow a commit that has already landed, so neither is
         // worth failing the call over.
@@ -647,7 +668,7 @@ impl Manager {
         {
             tracing::error!(%did, %error, "a commit was written and the root beside it was not moved");
         }
-        Ok(landed.written)
+        Ok(Some(landed.written))
     }
 
     /// Puts one commit in the log.
@@ -1168,6 +1189,7 @@ struct Landed {
 /// What a set of writes leaves in the index, in the log and in the answer.
 #[derive(Debug)]
 struct Plan {
+    writes: Vec<repo::Write>,
     index: Vec<store::Indexed>,
     ops: Vec<event::Op>,
     results: Vec<Applied>,
@@ -1184,6 +1206,7 @@ fn plan(
     did: &Did,
     requested: &[Requested],
 ) -> Result<Plan, Error> {
+    let mut writes = Vec::with_capacity(requested.len());
     let mut index = Vec::with_capacity(requested.len());
     let mut ops = Vec::with_capacity(requested.len());
     let mut results = Vec::with_capacity(requested.len());
@@ -1203,6 +1226,12 @@ fn plan(
                 ));
             }
         }
+        // Settled here rather than at the handler, so a key emptied between the
+        // two cannot turn a second attempt into a refusal.
+        if prev.is_none() && asked.missing == Missing::Skip {
+            continue;
+        }
+        writes.push(write.clone());
         let (action, cid) = match write {
             repo::Write::Create { record, .. } => {
                 ("create", Some(repo::cid_for(&repo::encode(record)?)))
@@ -1240,6 +1269,7 @@ fn plan(
         });
     }
     Ok(Plan {
+        writes,
         index,
         ops,
         results,
