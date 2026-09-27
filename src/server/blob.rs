@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::account::Manager;
 use crate::store;
+use crate::syntax::Did;
 use crate::xrpc::{self, Params, auth::Access};
 
 /// What an upload is taken as when the caller says nothing.
@@ -82,7 +83,12 @@ pub(crate) async fn get(
     State(accounts): State<Arc<Manager>>,
     Params(query): Params<Wanted>,
 ) -> xrpc::Result<Response> {
-    let did = super::repo::found(&accounts, &query.did).await?.did;
+    // The lexicon asks for a DID here rather than a handle, so nothing is
+    // resolved: a blob is served by whoever holds it or by nobody.
+    let did: Did = query
+        .did
+        .parse()
+        .map_err(|_| xrpc::Error::invalid_request("Invalid did"))?;
     let cid = query
         .cid
         .parse()

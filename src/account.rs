@@ -54,7 +54,7 @@ const HASHES: usize = 4;
 ///
 /// todo: each round lets one writer through, so this is also a cap on how many
 /// writes an account takes at once. The reference queues them on the database
-/// instead, which is what serializing per account would buy.
+/// instead.
 const ATTEMPTS: usize = 8;
 
 /// The most invite codes one call writes, across every account it names.
@@ -1100,8 +1100,8 @@ impl Manager {
         }
     }
 
-    /// Runs one call against the account database on a thread that is allowed
-    /// to block, since SQLite offers no other way to wait for a lock.
+    /// The same, against the account database, which every call to it needs:
+    /// SQLite offers no other way to wait for a lock.
     async fn accounts<T: Send + 'static>(
         &self,
         work: impl FnOnce(&mut store::Accounts) -> T + Send + 'static,

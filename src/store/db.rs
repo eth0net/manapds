@@ -39,8 +39,8 @@ pub(super) fn memory(migrations: &[Migration]) -> Result<Connection, Error> {
 
 fn prepare(db: Connection, migrations: &[Migration]) -> Result<Connection, Error> {
     db.busy_timeout(BUSY_TIMEOUT)?;
-    // Changing the journal mode wants the database to itself, and one already
-    // in WAL wants nothing changed, so it is read before it is written.
+    // One already in WAL wants nothing changed, and asking anyway takes the
+    // lock.
     let journal: String = db.query_row("pragma journal_mode", [], |row| row.get(0))?;
     if !journal.eq_ignore_ascii_case("wal") {
         waiting(|| db.pragma_update(None, "journal_mode", "WAL"))?;
@@ -65,9 +65,8 @@ fn migrate(db: &mut Connection, migrations: &[Migration]) -> Result<(), Error> {
         return Ok(());
     }
 
-    // Anything left to do is done holding the write lock, and what is left is
-    // worked out again inside it: two connections opening one new file would
-    // otherwise both find the same migration outstanding and both run it.
+    // Worked out again inside the write lock: two connections opening one new
+    // file would otherwise both run the same migration.
     let stamp = format!("{:.3}", jiff::Timestamp::now());
     let transaction = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     transaction.execute_batch(LEDGER)?;

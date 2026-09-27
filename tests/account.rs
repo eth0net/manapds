@@ -759,6 +759,7 @@ async fn a_signup_whose_identifier_is_retired_is_taken_back_out() {
 
 /// A directory that accepts the connection and then says nothing, which is
 /// what a signup is waiting on when the caller gives up on it.
+/// A directory that answers nothing, and a flag it raises when reached.
 async fn silent() -> (String, Arc<AtomicBool>) {
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .await
@@ -796,11 +797,9 @@ async fn a_signup_the_caller_gives_up_on_mid_registration_is_left_standing() {
 
     let request = signup("alice.pds.test");
     let mut attempt = Box::pin(manager.create(&request));
-    // Driven until the operation reaches the directory, which is the point the
-    // rollback stops being a discard. Waiting for the account row instead would
-    // break out one step early, while hanging up still takes the signup back
-    // out. The deadline is there to stop a hang rather than to measure
-    // anything: every other test in this file is running scrypt too.
+    // Driven until the operation reaches the directory, which is where the
+    // rollback stops being a discard. The deadline only stops a hang, since
+    // scrypt makes the timing unpredictable.
     let deadline = std::time::Instant::now() + Duration::from_secs(120);
     while std::time::Instant::now() < deadline && !reached.load(Ordering::Relaxed) {
         tokio::select! {

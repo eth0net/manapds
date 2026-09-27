@@ -815,8 +815,6 @@ fn a_record_holding_what_the_data_model_has_no_room_for_is_refused() {
         Err(Error::NotRecordData("a $bytes that is not base64"))
     );
 
-    // Written without padding, and read either way: the reference does the
-    // same, and every other language's base64 pads by default.
     let padded = from_json(serde_json::json!({ "$bytes": "SGVsbG8sIHdvcmxkIQ==" }));
     assert_eq!(padded, Ok(Ipld::Bytes(b"Hello, world!".to_vec())));
     assert_eq!(

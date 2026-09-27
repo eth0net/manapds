@@ -599,8 +599,6 @@ async fn taking_out_a_key_holding_nothing_is_what_the_caller_wanted() {
     let (router, _manager, _data) = served();
     let did = account();
 
-    // No commit, because nothing was written — and not a refusal, because the
-    // key is empty either way, which is what the caller asked for.
     let (status, removed) = post(
         &router,
         "/xrpc/com.atproto.repo.deleteRecord",
@@ -614,8 +612,6 @@ async fn taking_out_a_key_holding_nothing_is_what_the_caller_wanted() {
     assert_eq!(status, StatusCode::OK, "{removed}");
     assert_eq!(removed.get("commit"), None);
 
-    // An explicit null means no check on this method, so it takes out what is
-    // there rather than asking for a key with nothing in it.
     let (status, written) = post(
         &router,
         "/xrpc/com.atproto.repo.createRecord",

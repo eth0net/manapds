@@ -85,8 +85,8 @@ impl Default for Clock {
 }
 
 impl From<Tid> for super::RecordKey {
-    /// Every TID is a record key: thirteen base32-sortable digits clear both
-    /// the length and the character set a key is held to.
+    /// Thirteen base32-sortable digits clear both the length and the character
+    /// set a record key is held to.
     fn from(tid: Tid) -> Self {
         Self::try_from(tid.0).expect("a TID is a record key")
     }

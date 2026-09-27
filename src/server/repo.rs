@@ -271,8 +271,8 @@ pub(crate) async fn put_record(
 ///
 /// # Errors
 ///
-/// If the caller is not the repository it names, nothing is at the key, a swap
-/// names something that is not there, or storage will not answer.
+/// If the caller is not the repository it names, a swap names something that
+/// is not there, or storage will not answer.
 pub(crate) async fn delete_record(
     State(accounts): State<Arc<Manager>>,
     State(limits): State<Option<Arc<Limits>>>,
@@ -283,17 +283,14 @@ pub(crate) async fn delete_record(
     spend(limits.as_deref(), &did, limit::DELETE)?;
     let (collection, rkey) = (collection(&input.collection)?, record_key(&input.rkey)?);
 
-    // Taking out a key holding nothing is what the caller wanted, so it is
-    // answered rather than refused, with no commit because none was written.
     if accounts.record(&did, &collection, &rkey).await?.is_none() {
         return Ok(Json(Removed { commit: None }));
     }
 
     let asked = Requested {
         write: Write::Delete { collection, rkey },
-        // A null here asks for a key holding nothing, which is a delete asking
-        // for nothing to delete. The reference reads it as no check at all on
-        // this method alone, and a client that sends one means no check.
+        // An explicit null is no check here rather than a demand for an empty
+        // key, which is how the reference reads it on this method alone.
         expect: match input.swap_record {
             Swap::Nothing => Expect::Anything,
             asked => expected(&asked)?,
@@ -553,7 +550,7 @@ fn landed(written: crate::account::Written) -> xrpc::Result<Json<Landed>> {
 }
 
 /// The account an at-identifier names.
-pub(super) async fn found(accounts: &Manager, repo: &str) -> xrpc::Result<store::Account> {
+async fn found(accounts: &Manager, repo: &str) -> xrpc::Result<store::Account> {
     let identifier: AtIdentifier = repo
         .parse()
         .map_err(|_| xrpc::Error::invalid_request("Invalid repo"))?;
