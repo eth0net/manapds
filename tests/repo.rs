@@ -814,6 +814,19 @@ fn a_record_holding_what_the_data_model_has_no_room_for_is_refused() {
         from_json(serde_json::json!({ "sig": { "$bytes": "not base64!" } })),
         Err(Error::NotRecordData("a $bytes that is not base64"))
     );
+
+    // Written without padding, and read either way: the reference does the
+    // same, and every other language's base64 pads by default.
+    let padded = from_json(serde_json::json!({ "$bytes": "SGVsbG8sIHdvcmxkIQ==" }));
+    assert_eq!(padded, Ok(Ipld::Bytes(b"Hello, world!".to_vec())));
+    assert_eq!(
+        from_json(serde_json::json!({ "$bytes": "SGVsbG8sIHdvcmxkIQ" })),
+        padded
+    );
+    assert_eq!(
+        to_json(&padded.expect("bytes")).expect("json"),
+        serde_json::json!({ "$bytes": "SGVsbG8sIHdvcmxkIQ" })
+    );
     assert_eq!(
         from_json(serde_json::json!({ "subject": { "$link": 3 } })),
         Err(Error::NotRecordData("a $link or $bytes holding no string"))

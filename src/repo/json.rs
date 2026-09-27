@@ -4,11 +4,23 @@
 //! one an object with a single reserved key: `$link` for a CID and `$bytes`
 //! for a byte string. Everything else maps across as itself.
 
-use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD as BASE64};
+use base64::Engine;
+use base64::engine::general_purpose::GeneralPurpose;
+use base64::engine::{DecodePaddingMode, GeneralPurposeConfig};
 use ipld_core::ipld::Ipld;
 use serde_json::{Map, Value};
 
 use super::Error;
+
+/// Written without padding, which is what the other server writes, and read
+/// with or without it, which is what every base64 in every other language
+/// hands a client.
+const BASE64: GeneralPurpose = GeneralPurpose::new(
+    &base64::alphabet::STANDARD,
+    GeneralPurposeConfig::new()
+        .with_encode_padding(false)
+        .with_decode_padding_mode(DecodePaddingMode::Indifferent),
+);
 
 /// The key a CID is written under.
 const LINK: &str = "$link";
