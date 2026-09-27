@@ -51,6 +51,10 @@ const HASHES: usize = 4;
 /// How many times a write works itself out again against a root somebody else
 /// moved first. Past this, the account is taking writes faster than one at a
 /// time can be applied, and the caller is better told to come back.
+///
+/// todo: each round lets one writer through, so this is also a cap on how many
+/// writes an account takes at once. The reference queues them on the database
+/// instead, which is what serializing per account would buy.
 const ATTEMPTS: usize = 8;
 
 /// The most invite codes one call writes, across every account it names.
@@ -631,7 +635,8 @@ impl Manager {
         // Both of these follow a commit that has already landed, so neither is
         // worth failing the call over.
         //
-        // todo: nothing tries the log again, so a consumer can miss a commit.
+        // todo: nothing tries the log again, so a consumer can miss a commit,
+        // and two writes that land together can be logged in either order.
         if let Err(error) = self.log_commit(did, &landed).await {
             tracing::error!(%did, %error, "a commit was written and not logged");
         }

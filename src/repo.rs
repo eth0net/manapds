@@ -215,6 +215,8 @@ impl Repo {
         }
 
         // todo: the CIDs this revision drops, so stale blocks can be collected.
+        // Two writes to one key in a batch leave the first one's block here
+        // with nothing pointing at it.
         let (root, tree) = data.unstored_blocks(store)?;
         blocks.merge(tree);
         let commit = Commit::sign(
