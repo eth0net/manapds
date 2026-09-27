@@ -552,13 +552,41 @@ async fn an_account_past_its_write_budget_is_told_when_to_come_back() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn writes_from_two_callers_at_once_all_land() {
+async fn every_write_an_account_takes_at_once_lands_in_order() {
     let (_router, manager, _data) = served();
     let did = account();
 
-    // Whether these overlap is up to the scheduler, so this says that nothing
-    // is lost when they do rather than making them. The store's own test is
-    // where a commit built on a moved root is refused.
+    // Well past what the retry behind the lock would allow, so this fails if
+    // an account's writes ever stop being taken one at a time.
+    let writing: Vec<_> = (0..32)
+        .map(|n| {
+            let (manager, did) = (Arc::clone(&manager), did.clone());
+            tokio::spawn(async move {
+                manager
+                    .write(
+                        &did,
+                        vec![record(&format!("3jqfcqzm4h{n:02}j"), "mine").into()],
+                        None,
+                    )
+                    .await
+            })
+        })
+        .collect();
+    let mut revs: Vec<String> = Vec::new();
+    for write in writing {
+        let written = write
+            .await
+            .expect("a task")
+            .expect("it lands")
+            .expect("a write");
+        revs.push(written.rev.as_str().to_owned());
+    }
+    // Every one got a revision of its own, and they were minted in order.
+    let mut sorted = revs.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), 32);
+
     for round in 0..10 {
         let (one, other) = (Arc::clone(&manager), Arc::clone(&manager));
         let (left, right) = (did.clone(), did.clone());
@@ -593,7 +621,7 @@ async fn writes_from_two_callers_at_once_all_land() {
         )
         .await
         .expect("reads");
-    assert_eq!(held.len(), 20);
+    assert_eq!(held.len(), 52);
 }
 
 #[tokio::test]

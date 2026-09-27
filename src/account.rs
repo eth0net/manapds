@@ -7,7 +7,8 @@ pub mod email;
 pub mod handle;
 pub mod password;
 
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD as BASE64};
@@ -49,12 +50,8 @@ const STORED_PASSWORD: usize = 512;
 const HASHES: usize = 4;
 
 /// How many times a write works itself out again against a root somebody else
-/// moved first. Past this, the account is taking writes faster than one at a
-/// time can be applied, and the caller is better told to come back.
-///
-/// todo: each round lets one writer through, so this is also a cap on how many
-/// writes an account takes at once. The reference queues them on the database
-/// instead.
+/// moved first. One server takes an account's writes one at a time, so this is
+/// only reached where something else is writing to the same files.
 const ATTEMPTS: usize = 8;
 
 /// The most invite codes one call writes, across every account it names.
@@ -287,6 +284,7 @@ pub struct Manager {
     hashing: Arc<tokio::sync::Semaphore>,
     sequencer: Arc<Mutex<store::Sequencer>>,
     clock: Arc<Mutex<TidClock>>,
+    writing: Writing,
     plc: plc::Client,
     rules: handle::Rules,
     tokens: Tokens,
@@ -310,6 +308,7 @@ impl Manager {
             hashing: Arc::new(tokio::sync::Semaphore::new(hashes_at_once())),
             sequencer: Arc::new(Mutex::new(sequencer)),
             clock: Arc::new(Mutex::new(TidClock::new())),
+            writing: Writing::default(),
             login: LOGIN,
             tokens,
             config,
@@ -594,6 +593,11 @@ impl Manager {
         requested: Vec<Requested>,
         swap: Option<Cid>,
     ) -> Result<Option<Written>, Error> {
+        // Held until the log has the commit, so that a consumer is handed the
+        // revisions of one repository in the order they were written.
+        let turn = self.writing.turn(did);
+        let _writing = turn.lock().await;
+
         let key = self.directory.actor_key(did);
         let path = self.directory.actor_store(did);
         let clock = Arc::clone(&self.clock);
@@ -656,8 +660,7 @@ impl Manager {
         // Both of these follow a commit that has already landed, so neither is
         // worth failing the call over.
         //
-        // todo: nothing tries the log again, so a consumer can miss a commit,
-        // and two writes that land together can be logged in either order.
+        // todo: nothing tries the log again, so a consumer can miss a commit.
         if let Err(error) = self.log_commit(did, &landed).await {
             tracing::error!(%did, %error, "a commit was written and not logged");
         }
@@ -1172,6 +1175,34 @@ impl Manager {
         self.accounts
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// Whose turn it is to write to which account.
+///
+/// A repository is read, worked out and written back, and two of those
+/// overlapping costs a revision thrown away at best and a log a consumer
+/// cannot follow at worst. Only the accounts being written to are held: an
+/// entry goes once the last writer has let go of it.
+#[derive(Debug, Default)]
+struct Writing(Mutex<HashMap<Did, Weak<tokio::sync::Mutex<()>>>>);
+
+impl Writing {
+    /// The lock this account's writers queue on, made if nobody holds one.
+    fn turn(&self, did: &Did) -> Arc<tokio::sync::Mutex<()>> {
+        let mut held = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(turn) = held.get(did).and_then(Weak::upgrade) {
+            return turn;
+        }
+        // Whoever finds nothing here for an account clears out the accounts
+        // nobody is writing to, which is the only thing that ever does.
+        held.retain(|_, turn| turn.strong_count() > 0);
+        let turn = Arc::new(tokio::sync::Mutex::new(()));
+        held.insert(did.clone(), Arc::downgrade(&turn));
+        turn
     }
 }
 
