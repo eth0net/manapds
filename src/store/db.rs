@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use super::Error;
 
@@ -39,7 +39,12 @@ pub(super) fn memory(migrations: &[Migration]) -> Result<Connection, Error> {
 
 fn prepare(db: Connection, migrations: &[Migration]) -> Result<Connection, Error> {
     db.busy_timeout(BUSY_TIMEOUT)?;
-    db.pragma_update(None, "journal_mode", "WAL")?;
+    // Changing the journal mode wants the database to itself, and one already
+    // in WAL wants nothing changed, so it is read before it is written.
+    let journal: String = db.query_row("pragma journal_mode", [], |row| row.get(0))?;
+    if !journal.eq_ignore_ascii_case("wal") {
+        waiting(|| db.pragma_update(None, "journal_mode", "WAL"))?;
+    }
     // SQLite leaves these off per connection and the reference never asks for
     // them, but better-sqlite3 turns them on as it opens, so the cascades the
     // schema declares do fire over there.
@@ -56,32 +61,22 @@ fn prepare(db: Connection, migrations: &[Migration]) -> Result<Connection, Error
 /// what makes opening one per call affordable: every write here takes the lock
 /// that every other connection is waiting on.
 fn migrate(db: &mut Connection, migrations: &[Migration]) -> Result<(), Error> {
-    if !holds_ledger(db)? {
-        db.execute_batch(LEDGER)?;
-    }
-    let applied: Vec<String> = db
-        .prepare(r#"select "name" from "kysely_migration" order by "name""#)?
-        .query_map([], |row| row.get(0))?
-        .collect::<Result<_, _>>()?;
-
-    if let Some(unknown) = applied
-        .iter()
-        .find(|name| !migrations.iter().any(|(known, _)| known == name))
-    {
-        return Err(Error::TooNew(unknown.clone()));
-    }
-
-    let outstanding: Vec<&Migration> = migrations
-        .iter()
-        .filter(|(name, _)| !applied.iter().any(|done| done == name))
-        .collect();
-    if outstanding.is_empty() {
+    if holds_ledger(db)? && outstanding(&applied(db)?, migrations)?.is_empty() {
         return Ok(());
     }
 
+    // Anything left to do is done holding the write lock, and what is left is
+    // worked out again inside it: two connections opening one new file would
+    // otherwise both find the same migration outstanding and both run it.
     let stamp = format!("{:.3}", jiff::Timestamp::now());
-    let transaction = db.transaction()?;
-    for (name, apply) in outstanding {
+    let transaction = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    transaction.execute_batch(LEDGER)?;
+    let applied = applied(&transaction)?;
+    for name in outstanding(&applied, migrations)? {
+        let apply = migrations
+            .iter()
+            .find_map(|(known, apply)| (*known == name).then_some(apply))
+            .expect("the name came from this list");
         apply(&transaction)?;
         transaction.execute(
             r#"insert into "kysely_migration" ("name", "timestamp") values (?1, ?2)"#,
@@ -90,6 +85,51 @@ fn migrate(db: &mut Connection, migrations: &[Migration]) -> Result<(), Error> {
     }
     transaction.commit()?;
     Ok(())
+}
+
+/// Every migration the ledger records, in the order it records them.
+fn applied(db: &Connection) -> Result<Vec<String>, Error> {
+    Ok(db
+        .prepare(r#"select "name" from "kysely_migration" order by "name""#)?
+        .query_map([], |row| row.get(0))?
+        .collect::<Result<_, _>>()?)
+}
+
+/// The ones this server still owes the file, refusing one it has never heard
+/// of rather than writing under a schema somebody else moved on.
+fn outstanding(applied: &[String], migrations: &[Migration]) -> Result<Vec<&'static str>, Error> {
+    if let Some(unknown) = applied
+        .iter()
+        .find(|name| !migrations.iter().any(|(known, _)| known == name))
+    {
+        return Err(Error::TooNew(unknown.clone()));
+    }
+    Ok(migrations
+        .iter()
+        .map(|(name, _)| *name)
+        .filter(|name| !applied.iter().any(|done| done == name))
+        .collect())
+}
+
+/// Runs something that wants the database to itself, which a busy timeout does
+/// not cover: the pragma that sets the journal mode refuses rather than waits.
+fn waiting(mut work: impl FnMut() -> rusqlite::Result<()>) -> Result<(), Error> {
+    let until = std::time::Instant::now() + BUSY_TIMEOUT;
+    loop {
+        match work() {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                let busy = matches!(
+                    error.sqlite_error_code(),
+                    Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+                );
+                if !busy || std::time::Instant::now() >= until {
+                    return Err(error.into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+    }
 }
 
 /// Whether the ledger is there to be read, asked without writing it.

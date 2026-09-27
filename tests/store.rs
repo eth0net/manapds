@@ -393,6 +393,35 @@ fn the_index_follows_what_the_commit_did() {
 }
 
 #[test]
+fn four_connections_opening_one_new_file_migrate_it_once() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let path = Directory::new(home.path()).actor_store(&account());
+
+    // Every record write opens a database, so the first four requests against
+    // a new account arrive here together.
+    let refused: Vec<Error> = std::thread::scope(|scope| {
+        let opens: Vec<_> = (0..4)
+            .map(|_| scope.spawn(|| Actor::open(&path, account())))
+            .collect();
+        opens
+            .into_iter()
+            .filter_map(|open| open.join().expect("a thread").err())
+            .collect()
+    });
+    assert!(refused.is_empty(), "{refused:?}");
+
+    let db = Connection::open(&path).expect("opens");
+    let applied: Vec<String> = db
+        .prepare(r#"select "name" from "kysely_migration""#)
+        .expect("prepares")
+        .query_map([], |row| row.get(0))
+        .expect("queries")
+        .collect::<Result<_, _>>()
+        .expect("reads");
+    assert_eq!(applied, ["001"]);
+}
+
+#[test]
 fn a_commit_built_on_a_root_somebody_else_moved_is_refused() {
     let key = Keypair::generate(Algorithm::Secp256k1);
     let mut clock = TidClock::new();
