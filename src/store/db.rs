@@ -67,6 +67,9 @@ fn migrate(db: &mut Connection, migrations: &[Migration]) -> Result<(), Error> {
 
     // Worked out again inside the write lock: two connections opening one new
     // file would otherwise both run the same migration.
+    //
+    // todo(taking over a running server): this serializes manapds against
+    // manapds, and the reference's migrator takes `kysely_migration_lock`.
     let stamp = format!("{:.3}", jiff::Timestamp::now());
     let transaction = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     transaction.execute_batch(LEDGER)?;
