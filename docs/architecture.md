@@ -122,11 +122,15 @@ The reference implementation splits the same way, so the shapes are worth
 reading across where a table is unclear.
 
 A write reads the repository root, works out a revision from it and writes it
-back, and two of them at once would leave whichever finished second standing on
-a tree the first had already moved. The root is therefore moved only while it
-is still the one the revision was built on, and a write that finds it moved
-starts over against where the other one left it. Nothing is held between the
-read and the write, so a slow write never blocks a fast one.
+back, so an account's writes are taken one at a time and the turn is held until
+the commit is in the log — two at once would leave the second standing on a
+tree the first had already moved, and would put the log in an order no consumer
+could follow. The lock is per account, so a busy repository never holds up a
+quiet one.
+
+Underneath it the root still moves only while it is the one the revision was
+built on, and a write that finds it moved starts over. One server never reaches
+that, and it is the only thing between two of them pointed at the same files.
 
 The data directory needs a POSIX filesystem. An account's files sit under its
 DID, a DID has colons in it, and Windows will not have a colon in a path
