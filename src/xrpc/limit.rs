@@ -307,9 +307,13 @@ impl Limits {
     /// Keyed by the account rather than by the caller, since the budget is on
     /// what a repository takes and not on where it is written from.
     pub fn writing(&self, did: &Did, points: u32) -> Option<Reading> {
+        // Collected before anything is looked at, since a lazy chain would stop
+        // at the first budget to refuse and leave the rest uncharged.
         self.writes
             .iter()
             .map(|budget| budget.consume(did.as_str(), points))
+            .collect::<Vec<Reading>>()
+            .into_iter()
             .find(|reading| reading.exceeded)
     }
 
