@@ -63,6 +63,13 @@ and nothing sweeps one no record ever did, which is a disk that only grows. And
 a write that would break a backlink the reference enforces — one like per
 subject, one follow per account — is taken as written.
 
+Two smaller ones sit beside them. An upload is taken at the type its caller
+declares rather than the type its bytes are, where the reference sniffs and
+prefers what it finds, so a blob uploaded as `application/octet-stream` is
+refused by an appview that would have taken it. And `validationStatus` is left
+out of what a write answers with, which a client reads to say whether anything
+checked the record it just wrote.
+
 ## After v0
 
 Three things the reference server doesn't do, wanted for the PDS manaweb signs
