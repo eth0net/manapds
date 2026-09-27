@@ -107,6 +107,14 @@ pub(crate) async fn get(
                 header::CACHE_CONTROL,
                 "public, max-age=31536000, immutable".to_owned(),
             ),
+            // Anyone's bytes under this server's origin, so a browser is told
+            // three times over not to run them.
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
+            (header::CONTENT_DISPOSITION, "attachment".to_owned()),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'none'; sandbox".to_owned(),
+            ),
         ],
         bytes,
     )
