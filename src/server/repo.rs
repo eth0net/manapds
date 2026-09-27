@@ -122,10 +122,12 @@ pub(crate) struct Landed {
     commit: At,
 }
 
-/// What taking one out answers with.
+/// What taking one out answers with. The commit is absent where there was
+/// nothing at the key, since nothing was written.
 #[derive(Debug, Serialize)]
 pub(crate) struct Removed {
-    commit: At,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    commit: Option<At>,
 }
 
 /// What a set of writes answers with.
@@ -279,21 +281,32 @@ pub(crate) async fn delete_record(
 ) -> xrpc::Result<Json<Removed>> {
     let did = owned(&accounts, &access, &input.repo).await?;
     spend(limits.as_deref(), &did, limit::DELETE)?;
+    let (collection, rkey) = (collection(&input.collection)?, record_key(&input.rkey)?);
+
+    // Taking out a key holding nothing is what the caller wanted, so it is
+    // answered rather than refused, with no commit because none was written.
+    if accounts.record(&did, &collection, &rkey).await?.is_none() {
+        return Ok(Json(Removed { commit: None }));
+    }
+
     let asked = Requested {
-        write: Write::Delete {
-            collection: collection(&input.collection)?,
-            rkey: record_key(&input.rkey)?,
+        write: Write::Delete { collection, rkey },
+        // A null here asks for a key holding nothing, which is a delete asking
+        // for nothing to delete. The reference reads it as no check at all on
+        // this method alone, and a client that sends one means no check.
+        expect: match input.swap_record {
+            Swap::Nothing => Expect::Anything,
+            asked => expected(&asked)?,
         },
-        expect: expected(&input.swap_record)?,
     };
     let written = accounts
         .write(&did, vec![asked], swap(input.swap_commit.as_deref())?)
         .await?;
     Ok(Json(Removed {
-        commit: At {
+        commit: Some(At {
             cid: written.commit.to_string(),
             rev: written.rev.as_str().to_owned(),
-        },
+        }),
     }))
 }
 
