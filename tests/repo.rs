@@ -834,3 +834,36 @@ fn a_record_holding_what_the_data_model_has_no_room_for_is_refused() {
     let both = serde_json::json!({ "$link": "one", "other": "two" });
     assert!(matches!(from_json(both), Ok(Ipld::Map(_))));
 }
+
+#[test]
+fn a_batch_writing_one_key_twice_stores_only_what_the_tree_reaches() {
+    let key = Keypair::generate(Algorithm::Secp256k1);
+    let mut clock = TidClock::new();
+    let (mut repo, store) = Repo::create(account(), &key, &mut clock).expect("creates");
+    let written = repo
+        .apply(
+            &store,
+            &[
+                Write::Create {
+                    collection: collection(),
+                    rkey: rkey("3jqfcqzm4fc2j"),
+                    record: post("first"),
+                },
+                Write::Update {
+                    collection: collection(),
+                    rkey: rkey("3jqfcqzm4fc2j"),
+                    record: post("second"),
+                },
+            ],
+            &key,
+            &mut clock,
+        )
+        .expect("applies");
+
+    // The first record is under no key by the time the commit is signed, so
+    // storing it would be storing something nothing can reach.
+    let first = cid_for(&encode(&post("first")).expect("encodes"));
+    let second = cid_for(&encode(&post("second")).expect("encodes"));
+    assert!(!written.iter().any(|(cid, _)| *cid == first));
+    assert!(written.iter().any(|(cid, _)| *cid == second));
+}

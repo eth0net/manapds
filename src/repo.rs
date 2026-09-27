@@ -6,6 +6,8 @@
 //! `docs/repo.md` for why that structure is the protocol rather than a
 //! storage choice.
 
+use std::collections::BTreeMap;
+
 use crate::crypto::{Keypair, PublicKey};
 use crate::syntax::{Did, Nsid, RecordKey, Tid, TidClock};
 
@@ -194,24 +196,45 @@ impl Repo {
         keypair: &Keypair,
         clock: &mut TidClock,
     ) -> Result<BlockMap, Error> {
-        let mut blocks = BlockMap::new();
+        // Every record these writes encode, against the key each one ends at:
+        // a batch that writes one key twice leaves the first block reachable
+        // from nothing, and storing it would be storing rubbish.
+        let mut encoded = BlockMap::new();
+        let mut leaves: BTreeMap<String, Cid> = BTreeMap::new();
         let mut data = self.data.clone();
         for write in writes {
             let key = write.key();
             data = match write {
-                Write::Create { record, .. } => data.add(store, &key, blocks.add(record)?)?,
-                Write::Update { record, .. } => data.update(store, &key, blocks.add(record)?)?,
+                Write::Create { record, .. } => {
+                    let cid = encoded.add(record)?;
+                    leaves.insert(key.clone(), cid);
+                    data.add(store, &key, cid)?
+                }
+                Write::Update { record, .. } => {
+                    let cid = encoded.add(record)?;
+                    leaves.insert(key.clone(), cid);
+                    data.update(store, &key, cid)?
+                }
                 // The one write that does not care which of the two it is.
                 Write::Put { record, .. } => {
-                    let cid = blocks.add(record)?;
+                    let cid = encoded.add(record)?;
+                    leaves.insert(key.clone(), cid);
                     if data.get(store, &key)?.is_some() {
                         data.update(store, &key, cid)?
                     } else {
                         data.add(store, &key, cid)?
                     }
                 }
-                Write::Delete { .. } => data.delete(store, &key)?,
+                Write::Delete { .. } => {
+                    leaves.remove(&key);
+                    data.delete(store, &key)?
+                }
             };
+        }
+
+        let mut blocks = BlockMap::new();
+        for cid in leaves.values() {
+            blocks.insert(*cid, encoded.get(cid)?.into_owned());
         }
 
         // todo: the CIDs this revision drops, so stale blocks can be collected.
