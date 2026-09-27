@@ -759,8 +759,8 @@ async fn a_signup_whose_identifier_is_retired_is_taken_back_out() {
 }
 
 /// A directory that accepts the connection and then says nothing, which is
-/// what a signup is waiting on when the caller gives up on it.
-/// A directory that answers nothing, and a flag it raises when reached.
+/// what a signup is waiting on when the caller gives up on it. The flag goes
+/// up when it is reached.
 async fn silent() -> (String, Arc<AtomicBool>) {
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .await
