@@ -1195,14 +1195,16 @@ fn commit_writes(
         let mut repo = Repo::load(&actor, from.cid)?;
         let since = repo.rev().clone();
         let prev_data = repo.commit().data;
+        let planned = plan(&mut repo, &actor, &account, requested)?;
+        // Nothing to write is nothing to be told about the commit it would
+        // have replaced, which is how the other server answers it too.
+        if planned.writes.is_empty() {
+            return Ok(None);
+        }
         if let Some(wanted) = swap
             && wanted != from.cid
         {
             return Err(Error::Swap(from.cid));
-        }
-        let planned = plan(&mut repo, &actor, &account, requested)?;
-        if planned.writes.is_empty() {
-            return Ok(None);
         }
 
         let blocks = repo.apply(
@@ -1265,6 +1267,11 @@ fn plan(
         let (collection, rkey) = write.target();
         let path = write.key();
         let prev = repo.get(store, collection, rkey)?;
+        // Settled before the swap is looked at, since a key holding nothing is
+        // what this write asked for and there is nothing to have swapped.
+        if prev.is_none() && asked.missing == Missing::Skip {
+            continue;
+        }
         match (asked.expect, prev) {
             (Expect::Anything, _) | (Expect::Nothing, None) => {}
             (Expect::Block(wanted), Some(held)) if wanted == held => {}
@@ -1275,11 +1282,6 @@ fn plan(
                     held.map_or_else(|| "null".to_owned(), |held| held.to_string()),
                 ));
             }
-        }
-        // Settled here rather than at the handler, so a key emptied between the
-        // two cannot turn a second attempt into a refusal.
-        if prev.is_none() && asked.missing == Missing::Skip {
-            continue;
         }
         writes.push(write.clone());
         let (action, cid) = match write {

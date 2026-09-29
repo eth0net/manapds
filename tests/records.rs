@@ -804,3 +804,29 @@ async fn a_batch_asking_for_nothing_is_answered_with_nothing() {
     assert_eq!(applied["results"].as_array().expect("results").len(), 0);
     assert_eq!(applied.get("commit"), None);
 }
+
+#[tokio::test]
+async fn a_delete_that_finds_nothing_is_not_asked_what_it_swapped() {
+    let (router, _manager, _data) = served();
+    let did = account();
+
+    // Nothing was there to have swapped, so a client retrying a delete whose
+    // answer it never saw is told the same thing the first one would have.
+    for swap in [
+        serde_json::json!({ "swapRecord": "bafyreidfcltdzyzp4dmvoeohhrhi6z2lhsbhgorpuoqqzvpxrbfuspqsoq" }),
+        serde_json::json!({ "swapCommit": "bafyreidfcltdzyzp4dmvoeohhrhi6z2lhsbhgorpuoqqzvpxrbfuspqsoq" }),
+    ] {
+        let mut input = serde_json::json!({
+            "repo": did.as_str(),
+            "collection": "com.example.record",
+            "rkey": "3jqfcqzm4fc2j",
+        });
+        for (name, value) in swap.as_object().expect("an object") {
+            input[name] = value.clone();
+        }
+
+        let (status, removed) = post(&router, "/xrpc/com.atproto.repo.deleteRecord", input).await;
+        assert_eq!(status, StatusCode::OK, "{removed}");
+        assert_eq!(removed.get("commit"), None);
+    }
+}
