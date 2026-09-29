@@ -133,7 +133,8 @@ pub(crate) struct Removed {
 /// What a set of writes answers with.
 #[derive(Debug, Serialize)]
 pub(crate) struct Applied {
-    commit: At,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    commit: Option<At>,
     results: Vec<Outcome>,
 }
 
@@ -390,16 +391,22 @@ pub(crate) async fn apply_writes(
             _ => "create",
         })
         .collect();
-    let written = accounts
+    let Some(written) = accounts
         .write(&did, requested, swap(input.swap_commit.as_deref())?)
         .await?
-        .ok_or_else(|| xrpc::Error::new(xrpc::Status::InternalServerError))?;
+    else {
+        // Nothing asked for, so nothing written and no commit to name.
+        return Ok(Json(Applied {
+            commit: None,
+            results: Vec::new(),
+        }));
+    };
 
     Ok(Json(Applied {
-        commit: At {
+        commit: Some(At {
             cid: written.commit.to_string(),
             rev: written.rev.as_str().to_owned(),
-        },
+        }),
         results: written
             .results
             .into_iter()
