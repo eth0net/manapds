@@ -219,13 +219,14 @@ pub(crate) async fn create_record(
 ) -> xrpc::Result<Json<Landed>> {
     let did = owned(&accounts, &access, &input.repo).await?;
     spend(limits.as_deref(), &did, limit::CREATE)?;
+    let named = collection(&input.collection)?;
     let write = Write::Create {
-        collection: collection(&input.collection)?,
         rkey: match &input.rkey {
             Some(rkey) => record_key(rkey)?,
             None => accounts.record_key(),
         },
-        record: record(input.record)?,
+        record: record(&named, input.record)?,
+        collection: named,
     };
     landed(
         accounts
@@ -253,10 +254,13 @@ pub(crate) async fn put_record(
     let did = owned(&accounts, &access, &input.repo).await?;
     spend(limits.as_deref(), &did, limit::PUT)?;
     let asked = Requested {
-        write: Write::Put {
-            collection: collection(&input.collection)?,
-            rkey: record_key(&input.rkey)?,
-            record: record(input.record)?,
+        write: {
+            let named = collection(&input.collection)?;
+            Write::Put {
+                rkey: record_key(&input.rkey)?,
+                record: record(&named, input.record)?,
+                collection: named,
+            }
         },
         expect: expected(&input.swap_record)?,
         missing: Missing::Refuse,
@@ -345,23 +349,29 @@ pub(crate) async fn apply_writes(
                 collection: nsid,
                 rkey,
                 value,
-            } => Write::Create {
-                collection: collection(&nsid)?,
-                rkey: match &rkey {
-                    Some(rkey) => record_key(rkey)?,
-                    None => accounts.record_key(),
-                },
-                record: record(value)?,
-            },
+            } => {
+                let named = collection(&nsid)?;
+                Write::Create {
+                    rkey: match &rkey {
+                        Some(rkey) => record_key(rkey)?,
+                        None => accounts.record_key(),
+                    },
+                    record: record(&named, value)?,
+                    collection: named,
+                }
+            }
             Asked::Update {
                 collection: nsid,
                 rkey,
                 value,
-            } => Write::Update {
-                collection: collection(&nsid)?,
-                rkey: record_key(&rkey)?,
-                record: record(value)?,
-            },
+            } => {
+                let named = collection(&nsid)?;
+                Write::Update {
+                    rkey: record_key(&rkey)?,
+                    record: record(&named, value)?,
+                    collection: named,
+                }
+            }
             Asked::Delete {
                 collection: nsid,
                 rkey,
@@ -508,7 +518,28 @@ async fn owned(accounts: &Manager, access: &Access, repo: &str) -> xrpc::Result<
 }
 
 /// A record as it was sent, in the shape it is stored in.
-fn record(value: Value) -> xrpc::Result<crate::repo::Ipld> {
+///
+/// A record names its own collection in `$type`, and one that leaves it out is
+/// given it: the other server does the same, so the same input from the same
+/// client lands under the same CID on either.
+fn record(collection: &Nsid, value: Value) -> xrpc::Result<crate::repo::Ipld> {
+    let mut value = value;
+    match value.get("$type").and_then(Value::as_str) {
+        Some(named) if named == collection.as_str() => {}
+        Some(named) => {
+            return Err(xrpc::Error::invalid_request(format!(
+                "Invalid $type: expected {collection}, got {named}"
+            )));
+        }
+        None => {
+            let Value::Object(fields) = &mut value else {
+                return Err(xrpc::Error::invalid_request(
+                    "Invalid record: not an object",
+                ));
+            };
+            fields.insert("$type".to_owned(), Value::String(collection.to_string()));
+        }
+    }
     repo::from_json(value)
         .map_err(|invalid| xrpc::Error::invalid_request(format!("Invalid record: {invalid}")))
 }
