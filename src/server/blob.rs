@@ -65,6 +65,10 @@ pub(crate) async fn upload(
     let mime = headers
         .get(header::CONTENT_TYPE)
         .and_then(|mime| mime.to_str().ok())
+        // A charset says nothing about what the bytes are, and what a record
+        // holds has to match the type an appview's lexicon will accept.
+        .map(|mime| mime.split(';').next().unwrap_or(mime).trim())
+        .filter(|mime| !mime.is_empty())
         .unwrap_or(UNSAID)
         .to_owned();
     let blob = accounts

@@ -453,7 +453,7 @@ async fn a_blob_is_taken_in_and_handed_back_as_it_was_sent() {
     let mut request = Request::builder()
         .method("POST")
         .uri("/xrpc/com.atproto.repo.uploadBlob")
-        .header("content-type", "image/png")
+        .header("content-type", "image/png; charset=binary")
         .header(
             "authorization",
             format!("Bearer {}", tokens().access(&did, Scope::Access)),
@@ -476,6 +476,8 @@ async fn a_blob_is_taken_in_and_handed_back_as_it_was_sent() {
     // The answer is the shape a record refers to a blob by, rather than a
     // bare CID: a client writes it straight into the record it is making.
     assert_eq!(uploaded["blob"]["$type"], "blob");
+    // The charset says nothing about the bytes, and an appview matches the
+    // type against its lexicon.
     assert_eq!(uploaded["blob"]["mimeType"], "image/png");
     assert_eq!(uploaded["blob"]["size"], 4);
     let cid = uploaded["blob"]["ref"]["$link"]
@@ -736,4 +738,69 @@ async fn a_delete_that_finds_nothing_still_reads_what_it_was_sent() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
     assert_eq!(refused["error"], "InvalidSwap");
+}
+
+#[tokio::test]
+async fn a_record_is_given_the_type_of_the_collection_it_goes_in() {
+    let (router, _manager, _data) = served();
+    let did = account();
+
+    // Left out, so it is filled in: the other server does the same, and a
+    // record that disagreed with it would land under a CID nothing expects.
+    let (status, written) = post(
+        &router,
+        "/xrpc/com.atproto.repo.createRecord",
+        serde_json::json!({
+            "repo": did.as_str(),
+            "collection": "com.example.record",
+            "rkey": "3jqfcqzm4fc2j",
+            "record": { "text": "first" },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{written}");
+
+    let (status, held) = get(
+        &router,
+        "/xrpc/com.atproto.repo.getRecord\
+         ?repo=alice.pds.example.com&collection=com.example.record&rkey=3jqfcqzm4fc2j",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(held["value"]["$type"], "com.example.record");
+
+    let (status, refused) = post(
+        &router,
+        "/xrpc/com.atproto.repo.createRecord",
+        serde_json::json!({
+            "repo": did.as_str(),
+            "collection": "com.example.record",
+            "rkey": "3jqfcqzm4fd2j",
+            "record": { "$type": "com.example.other", "text": "second" },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(
+        refused["message"]
+            .as_str()
+            .expect("a message")
+            .contains("expected com.example.record"),
+        "{refused}"
+    );
+}
+
+#[tokio::test]
+async fn a_batch_asking_for_nothing_is_answered_with_nothing() {
+    let (router, _manager, _data) = served();
+
+    let (status, applied) = post(
+        &router,
+        "/xrpc/com.atproto.repo.applyWrites",
+        serde_json::json!({ "repo": account().as_str(), "writes": [] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(applied["results"].as_array().expect("results").len(), 0);
+    assert_eq!(applied.get("commit"), None);
 }
