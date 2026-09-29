@@ -8,6 +8,7 @@ pub mod handle;
 pub mod password;
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
@@ -593,67 +594,25 @@ impl Manager {
         requested: Vec<Requested>,
         swap: Option<Cid>,
     ) -> Result<Option<Written>, Error> {
-        // Held until the log has the commit, so that a consumer is handed the
-        // revisions of one repository in the order they were written.
-        let turn = self.writing.turn(did);
-        let _writing = turn.lock().await;
+        // The turn is given up by the work rather than by whoever is waiting
+        // on it: a caller that hangs up cannot cancel a blocking task, and
+        // letting go any earlier would leave a write running with nothing
+        // holding the account. It is held until the log has the commit, so a
+        // consumer is handed one repository's revisions in the order they
+        // were written.
+        let writing = self.writing.turn(did).lock_owned().await;
 
         let key = self.directory.actor_key(did);
         let path = self.directory.actor_store(did);
         let clock = Arc::clone(&self.clock);
         let account = did.clone();
-        let landed = blocking(move || {
-            let signing_key = store::keys::read(&key)?;
-            let mut actor = store::Actor::open(&path, account.clone())?;
-            for _ in 0..ATTEMPTS {
-                let Some(from) = actor.root()? else {
-                    return Err(Error::NoRepo(account));
-                };
-                if let Some(wanted) = swap
-                    && wanted != from.cid
-                {
-                    return Err(Error::Swap(from.cid));
-                }
-
-                let mut repo = Repo::load(&actor, from.cid)?;
-                let since = repo.rev().clone();
-                let prev_data = repo.commit().data;
-                let planned = plan(&mut repo, &actor, &account, &requested)?;
-                if planned.writes.is_empty() {
-                    return Ok(None);
-                }
-                let blocks = repo.apply(
-                    &actor,
-                    &planned.writes,
-                    &signing_key,
-                    &mut clock
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner),
-                )?;
-                let root = store::Root {
-                    cid: repo.cid(),
-                    rev: repo.rev().clone(),
-                };
-                if !actor.commit(Some(&from), &root, &blocks, &planned.index)? {
-                    continue;
-                }
-                return Ok(Some(Landed {
-                    written: Written {
-                        results: planned.results,
-                        commit: root.cid,
-                        rev: root.rev.clone(),
-                    },
-                    root,
-                    blocks,
-                    ops: planned.ops,
-                    since,
-                    prev_data,
-                }));
-            }
-            Err(Error::Contended)
+        let (landed, writing) = blocking(move || {
+            let landed = commit_writes(&key, &path, &clock, account, &requested, swap);
+            (landed, writing)
         })
-        .await?;
-        let Some(landed) = landed else {
+        .await;
+        let _writing = writing;
+        let Some(landed) = landed? else {
             return Ok(None);
         };
 
@@ -1215,6 +1174,66 @@ struct Landed {
     ops: Vec<event::Op>,
     since: Tid,
     prev_data: Cid,
+}
+
+/// The whole of one write, on a thread that is allowed to block.
+fn commit_writes(
+    key: &Path,
+    path: &Path,
+    clock: &Mutex<TidClock>,
+    account: Did,
+    requested: &[Requested],
+    swap: Option<Cid>,
+) -> Result<Option<Landed>, Error> {
+    let signing_key = store::keys::read(key)?;
+    let mut actor = store::Actor::open(path, account.clone())?;
+    for _ in 0..ATTEMPTS {
+        let Some(from) = actor.root()? else {
+            return Err(Error::NoRepo(account));
+        };
+
+        let mut repo = Repo::load(&actor, from.cid)?;
+        let since = repo.rev().clone();
+        let prev_data = repo.commit().data;
+        if let Some(wanted) = swap
+            && wanted != from.cid
+        {
+            return Err(Error::Swap(from.cid));
+        }
+        let planned = plan(&mut repo, &actor, &account, requested)?;
+        if planned.writes.is_empty() {
+            return Ok(None);
+        }
+
+        let blocks = repo.apply(
+            &actor,
+            &planned.writes,
+            &signing_key,
+            &mut clock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )?;
+        let root = store::Root {
+            cid: repo.cid(),
+            rev: repo.rev().clone(),
+        };
+        if !actor.commit(Some(&from), &root, &blocks, &planned.index)? {
+            continue;
+        }
+        return Ok(Some(Landed {
+            written: Written {
+                results: planned.results,
+                commit: root.cid,
+                rev: root.rev.clone(),
+            },
+            root,
+            blocks,
+            ops: planned.ops,
+            since,
+            prev_data,
+        }));
+    }
+    Err(Error::Contended)
 }
 
 /// What a set of writes leaves in the index, in the log and in the answer.
