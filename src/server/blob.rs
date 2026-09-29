@@ -5,7 +5,7 @@ use std::sync::Arc;
 use axum::{
     Json,
     body::Bytes,
-    extract::State,
+    extract::{State, rejection::BytesRejection},
     http::{HeaderMap, header},
     response::{IntoResponse, Response},
 };
@@ -60,8 +60,13 @@ pub(crate) async fn upload(
     State(accounts): State<Arc<Manager>>,
     access: Access,
     headers: HeaderMap,
-    body: Bytes,
+    body: Result<Bytes, BytesRejection>,
 ) -> xrpc::Result<Json<Uploaded>> {
+    // The only route whose body is read whole, so the only one whose refusal
+    // does not already come back in the XRPC shape.
+    let body = body.map_err(|rejection| {
+        xrpc::Error::new(xrpc::Status::PayloadTooLarge).saying(rejection.body_text())
+    })?;
     let mime = headers
         .get(header::CONTENT_TYPE)
         .and_then(|mime| mime.to_str().ok())
