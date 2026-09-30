@@ -1167,3 +1167,53 @@ async fn a_record_that_lies_about_a_blob_is_refused() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
     assert_eq!(refused["error"], "InvalidSize");
 }
+
+#[tokio::test]
+async fn a_batch_that_writes_one_key_twice_leaves_no_blob_behind() {
+    let (router, manager, _data) = served();
+    let blob = uploaded(&router, vec![1u8, 2, 3, 4]).await;
+    let cid: manapds::repo::Cid = blob["ref"]["$link"]
+        .as_str()
+        .expect("a link")
+        .parse()
+        .expect("a CID");
+
+    // Written and taken out again under one commit, so the record that named
+    // the blob is gone by the time the commit lands.
+    let (status, applied) = post(
+        &router,
+        "/xrpc/com.atproto.repo.applyWrites",
+        serde_json::json!({
+            "repo": account().as_str(),
+            "writes": [
+                {
+                    "$type": "com.atproto.repo.applyWrites#create",
+                    "collection": "com.example.record",
+                    "rkey": "3jqfcqzm4fa2j",
+                    "value": { "$type": "com.example.record", "image": blob },
+                },
+                {
+                    "$type": "com.atproto.repo.applyWrites#delete",
+                    "collection": "com.example.record",
+                    "rkey": "3jqfcqzm4fa2j",
+                },
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+
+    // Nothing names it, so nothing serves it — and nothing is left that only a
+    // sweep could reach, since claiming it cleared what the sweep looks for.
+    let (status, gone) = get(
+        &router,
+        &format!("/xrpc/com.atproto.sync.getBlob?did={}&cid={cid}", account()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{gone}");
+    assert_eq!(
+        manager.sweep_blobs(&account()).await.expect("sweeps"),
+        0,
+        "the sweep cannot reach a claimed blob, so it must not be left one"
+    );
+}

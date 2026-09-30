@@ -205,64 +205,22 @@ impl Actor {
                 ])?;
             }
         }
-        {
-            let mut put = transaction.prepare(
-                r#"insert into "record" ("uri", "cid", "collection", "rkey", "repoRev", "indexedAt") values (?1, ?2, ?3, ?4, ?5, ?6)
-                   on conflict("uri") do update set "cid" = ?2, "repoRev" = ?5, "indexedAt" = ?6"#,
-            )?;
-            let mut remove = transaction.prepare(r#"delete from "record" where "uri" = ?1"#)?;
-            // Rewritten for every record, so one that stops pointing anywhere
-            // loses its links.
-            let mut unlink = transaction.prepare(r#"delete from "backlink" where "uri" = ?1"#)?;
-            let mut link = transaction.prepare(
-                r#"insert or ignore into "backlink" ("uri", "path", "linkTo") values (?1, ?2, ?3)"#,
-            )?;
-            let kept: std::collections::HashSet<String> = records
-                .iter()
-                .filter_map(|record| match record {
-                    Indexed::Put { blobs, .. } => Some(blobs),
-                    Indexed::Delete { .. } => None,
-                })
-                .flatten()
-                .map(|blob| blob.cid.to_string())
-                .collect();
+        let kept = Self::index(&transaction, did, root, records, &stamp, &mut orphaned)?;
 
-            for record in records {
-                match record {
-                    Indexed::Put {
-                        collection,
-                        rkey,
-                        cid,
-                        links,
-                        blobs,
-                    } => {
-                        let at = uri(did, collection, rkey);
-                        unlink.execute(params![at])?;
-                        for backlink in links {
-                            link.execute(params![at, backlink.path, backlink.link_to])?;
-                        }
-                        orphaned.extend(Self::dereference(&transaction, &at, &kept)?);
-                        for blob in blobs {
-                            Self::claim(&transaction, &at, blob)?;
-                        }
-                        put.execute(params![
-                            at,
-                            cid.to_string(),
-                            collection.as_str(),
-                            rkey.as_str(),
-                            root.rev.as_str(),
-                            format!("{stamp:.3}")
-                        ])?
-                    }
-                    Indexed::Delete { collection, rkey } => {
-                        let at = uri(did, collection, rkey);
-                        unlink.execute(params![at])?;
-                        orphaned.extend(Self::dereference(&transaction, &at, &kept)?);
-                        remove.execute(params![at])?
-                    }
-                };
+        // A batch that writes one key twice can leave a blob the rescue above
+        // spared and the record it was spared for no longer names, so what was
+        // spared is asked for again once every record has had its turn.
+        for cid in kept {
+            if Self::held(&transaction, &cid)? {
+                continue;
             }
+            transaction.execute(r#"delete from "blob" where "cid" = ?1"#, params![cid])?;
+            orphaned.push(
+                cid.parse()
+                    .map_err(|_| Error::Malformed("a blob that is not a CID"))?,
+            );
         }
+
         let moved = match from {
             Some(from) => transaction.execute(
                 r#"update "repo_root" set "cid" = ?2, "rev" = ?3, "indexedAt" = ?4
@@ -432,20 +390,9 @@ impl Actor {
 
         let mut orphaned = Vec::new();
         for cid in held {
-            if kept.contains(&cid) {
-                continue;
-            }
             // Asked after the rows are gone, so what comes back is what some
             // other record is holding rather than the row just removed.
-            let elsewhere: bool = transaction
-                .query_row(
-                    r#"select 1 from "record_blob" where "blobCid" = ?1"#,
-                    params![cid],
-                    |_| Ok(true),
-                )
-                .optional()?
-                .unwrap_or(false);
-            if elsewhere {
+            if kept.contains(&cid) || Self::held(transaction, &cid)? {
                 continue;
             }
             transaction.execute(r#"delete from "blob" where "cid" = ?1"#, params![cid])?;
@@ -455,6 +402,105 @@ impl Actor {
             );
         }
         Ok(orphaned)
+    }
+
+    /// Writes what one commit did to the record index, the links and the blobs,
+    /// and says which blobs the batch spared so the caller can ask again.
+    fn index(
+        transaction: &rusqlite::Transaction<'_>,
+        did: &Did,
+        root: &Root,
+        records: &[Indexed],
+        stamp: &jiff::Timestamp,
+        orphaned: &mut Vec<Cid>,
+    ) -> Result<std::collections::HashSet<String>, Error> {
+        let mut put = transaction.prepare(
+            r#"insert into "record" ("uri", "cid", "collection", "rkey", "repoRev", "indexedAt") values (?1, ?2, ?3, ?4, ?5, ?6)
+               on conflict("uri") do update set "cid" = ?2, "repoRev" = ?5, "indexedAt" = ?6"#,
+        )?;
+        let mut remove = transaction.prepare(r#"delete from "record" where "uri" = ?1"#)?;
+        // Rewritten for every record, so one that stops pointing anywhere
+        // loses its links.
+        let mut unlink = transaction.prepare(r#"delete from "backlink" where "uri" = ?1"#)?;
+        let mut link = transaction.prepare(
+            r#"insert or ignore into "backlink" ("uri", "path", "linkTo") values (?1, ?2, ?3)"#,
+        )?;
+        let kept: std::collections::HashSet<String> = records
+            .iter()
+            .filter_map(|record| match record {
+                Indexed::Put { blobs, .. } => Some(blobs),
+                Indexed::Delete { .. } => None,
+            })
+            .flatten()
+            .map(|blob| blob.cid.to_string())
+            .collect();
+
+        for record in records {
+            match record {
+                Indexed::Put {
+                    collection,
+                    rkey,
+                    cid,
+                    links,
+                    blobs,
+                } => {
+                    let at = uri(did, collection, rkey);
+                    unlink.execute(params![at])?;
+                    for backlink in links {
+                        link.execute(params![at, backlink.path, backlink.link_to])?;
+                    }
+                    orphaned.extend(Self::dereference(transaction, &at, &kept)?);
+                    for blob in blobs {
+                        Self::claim(transaction, &at, blob)?;
+                    }
+                    put.execute(params![
+                        at,
+                        cid.to_string(),
+                        collection.as_str(),
+                        rkey.as_str(),
+                        root.rev.as_str(),
+                        format!("{stamp:.3}")
+                    ])?
+                }
+                Indexed::Delete { collection, rkey } => {
+                    let at = uri(did, collection, rkey);
+                    unlink.execute(params![at])?;
+                    orphaned.extend(Self::dereference(transaction, &at, &kept)?);
+                    remove.execute(params![at])?
+                }
+            };
+        }
+        Ok(kept)
+    }
+
+    /// Whether this server holds anything under this blob at all, which is
+    /// what says a file is nobody's.
+    ///
+    /// # Errors
+    ///
+    /// If the read fails.
+    pub fn unheld(&self, cid: &Cid) -> Result<bool, Error> {
+        Ok(self
+            .db
+            .query_row(
+                r#"select 1 from "blob" where "cid" = ?1"#,
+                params![cid.to_string()],
+                |_| Ok(true),
+            )
+            .optional()?
+            .is_none())
+    }
+
+    /// Whether any record still names this blob.
+    fn held(transaction: &rusqlite::Transaction<'_>, cid: &str) -> Result<bool, Error> {
+        Ok(transaction
+            .query_row(
+                r#"select 1 from "record_blob" where "blobCid" = ?1"#,
+                params![cid],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false))
     }
 
     /// Ties a blob to the record naming it, and takes it out of the state an
