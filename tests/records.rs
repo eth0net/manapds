@@ -25,6 +25,10 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 use tower_http::normalize_path::NormalizePath;
 
+fn somebody_else() -> Did {
+    "did:plc:mav423b24thku7ezkx7yaray".parse().expect("a DID")
+}
+
 fn account() -> Did {
     "did:plc:4cjoyc3cgpal7gnrpzyjhnv3".parse().expect("a DID")
 }
@@ -95,11 +99,26 @@ fn standing(
                 email: "alice@example.com".to_owned(),
                 password_scrypt: account::password::hash("correct horse battery staple"),
             },
-            root,
+            root: root.clone(),
             invite: None,
             session: None,
         })
         .expect("an account");
+    // Somebody else on the same server, so a caller naming a repository that
+    // is not its own reaches the check rather than stopping at the lookup.
+    accounts
+        .create(&store::Registration {
+            account: store::Account {
+                did: somebody_else(),
+                handle: Some("bob.pds.example.com".parse().expect("a handle")),
+                email: "bob@example.com".to_owned(),
+                password_scrypt: account::password::hash("correct horse battery staple"),
+            },
+            root,
+            invite: None,
+            session: None,
+        })
+        .expect("another account");
 
     let mut config = common::config("pds.example.com", data.path(), "http://127.0.0.1:1");
     config.rate_limits = rate_limits;
@@ -434,9 +453,9 @@ async fn a_caller_may_only_write_to_the_repository_it_signed_in_as() {
         &router,
         "/xrpc/com.atproto.repo.createRecord",
         serde_json::json!({
-            "repo": "did:plc:mav423b24thku7ezkx7yaray",
+            "repo": "did:plc:ewvi7nxzyoun6zhxrhs64oiz",
             "collection": "com.example.record",
-            "record": { "$type": "com.example.record", "text": "not mine" },
+            "record": { "$type": "com.example.record", "text": "nobody's" },
         }),
     )
     .await;
@@ -829,4 +848,57 @@ async fn a_delete_that_finds_nothing_is_not_asked_what_it_swapped() {
         assert_eq!(status, StatusCode::OK, "{removed}");
         assert_eq!(removed.get("commit"), None);
     }
+}
+
+#[tokio::test]
+async fn a_caller_is_refused_a_repository_that_is_not_the_one_it_signed_in_as() {
+    let (router, _manager, _data) = served();
+
+    let (status, refused) = post(
+        &router,
+        "/xrpc/com.atproto.repo.createRecord",
+        serde_json::json!({
+            "repo": somebody_else().as_str(),
+            "collection": "com.example.record",
+            "record": { "$type": "com.example.record", "text": "not mine" },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert_eq!(refused["error"], "Forbidden");
+}
+
+#[tokio::test]
+async fn an_upload_past_the_limit_is_refused_in_the_shape_a_client_reads() {
+    let (router, _manager, _data) = served();
+
+    // Past the configured ceiling, which is the one body this server reads
+    // whole and so the one refusal that has to be built rather than inherited.
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/xrpc/com.atproto.repo.uploadBlob")
+        .header("content-type", "image/png")
+        .header(
+            "authorization",
+            format!("Bearer {}", tokens().access(&account(), Scope::Access)),
+        )
+        .body(Body::from(vec![0u8; 6 * 1024 * 1024]))
+        .expect("a request");
+    request.extensions_mut().insert(ConnectInfo(
+        "203.0.113.1:9000"
+            .parse::<SocketAddr>()
+            .expect("an address"),
+    ));
+
+    let response = router
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("a body");
+    let refused: Value = serde_json::from_slice(&body).expect("the XRPC error shape");
+    assert_eq!(refused["error"], "PayloadTooLarge");
 }
