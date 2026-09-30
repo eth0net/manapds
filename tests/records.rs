@@ -1030,3 +1030,140 @@ async fn a_record_that_holds_nothing_to_one_is_left_alone() {
     .await;
     assert_eq!(page["records"].as_array().expect("records").len(), 2);
 }
+
+/// One blob, uploaded, as the answer a record would carry.
+async fn uploaded(router: &NormalizePath<Router>, bytes: Vec<u8>) -> Value {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/xrpc/com.atproto.repo.uploadBlob")
+        .header("content-type", "image/png")
+        .header(
+            "authorization",
+            format!("Bearer {}", tokens().access(&account(), Scope::Access)),
+        )
+        .body(Body::from(bytes))
+        .expect("a request");
+    request.extensions_mut().insert(ConnectInfo(
+        "203.0.113.1:9000"
+            .parse::<SocketAddr>()
+            .expect("an address"),
+    ));
+    let response = router
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("a body");
+    let uploaded: Value = serde_json::from_slice(&body).expect("json");
+    uploaded["blob"].clone()
+}
+
+async fn holding(router: &NormalizePath<Router>, rkey: &str, blob: &Value) -> (StatusCode, Value) {
+    post(
+        router,
+        "/xrpc/com.atproto.repo.createRecord",
+        serde_json::json!({
+            "repo": account().as_str(),
+            "collection": "com.example.record",
+            "rkey": rkey,
+            "record": { "$type": "com.example.record", "image": blob },
+        }),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_blob_is_kept_while_a_record_names_it_and_dropped_when_none_does() {
+    let (router, _manager, _data) = served();
+    let blob = uploaded(&router, vec![1u8, 2, 3, 4]).await;
+    let cid: manapds::repo::Cid = blob["ref"]["$link"]
+        .as_str()
+        .expect("a link")
+        .parse()
+        .expect("a CID");
+    let (status, written) = holding(&router, "3jqfcqzm4fa2j", &blob).await;
+    assert_eq!(status, StatusCode::OK, "{written}");
+
+    // A second record naming it too, so taking the first out leaves it alone.
+    let (status, written) = holding(&router, "3jqfcqzm4fb2j", &blob).await;
+    assert_eq!(status, StatusCode::OK, "{written}");
+
+    let (status, _) = post(
+        &router,
+        "/xrpc/com.atproto.repo.deleteRecord",
+        serde_json::json!({
+            "repo": account().as_str(),
+            "collection": "com.example.record",
+            "rkey": "3jqfcqzm4fa2j",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = get(
+        &router,
+        &format!("/xrpc/com.atproto.sync.getBlob?did={}&cid={cid}", account()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "still held by the other record");
+
+    // The last record naming it goes, and so does the blob.
+    let (status, _) = post(
+        &router,
+        "/xrpc/com.atproto.repo.deleteRecord",
+        serde_json::json!({
+            "repo": account().as_str(),
+            "collection": "com.example.record",
+            "rkey": "3jqfcqzm4fb2j",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, gone) = get(
+        &router,
+        &format!("/xrpc/com.atproto.sync.getBlob?did={}&cid={cid}", account()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{gone}");
+}
+
+#[tokio::test]
+async fn a_record_naming_a_blob_nobody_uploaded_is_refused() {
+    let (router, _manager, _data) = served();
+
+    let (status, refused) = holding(
+        &router,
+        "3jqfcqzm4fa2j",
+        &serde_json::json!({
+            "$type": "blob",
+            "ref": { "$link": "bafkreidfcltdzyzp4dmvoeohhrhi6z2lhsbhgorpuoqqzvpxrbfuspqsoq" },
+            "mimeType": "image/png",
+            "size": 4,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"], "BlobNotFound");
+
+    // And nothing was written, since the blob is checked under the commit.
+    let (status, _) = get(
+        &router,
+        "/xrpc/com.atproto.repo.getRecord\
+         ?repo=alice.pds.example.com&collection=com.example.record&rkey=3jqfcqzm4fa2j",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn a_record_that_lies_about_a_blob_is_refused() {
+    let (router, _manager, _data) = served();
+    let mut blob = uploaded(&router, vec![1u8, 2, 3, 4]).await;
+    blob["size"] = serde_json::json!(999);
+
+    let (status, refused) = holding(&router, "3jqfcqzm4fa2j", &blob).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"], "InvalidSize");
+}

@@ -4,6 +4,7 @@
 //! nothing but read a request and name an error.
 
 pub mod backlink;
+pub mod blobref;
 pub mod email;
 pub mod handle;
 pub mod password;
@@ -47,6 +48,10 @@ const PASSWORD: usize = 256;
 /// The longest password any account ever chose, which is what signing in is
 /// held to: a longer one matches nothing this server could be holding.
 const STORED_PASSWORD: usize = 512;
+
+/// How long a blob nobody has named in a record is kept. An upload is a
+/// promise a record will follow, and the lexicon says minutes.
+const UNCLAIMED: SignedDuration = SignedDuration::from_hours(1);
 
 /// The floor on how many passwords are hashed at once.
 const HASHES: usize = 4;
@@ -107,6 +112,10 @@ pub enum Error {
     /// Too many writes at once for any one of them to land.
     #[error("Repository is being written to too quickly")]
     Contended,
+    /// A record naming a blob nothing uploaded, or naming one as something
+    /// other than what was uploaded.
+    #[error("{0}")]
+    Blob(store::Error),
     /// The repository would not be built.
     #[error("{0}")]
     Repo(#[from] repo::Error),
@@ -124,6 +133,9 @@ impl From<store::Error> for Error {
             store::Error::HandleTaken => Self::Taken("Handle"),
             store::Error::EmailTaken => Self::Taken("Email"),
             store::Error::AppPasswordTaken => Self::Taken("App password name"),
+            blob @ (store::Error::BlobMissing(_) | store::Error::BlobMismatch(..)) => {
+                Self::Blob(blob)
+            }
             other => Self::Storage(other),
         }
     }
@@ -157,6 +169,11 @@ impl Error {
             Self::Credentials => "AuthenticationRequired",
             Self::Plc(_) | Self::Repo(_) | Self::Storage(_) => "InternalServerError",
             Self::NoRepo(_) => "RepoNotFound",
+            Self::Blob(store::Error::BlobMismatch(named, ..)) => match *named {
+                "Size" => "InvalidSize",
+                _ => "InvalidMimeType",
+            },
+            Self::Blob(_) => "BlobNotFound",
             Self::Swap(_) | Self::SwapRecord(_) => "InvalidSwap",
             Self::Contended => "RateLimitExceeded",
             Self::Email | Self::PasswordTooLong | Self::Taken(_) | Self::TooManyInvites => {
@@ -644,6 +661,20 @@ impl Manager {
             return Ok(None);
         };
 
+        // Once the rows are gone the files are nobody's, and a file left behind
+        // is wasted space rather than anything a reader can reach.
+        let blobs = self.directory.blobs();
+        let account = did.clone();
+        let dropped = landed.orphaned.clone();
+        blocking(move || {
+            for cid in dropped {
+                if let Err(error) = blobs.delete(&account, &cid) {
+                    tracing::error!(%cid, %error, "a blob nothing holds was not removed");
+                }
+            }
+        })
+        .await;
+
         // Both of these follow a commit that has already landed, so neither is
         // worth failing the call over.
         //
@@ -789,7 +820,43 @@ impl Manager {
             actor.add_blob(&written)
         })
         .await?;
+
+        // An account uploading is the account with blobs to clear, so nothing
+        // else has to run on a timer to find them.
+        if let Err(error) = self.sweep_blobs(did).await {
+            tracing::error!(%did, %error, "unclaimed blobs were not swept");
+        }
         Ok(blob)
+    }
+
+    /// Takes out the blobs an account uploaded and never named in a record.
+    ///
+    /// An upload is a promise a record will follow, and one that never does
+    /// leaves bytes nothing can reach; `UNCLAIMED` is how long that promise is
+    /// held open.
+    ///
+    /// # Errors
+    ///
+    /// If the account holds no repository, or storage will not answer.
+    pub async fn sweep_blobs(&self, did: &Did) -> Result<usize, Error> {
+        let swept = self
+            .actor(did, move |actor| {
+                actor.sweep_unclaimed(jiff::Timestamp::now() - UNCLAIMED)
+            })
+            .await?;
+        let taken = swept.len();
+
+        let blobs = self.directory.blobs();
+        let account = did.clone();
+        blocking(move || {
+            for cid in swept {
+                if let Err(error) = blobs.delete(&account, &cid) {
+                    tracing::error!(%cid, %error, "an unclaimed blob was not removed");
+                }
+            }
+        })
+        .await;
+        Ok(taken)
     }
 
     /// A blob an account uploaded, and what it said it was.
@@ -1202,6 +1269,7 @@ struct Landed {
     ops: Vec<event::Op>,
     since: Tid,
     prev_data: Cid,
+    orphaned: Vec<Cid>,
 }
 
 /// Every record this one would take the place of, as the writes that take
@@ -1295,9 +1363,9 @@ fn commit_writes(
             cid: repo.cid(),
             rev: repo.rev().clone(),
         };
-        if !actor.commit(Some(&from), &root, &blocks, &planned.index)? {
+        let Some(orphaned) = actor.commit(Some(&from), &root, &blocks, &planned.index)? else {
             continue;
-        }
+        };
         return Ok(Some(Landed {
             written: Written {
                 results: planned.results,
@@ -1309,6 +1377,7 @@ fn commit_writes(
             ops: planned.ops,
             since,
             prev_data,
+            orphaned,
         }));
     }
     Err(Error::Contended)
@@ -1372,6 +1441,7 @@ fn plan(
 
         writes.push(write.clone());
         let links = write.record().map(backlink::of).unwrap_or_default();
+        let blobs = write.record().map(blobref::of).unwrap_or_default();
         let (action, cid) = match write {
             repo::Write::Create { record, .. } => {
                 ("create", Some(repo::cid_for(&repo::encode(record)?)))
@@ -1392,6 +1462,7 @@ fn plan(
                 rkey: rkey.clone(),
                 cid,
                 links,
+                blobs,
             },
             None => store::Indexed::Delete {
                 collection: collection.clone(),

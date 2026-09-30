@@ -41,6 +41,12 @@ pub enum Error {
     /// pairs the two.
     #[error("app password name is already taken")]
     AppPasswordTaken,
+    /// A record naming a blob nothing uploaded.
+    #[error("Could not find blob: {0}")]
+    BlobMissing(ipld_core::cid::Cid),
+    /// A record naming a blob as something other than what was uploaded.
+    #[error("Referenced {0} does not match stored blob. Expected: {1}, Got: {2}")]
+    BlobMismatch(&'static str, String, String),
     /// A blob whose bytes are not what its CID says.
     #[error("{0} is not the CID of the bytes under it")]
     WrongCid(ipld_core::cid::Cid),

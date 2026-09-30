@@ -56,12 +56,10 @@ whatever first verifies a service token has to allow a malleable signature on
 that path alone — upstream issues them, account commits stay strict, and
 conflating the two would loosen the wrong one.
 
-Records left three of their own standing. A record is stored as it arrives
-rather than checked against the lexicon it names, so `validate` is answered by
-not refusing anything. Nothing clears a blob's `tempKey` when a record names it
-and nothing sweeps one no record ever did, which is a disk that only grows. And
-a write that would break a backlink the reference enforces — one like per
-subject, one follow per account — is taken as written.
+Records left one of their own standing. A record is stored as it arrives rather
+than checked against the lexicon it names, so `validate` is answered by not
+refusing anything — except for the one thing it does gate, which is whether a
+record may take the place of one it is held to a single instance of.
 
 Two smaller ones sit beside them. An upload is taken at the type its caller
 declares rather than the type its bytes are, where the reference sniffs and

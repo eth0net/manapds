@@ -94,6 +94,8 @@ pub enum Indexed {
         cid: Cid,
         /// What it points at that it may only point at once.
         links: Vec<Backlink>,
+        /// The blobs it names, as it names them.
+        blobs: Vec<Blob>,
     },
     /// The key this commit emptied.
     Delete {
@@ -170,8 +172,11 @@ impl Actor {
     /// the root onto it, together or not at all.
     ///
     /// `from` is the root this revision was built on, and the move lands only
-    /// while that is still the one there. Answering `false` leaves the caller
+    /// while that is still the one there. Answering `None` leaves the caller
     /// to work the revision out again; `docs/architecture.md` has why.
+    ///
+    /// What comes back are the blobs no record holds any more, whose files are
+    /// the caller's to unlink once this has committed.
     ///
     /// # Errors
     ///
@@ -182,9 +187,10 @@ impl Actor {
         root: &Root,
         blocks: &BlockMap,
         records: &[Indexed],
-    ) -> Result<bool, Error> {
+    ) -> Result<Option<Vec<Cid>>, Error> {
         let stamp = jiff::Timestamp::now();
         let did = &self.did;
+        let mut orphaned = Vec::new();
         let transaction = self.db.transaction()?;
         {
             let mut insert = transaction.prepare(
@@ -211,6 +217,19 @@ impl Actor {
             let mut link = transaction.prepare(
                 r#"insert or ignore into "backlink" ("uri", "path", "linkTo") values (?1, ?2, ?3)"#,
             )?;
+            // Every blob the batch leaves a record holding, so one taken from
+            // a record and put on another in the same commit is not swept out
+            // between the two.
+            let kept: std::collections::HashSet<String> = records
+                .iter()
+                .filter_map(|record| match record {
+                    Indexed::Put { blobs, .. } => Some(blobs),
+                    Indexed::Delete { .. } => None,
+                })
+                .flatten()
+                .map(|blob| blob.cid.to_string())
+                .collect();
+
             for record in records {
                 match record {
                     Indexed::Put {
@@ -218,11 +237,16 @@ impl Actor {
                         rkey,
                         cid,
                         links,
+                        blobs,
                     } => {
                         let at = uri(did, collection, rkey);
                         unlink.execute(params![at])?;
                         for backlink in links {
                             link.execute(params![at, backlink.path, backlink.link_to])?;
+                        }
+                        orphaned.extend(Self::dereference(&transaction, &at, &kept)?);
+                        for blob in blobs {
+                            Self::claim(&transaction, &at, blob)?;
                         }
                         put.execute(params![
                             at,
@@ -236,6 +260,7 @@ impl Actor {
                     Indexed::Delete { collection, rkey } => {
                         let at = uri(did, collection, rkey);
                         unlink.execute(params![at])?;
+                        orphaned.extend(Self::dereference(&transaction, &at, &kept)?);
                         remove.execute(params![at])?
                     }
                 };
@@ -265,10 +290,10 @@ impl Actor {
         };
         if moved == 0 {
             transaction.rollback()?;
-            return Ok(false);
+            return Ok(None);
         }
         transaction.commit()?;
-        Ok(true)
+        Ok(Some(orphaned))
     }
 
     /// The record at a key, if the index holds one there.
@@ -387,6 +412,131 @@ impl Actor {
             ],
         )?;
         Ok(())
+    }
+
+    /// Lets go of every blob a record was holding, and says which of them
+    /// nothing holds any more.
+    ///
+    /// `kept` is what the same commit leaves another record holding, so a blob
+    /// moved from one record to another is not dropped between the two.
+    ///
+    /// # Errors
+    ///
+    /// If the write fails.
+    fn dereference(
+        transaction: &rusqlite::Transaction<'_>,
+        uri: &str,
+        kept: &std::collections::HashSet<String>,
+    ) -> Result<Vec<Cid>, Error> {
+        let held: Vec<String> = transaction
+            .prepare(r#"delete from "record_blob" where "recordUri" = ?1 returning "blobCid""#)?
+            .query_map(params![uri], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
+
+        let mut orphaned = Vec::new();
+        for cid in held {
+            if kept.contains(&cid) {
+                continue;
+            }
+            // Asked after the rows are gone, so what comes back is what some
+            // other record is holding rather than the row just removed.
+            let elsewhere: bool = transaction
+                .query_row(
+                    r#"select 1 from "record_blob" where "blobCid" = ?1"#,
+                    params![cid],
+                    |_| Ok(true),
+                )
+                .optional()?
+                .unwrap_or(false);
+            if elsewhere {
+                continue;
+            }
+            transaction.execute(r#"delete from "blob" where "cid" = ?1"#, params![cid])?;
+            orphaned.push(
+                cid.parse()
+                    .map_err(|_| Error::Malformed("a blob that is not a CID"))?,
+            );
+        }
+        Ok(orphaned)
+    }
+
+    /// Ties a blob to the record naming it, and takes it out of the state an
+    /// upload leaves it in.
+    ///
+    /// # Errors
+    ///
+    /// If nothing uploaded that blob, or the record names it as something
+    /// other than what was uploaded.
+    fn claim(transaction: &rusqlite::Transaction<'_>, uri: &str, blob: &Blob) -> Result<(), Error> {
+        let held: Option<(String, i64)> = transaction
+            .query_row(
+                r#"select "mimeType", "size" from "blob" where "cid" = ?1 and "takedownRef" is null"#,
+                params![blob.cid.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((mime, size)) = held else {
+            return Err(Error::BlobMissing(blob.cid));
+        };
+        // What the record says the bytes are has to be what was uploaded, or a
+        // record could say anything about somebody else's blob.
+        if mime != blob.mime {
+            return Err(Error::BlobMismatch("Mimetype", mime, blob.mime.clone()));
+        }
+        if u64::try_from(size).unwrap_or_default() != blob.size {
+            return Err(Error::BlobMismatch(
+                "Size",
+                size.to_string(),
+                blob.size.to_string(),
+            ));
+        }
+
+        transaction.execute(
+            r#"insert or ignore into "record_blob" ("blobCid", "recordUri") values (?1, ?2)"#,
+            params![blob.cid.to_string(), uri],
+        )?;
+        transaction.execute(
+            r#"update "blob" set "tempKey" = null where "cid" = ?1"#,
+            params![blob.cid.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Blobs uploaded before `cutoff` that no record ever named, taken out of
+    /// the index so their files can go.
+    ///
+    /// `docs/architecture.md` has why this server sweeps and the other does
+    /// not.
+    ///
+    /// # Errors
+    ///
+    /// If the read or the write fails, or a row names something that is not a
+    /// CID.
+    pub fn sweep_unclaimed(&self, cutoff: jiff::Timestamp) -> Result<Vec<Cid>, Error> {
+        let stale: Vec<String> = self
+            .db
+            .prepare(
+                r#"select "cid" from "blob" where "tempKey" is not null and "createdAt" < ?1"#,
+            )?
+            .query_map(params![super::stamp(cutoff)], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
+
+        let mut swept = Vec::new();
+        for cid in stale {
+            // Still asking for an unclaimed one, since a record may have taken
+            // it between the read and here.
+            let taken = self.db.execute(
+                r#"delete from "blob" where "cid" = ?1 and "tempKey" is not null"#,
+                params![cid],
+            )?;
+            if taken > 0 {
+                swept.push(
+                    cid.parse()
+                        .map_err(|_| Error::Malformed("a blob that is not a CID"))?,
+                );
+            }
+        }
+        Ok(swept)
     }
 
     /// What is known about a blob, if this account uploaded one.

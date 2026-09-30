@@ -6,8 +6,8 @@ use std::path::Path;
 use manapds::crypto::{Algorithm, Keypair};
 use manapds::repo::{self, Ipld, Repo, Store, Write};
 use manapds::store::{
-    Account, Accounts, Actor, AppPassword, DidCache, Directory, Error, Event, Indexed, Record,
-    Registration, Root, Sequencer, Session,
+    Account, Accounts, Actor, AppPassword, Blob, DidCache, Directory, Error, Event, Indexed,
+    Record, Registration, Root, Sequencer, Session,
 };
 use manapds::store::{blobs, keys};
 use manapds::syntax::{Did, Nsid, RecordKey, TidClock};
@@ -37,6 +37,7 @@ fn indexed_in(collection: &str, rkey: &str, text: &str) -> Indexed {
         rkey: rkey.parse::<RecordKey>().expect("a record key"),
         cid: repo::cid_for(&repo::encode(&post(text)).expect("encodes")),
         links: Vec::new(),
+        blobs: Vec::new(),
     }
 }
 
@@ -457,11 +458,12 @@ fn a_commit_built_on_a_root_somebody_else_moved_is_refused() {
                 &[indexed("3jqfcqzm4fa2j", "mine")]
             )
             .expect("commits")
+            .is_some()
     );
     // The second was worked out against a tree that has moved, so taking it
     // would drop the first write rather than land beside it.
     assert!(
-        !store
+        store
             .commit(
                 Some(&from),
                 &at(&second),
@@ -469,6 +471,7 @@ fn a_commit_built_on_a_root_somebody_else_moved_is_refused() {
                 &[indexed("3jqfcqzm4fb2j", "theirs")]
             )
             .expect("answers")
+            .is_none()
     );
 
     assert_eq!(store.root().expect("reads"), Some(at(&first)));
@@ -1426,4 +1429,57 @@ fn a_blob_that_cannot_be_put_in_place_leaves_nothing_behind() {
         .map(|entry| entry.expect("an entry").file_name())
         .collect();
     assert_eq!(held, [path.file_name().expect("a name")]);
+}
+
+#[test]
+fn a_blob_nothing_ever_named_is_swept_and_one_a_record_holds_is_not() {
+    let store = Actor::memory(account()).expect("opens");
+    let held = Blob {
+        cid: manapds::store::blobs::cid_for(b"held"),
+        mime: "image/png".to_owned(),
+        size: 4,
+    };
+    let loose = Blob {
+        cid: manapds::store::blobs::cid_for(b"loose"),
+        mime: "image/png".to_owned(),
+        size: 5,
+    };
+    store.add_blob(&held).expect("writes");
+    store.add_blob(&loose).expect("writes");
+
+    // Nothing is old enough yet, which is what the window is for.
+    assert_eq!(
+        store
+            .sweep_unclaimed(jiff::Timestamp::now() - jiff::SignedDuration::from_hours(1))
+            .expect("sweeps"),
+        Vec::new()
+    );
+
+    // One of them is claimed by a record, the way a write claims it.
+    let key = Keypair::generate(Algorithm::Secp256k1);
+    let mut clock = TidClock::new();
+    let (repo, blocks) = Repo::create(account(), &key, &mut clock).expect("creates");
+    let mut store = store;
+    store
+        .commit(
+            None,
+            &at(&repo),
+            &blocks,
+            &[Indexed::Put {
+                collection: "com.example.record".parse().expect("an NSID"),
+                rkey: "3jqfcqzm4fc2j".parse().expect("a record key"),
+                cid: repo::cid_for(&repo::encode(&post("first")).expect("encodes")),
+                links: Vec::new(),
+                blobs: vec![held.clone()],
+            }],
+        )
+        .expect("commits");
+
+    // Past the window, the one nothing named goes and the held one stays.
+    let swept = store
+        .sweep_unclaimed(jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1))
+        .expect("sweeps");
+    assert_eq!(swept, vec![loose.cid]);
+    assert_eq!(store.blob(&held.cid).expect("reads"), Some(held));
+    assert_eq!(store.blob(&loose.cid).expect("reads"), None);
 }

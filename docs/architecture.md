@@ -110,6 +110,20 @@ are written and a fifth record naming a subject one of them already names takes
 the older one's place in the same commit. Refusing the newer one instead would
 leave a client that retried a lost request believing it had failed.
 
+A blob arrives before the record naming it, so an upload is a promise rather
+than a reference: the bytes sit under the account's own directory holding
+nothing until a record names them, and a record naming one that was never
+uploaded, or naming it as a different size or type, is refused under the same
+commit as the write. A blob nothing names an hour after it arrived is taken
+back out. The other server leaves those standing and its own lexicon says it
+will not, which is the one place here worth reading the lexicon instead.
+
+Unlike that server, a blob is stored under its CID from the moment it arrives
+rather than moved there when a record claims it — this one reads the whole body
+before it answers, so it knows the CID already. The cost is that an unclaimed
+blob is servable to anyone who knows the uploader's DID and the exact CID,
+which is a narrower thing to know than it sounds.
+
 ## Storage is split three ways
 
 - **One SQLite file per account**, holding that account's repository blocks,
