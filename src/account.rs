@@ -175,10 +175,11 @@ impl Error {
             },
             Self::Blob(_) => "BlobNotFound",
             Self::Swap(_) | Self::SwapRecord(_) => "InvalidSwap",
-            Self::Contended => "RateLimitExceeded",
-            Self::Email | Self::PasswordTooLong | Self::Taken(_) | Self::TooManyInvites => {
-                "InvalidRequest"
-            }
+            Self::Contended
+            | Self::Email
+            | Self::PasswordTooLong
+            | Self::Taken(_)
+            | Self::TooManyInvites => "InvalidRequest",
         }
     }
 }
