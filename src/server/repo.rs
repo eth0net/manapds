@@ -410,6 +410,8 @@ pub(crate) async fn apply_writes(
         }));
     };
 
+    // One answer per write asked for, which is what makes the two line up.
+    debug_assert_eq!(written.results.len(), kinds.len());
     Ok(Json(Applied {
         commit: Some(At {
             cid: written.commit.to_string(),
