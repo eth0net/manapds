@@ -104,6 +104,12 @@ An importer tuned against limits this server does not enforce would fall over
 on any other one, so a repository's write budgets and the point costs behind
 them are the reference's.
 
+An account holds one like per post, one repost per post, one follow per account
+and one block per account. No lexicon says so, so the four are indexed as they
+are written and a fifth record naming a subject one of them already names takes
+the older one's place in the same commit. Refusing the newer one instead would
+leave a client that retried a lost request believing it had failed.
+
 ## Storage is split three ways
 
 - **One SQLite file per account**, holding that account's repository blocks,

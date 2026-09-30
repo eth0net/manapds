@@ -36,6 +36,7 @@ fn indexed_in(collection: &str, rkey: &str, text: &str) -> Indexed {
         collection: collection.parse::<Nsid>().expect("an NSID"),
         rkey: rkey.parse::<RecordKey>().expect("a record key"),
         cid: repo::cid_for(&repo::encode(&post(text)).expect("encodes")),
+        links: Vec::new(),
     }
 }
 

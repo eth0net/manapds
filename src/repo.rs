@@ -138,6 +138,17 @@ impl Write {
         (collection, rkey)
     }
 
+    /// The record this operation writes, where it writes one.
+    #[must_use]
+    pub fn record(&self) -> Option<&Ipld> {
+        match self {
+            Self::Create { record, .. }
+            | Self::Update { record, .. }
+            | Self::Put { record, .. } => Some(record),
+            Self::Delete { .. } => None,
+        }
+    }
+
     /// Where in the tree this operation lands.
     #[must_use]
     pub fn key(&self) -> String {

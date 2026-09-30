@@ -3,6 +3,7 @@
 //! Everything here is reachable without a socket, so the handlers above it do
 //! nothing but read a request and name an error.
 
+pub mod backlink;
 pub mod email;
 pub mod handle;
 pub mod password;
@@ -238,6 +239,16 @@ pub enum Missing {
     Skip,
 }
 
+/// What to do about a record already pointing where this one would.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Conflicts {
+    /// Leave it, which is what every method but one does.
+    #[default]
+    Ignore,
+    /// Take it out, so the newer record is the one the account is left holding.
+    Supersede,
+}
+
 /// One write, and what has to be at its key for it to land.
 #[derive(Clone, Debug)]
 pub struct Requested {
@@ -247,6 +258,8 @@ pub struct Requested {
     pub expect: Expect,
     /// What to do if its key holds nothing.
     pub missing: Missing,
+    /// What to do about a record this one may only replace.
+    pub conflicts: Conflicts,
 }
 
 impl From<repo::Write> for Requested {
@@ -256,6 +269,7 @@ impl From<repo::Write> for Requested {
             write,
             expect: Expect::Anything,
             missing: Missing::Refuse,
+            conflicts: Conflicts::Ignore,
         }
     }
 }
@@ -1190,6 +1204,54 @@ struct Landed {
     prev_data: Cid,
 }
 
+/// Every record this one would take the place of, as the writes that take
+/// them out.
+///
+/// The index is read outside the transaction that acts on it, which one
+/// account's turn and the root the commit swaps against make safe: a write
+/// that loses either reads this again.
+fn superseded(
+    repo: &mut Repo,
+    store: &store::Actor,
+    write: &repo::Write,
+) -> Result<Vec<(repo::Write, store::Indexed, event::Op)>, Error> {
+    let (collection, rkey) = write.target();
+    let Some(record) = write.record() else {
+        return Ok(Vec::new());
+    };
+    if !backlink::held_to_one(collection) {
+        return Ok(Vec::new());
+    }
+
+    let mut taken = Vec::new();
+    for link in backlink::of(record) {
+        for held in store.pointing_at(collection, &link)? {
+            if &held == rkey {
+                continue;
+            }
+            let path = format!("{collection}/{held}");
+            let prev = repo.get(store, collection, &held)?;
+            taken.push((
+                repo::Write::Delete {
+                    collection: collection.clone(),
+                    rkey: held.clone(),
+                },
+                store::Indexed::Delete {
+                    collection: collection.clone(),
+                    rkey: held,
+                },
+                event::Op {
+                    action: "delete",
+                    path,
+                    cid: None,
+                    prev,
+                },
+            ));
+        }
+    }
+    Ok(taken)
+}
+
 /// The whole of one write, on a thread that is allowed to block.
 fn commit_writes(
     key: &Path,
@@ -1268,7 +1330,7 @@ struct Plan {
 /// first replaced.
 fn plan(
     repo: &mut Repo,
-    store: &dyn repo::Store,
+    store: &store::Actor,
     did: &Did,
     requested: &[Requested],
 ) -> Result<Plan, Error> {
@@ -1297,7 +1359,19 @@ fn plan(
                 ));
             }
         }
+        // Whatever already points where this one would goes out first, so
+        // that one landing on the same key finds it empty. The account is told
+        // about its own write and not about these.
+        if asked.conflicts == Conflicts::Supersede {
+            for superseded in superseded(repo, store, write)? {
+                writes.push(superseded.0);
+                index.push(superseded.1);
+                ops.push(superseded.2);
+            }
+        }
+
         writes.push(write.clone());
+        let links = write.record().map(backlink::of).unwrap_or_default();
         let (action, cid) = match write {
             repo::Write::Create { record, .. } => {
                 ("create", Some(repo::cid_for(&repo::encode(record)?)))
@@ -1317,6 +1391,7 @@ fn plan(
                 collection: collection.clone(),
                 rkey: rkey.clone(),
                 cid,
+                links,
             },
             None => store::Indexed::Delete {
                 collection: collection.clone(),

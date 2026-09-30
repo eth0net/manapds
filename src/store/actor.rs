@@ -70,6 +70,17 @@ pub struct Blob {
     pub size: u64,
 }
 
+/// What a record points at that it may only point at once.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Backlink {
+    /// Where in the record the subject sits, spelled the way the other server
+    /// spells it.
+    pub path: &'static str,
+    /// The subject itself: a DID for a follow or a block, an AT-URI for a like
+    /// or a repost.
+    pub link_to: String,
+}
+
 /// Where one commit leaves a record in the index.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Indexed {
@@ -81,6 +92,8 @@ pub enum Indexed {
         rkey: RecordKey,
         /// The block the record is in.
         cid: Cid,
+        /// What it points at that it may only point at once.
+        links: Vec<Backlink>,
     },
     /// The key this commit emptied.
     Delete {
@@ -192,22 +205,38 @@ impl Actor {
                    on conflict("uri") do update set "cid" = ?2, "repoRev" = ?5, "indexedAt" = ?6"#,
             )?;
             let mut remove = transaction.prepare(r#"delete from "record" where "uri" = ?1"#)?;
+            // Written from scratch for every record, so one that stops pointing
+            // anywhere stops holding anything to one.
+            let mut unlink = transaction.prepare(r#"delete from "backlink" where "uri" = ?1"#)?;
+            let mut link = transaction.prepare(
+                r#"insert or ignore into "backlink" ("uri", "path", "linkTo") values (?1, ?2, ?3)"#,
+            )?;
             for record in records {
                 match record {
                     Indexed::Put {
                         collection,
                         rkey,
                         cid,
-                    } => put.execute(params![
-                        uri(did, collection, rkey),
-                        cid.to_string(),
-                        collection.as_str(),
-                        rkey.as_str(),
-                        root.rev.as_str(),
-                        format!("{stamp:.3}")
-                    ])?,
+                        links,
+                    } => {
+                        let at = uri(did, collection, rkey);
+                        unlink.execute(params![at])?;
+                        for backlink in links {
+                            link.execute(params![at, backlink.path, backlink.link_to])?;
+                        }
+                        put.execute(params![
+                            at,
+                            cid.to_string(),
+                            collection.as_str(),
+                            rkey.as_str(),
+                            root.rev.as_str(),
+                            format!("{stamp:.3}")
+                        ])?
+                    }
                     Indexed::Delete { collection, rkey } => {
-                        remove.execute(params![uri(did, collection, rkey)])?
+                        let at = uri(did, collection, rkey);
+                        unlink.execute(params![at])?;
+                        remove.execute(params![at])?
                     }
                 };
             }
@@ -286,6 +315,35 @@ impl Actor {
             .query_map(params![collection.as_str(), cursor, limit], read)?
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
+            .collect()
+    }
+
+    /// The keys in a collection already pointing where this record would.
+    ///
+    /// # Errors
+    ///
+    /// If the read fails, or a row holds a key nothing here writes.
+    pub fn pointing_at(
+        &self,
+        collection: &Nsid,
+        backlink: &Backlink,
+    ) -> Result<Vec<RecordKey>, Error> {
+        self.db
+            .prepare(
+                r#"select "record"."rkey" from "record"
+                   join "backlink" on "backlink"."uri" = "record"."uri"
+                   where "backlink"."path" = ?1 and "backlink"."linkTo" = ?2
+                     and "record"."collection" = ?3"#,
+            )?
+            .query_map(
+                params![backlink.path, backlink.link_to, collection.as_str()],
+                |row| row.get::<_, String>(0),
+            )?
+            .map(|rkey| {
+                rkey?
+                    .parse()
+                    .map_err(|_| Error::Malformed("an indexed key that is not a record key"))
+            })
             .collect()
     }
 

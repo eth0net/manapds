@@ -6,7 +6,7 @@ use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::account::{self, Expect, Manager, Missing, Requested};
+use crate::account::{self, Conflicts, Expect, Manager, Missing, Requested};
 use crate::repo;
 use crate::repo::Write;
 use crate::store;
@@ -32,6 +32,9 @@ pub(crate) struct Creating {
     rkey: Option<String>,
     record: Value,
     swap_commit: Option<String>,
+    /// Only an explicit `false` turns the checks off. Unset means the checks a
+    /// lexicon this server knows would ask for, which is what a client sends.
+    validate: Option<bool>,
 }
 
 /// What a caller believes is at a key.
@@ -229,13 +232,19 @@ pub(crate) async fn create_record(
         record: record(&named, input.record)?,
         collection: named,
     };
+    let asked = Requested {
+        // One like per post, one follow per account: the older record makes way
+        // rather than the newer one being refused.
+        conflicts: if input.validate == Some(false) {
+            Conflicts::Ignore
+        } else {
+            Conflicts::Supersede
+        },
+        ..Requested::from(write)
+    };
     landed(
         accounts
-            .write(
-                &did,
-                vec![write.into()],
-                swap(input.swap_commit.as_deref())?,
-            )
+            .write(&did, vec![asked], swap(input.swap_commit.as_deref())?)
             .await?,
     )
 }
@@ -265,6 +274,7 @@ pub(crate) async fn put_record(
         },
         expect: expected(&input.swap_record)?,
         missing: Missing::Refuse,
+        conflicts: Conflicts::Ignore,
     };
     landed(
         accounts
@@ -301,6 +311,7 @@ pub(crate) async fn delete_record(
         // A key holding nothing is what a delete was asking for, so it is
         // answered rather than refused, with no commit because none was made.
         missing: Missing::Skip,
+        conflicts: Conflicts::Ignore,
     };
     let written = accounts
         .write(&did, vec![asked], swap(input.swap_commit.as_deref())?)
