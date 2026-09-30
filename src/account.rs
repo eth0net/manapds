@@ -663,18 +663,7 @@ impl Manager {
             return Ok(None);
         };
 
-        // Once the rows are gone the files are nobody's.
-        let blobs = self.directory.blobs();
-        let account = did.clone();
-        let dropped = landed.orphaned.clone();
-        blocking(move || {
-            for cid in dropped {
-                if let Err(error) = blobs.delete(&account, &cid) {
-                    tracing::error!(%cid, %error, "a blob nothing holds was not removed");
-                }
-            }
-        })
-        .await;
+        self.unlink(did, landed.orphaned.clone()).await;
 
         // Both of these follow a commit that has already landed, so neither is
         // worth failing the call over.
@@ -841,18 +830,37 @@ impl Manager {
             })
             .await?;
         let taken = swept.len();
+        self.unlink(did, swept).await;
+        Ok(taken)
+    }
 
+    /// Takes the files of blobs this server holds nothing under.
+    ///
+    /// Asked again for each one, because between losing its row and losing its
+    /// file a blob can be uploaded afresh, and unlinking then would leave the
+    /// new row pointing at nothing.
+    async fn unlink(&self, did: &Did, dropped: Vec<Cid>) {
+        if dropped.is_empty() {
+            return;
+        }
         let blobs = self.directory.blobs();
         let account = did.clone();
-        blocking(move || {
-            for cid in swept {
-                if let Err(error) = blobs.delete(&account, &cid) {
-                    tracing::error!(%cid, %error, "an unclaimed blob was not removed");
+        if let Err(error) = self
+            .actor(did, move |actor| {
+                for cid in dropped {
+                    if !actor.unheld(&cid)? {
+                        continue;
+                    }
+                    if let Err(error) = blobs.delete(&account, &cid) {
+                        tracing::error!(%cid, %error, "a blob nothing holds was not removed");
+                    }
                 }
-            }
-        })
-        .await;
-        Ok(taken)
+                Ok(())
+            })
+            .await
+        {
+            tracing::error!(%did, %error, "blobs nothing holds were not removed");
+        }
     }
 
     /// A blob an account uploaded, and what it said it was.
