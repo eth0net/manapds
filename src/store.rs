@@ -56,8 +56,7 @@ pub enum Error {
 }
 
 impl Error {
-    /// Whether waiting and asking again is what would help, which is the one
-    /// thing a caller can act on: SQLite takes one writer at a time.
+    /// Whether waiting and asking again is what would help.
     #[must_use]
     pub fn busy(&self) -> bool {
         matches!(self, Self::Sqlite(error) if matches!(

@@ -104,26 +104,6 @@ An importer tuned against limits this server does not enforce would fall over
 on any other one, so a repository's write budgets and the point costs behind
 them are the reference's.
 
-An account holds one like per post, one repost per post, one follow per account
-and one block per account. No lexicon says so, so the four are indexed as they
-are written and a fifth record naming a subject one of them already names takes
-the older one's place in the same commit. Refusing the newer one instead would
-leave a client that retried a lost request believing it had failed.
-
-A blob arrives before the record naming it, so an upload is a promise rather
-than a reference: the bytes sit under the account's own directory holding
-nothing until a record names them, and a record naming one that was never
-uploaded, or naming it as a different size or type, is refused under the same
-commit as the write. A blob nothing names an hour after it arrived is taken
-back out. The other server leaves those standing and its own lexicon says it
-will not, which is the one place here worth reading the lexicon instead.
-
-Unlike that server, a blob is stored under its CID from the moment it arrives
-rather than moved there when a record claims it — this one reads the whole body
-before it answers, so it knows the CID already. The cost is that an unclaimed
-blob is servable to anyone who knows the uploader's DID and the exact CID,
-which is a narrower thing to know than it sounds.
-
 ## Storage is split three ways
 
 - **One SQLite file per account**, holding that account's repository blocks,
@@ -151,6 +131,28 @@ quiet one.
 Underneath it the root still moves only while it is the one the revision was
 built on, and a write that finds it moved starts over. One server never reaches
 that, and it is the only thing between two of them pointed at the same files.
+
+A like, a repost, a follow and a block each name a subject an account may hold
+only one record for. No lexicon says so, so the four are indexed as they are
+written, and `createRecord` takes the older record's place in the same commit
+rather than refusing the newer one — a client that retried a lost request would
+otherwise be told it had failed. Every other write leaves them alone, and an
+explicit `validate: false` turns it off, which is where the other server draws
+both lines.
+
+An upload is a promise rather than a reference: the bytes arrive before the
+record naming them and hold nothing until it does. The check that a record's
+blob was uploaded, and at the size and type the record claims, runs inside the
+commit transaction, so a record that names one wrongly leaves no revision
+behind. What no record names is swept on that account's next upload rather than
+on a timer, since an account uploading is the account with blobs to clear. The
+other server never sweeps and its own lexicon says it will, which is the one
+place here worth reading the lexicon instead.
+
+Unlike that server, a blob sits at its CID from the moment it arrives rather
+than being moved there when a record claims it: this one reads the whole body
+before it answers, so it knows the CID already. The cost is that an unclaimed
+blob is servable to anyone holding the uploader's DID and the exact CID.
 
 The data directory needs a POSIX filesystem. An account's files sit under its
 DID, a DID has colons in it, and Windows will not have a colon in a path

@@ -32,8 +32,7 @@ pub(crate) struct Creating {
     rkey: Option<String>,
     record: Value,
     swap_commit: Option<String>,
-    /// Only an explicit `false` turns the checks off. Unset means the checks a
-    /// lexicon this server knows would ask for, which is what a client sends.
+    /// Only an explicit `false` turns the checks off; unset is not `false`.
     validate: Option<bool>,
 }
 
@@ -233,8 +232,6 @@ pub(crate) async fn create_record(
         collection: named,
     };
     let asked = Requested {
-        // One like per post, one follow per account: the older record makes way
-        // rather than the newer one being refused.
         conflicts: if input.validate == Some(false) {
             Conflicts::Ignore
         } else {

@@ -49,8 +49,9 @@ const PASSWORD: usize = 256;
 /// held to: a longer one matches nothing this server could be holding.
 const STORED_PASSWORD: usize = 512;
 
-/// How long a blob nobody has named in a record is kept. An upload is a
-/// promise a record will follow, and the lexicon says minutes.
+/// How long a blob nobody has named in a record is kept. The lexicon says
+/// minutes; an hour leaves room for a client that uploads, asks the user
+/// something, and only then writes the record.
 const UNCLAIMED: SignedDuration = SignedDuration::from_hours(1);
 
 /// The floor on how many passwords are hashed at once.
@@ -662,8 +663,7 @@ impl Manager {
             return Ok(None);
         };
 
-        // Once the rows are gone the files are nobody's, and a file left behind
-        // is wasted space rather than anything a reader can reach.
+        // Once the rows are gone the files are nobody's.
         let blobs = self.directory.blobs();
         let account = did.clone();
         let dropped = landed.orphaned.clone();
@@ -822,8 +822,7 @@ impl Manager {
         })
         .await?;
 
-        // An account uploading is the account with blobs to clear, so nothing
-        // else has to run on a timer to find them.
+        // Swept here rather than on a timer; `docs/architecture.md` has why.
         if let Err(error) = self.sweep_blobs(did).await {
             tracing::error!(%did, %error, "unclaimed blobs were not swept");
         }
@@ -831,10 +830,6 @@ impl Manager {
     }
 
     /// Takes out the blobs an account uploaded and never named in a record.
-    ///
-    /// An upload is a promise a record will follow, and one that never does
-    /// leaves bytes nothing can reach; `UNCLAIMED` is how long that promise is
-    /// held open.
     ///
     /// # Errors
     ///
@@ -1429,9 +1424,8 @@ fn plan(
                 ));
             }
         }
-        // Whatever already points where this one would goes out first, so
-        // that one landing on the same key finds it empty. The account is told
-        // about its own write and not about these.
+        // Goes out before the write, so one landing on the same key finds it
+        // empty. The account is told about its own write and not these.
         if asked.conflicts == Conflicts::Supersede {
             for superseded in superseded(repo, store, write)? {
                 writes.push(superseded.0);

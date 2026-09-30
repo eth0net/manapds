@@ -211,15 +211,12 @@ impl Actor {
                    on conflict("uri") do update set "cid" = ?2, "repoRev" = ?5, "indexedAt" = ?6"#,
             )?;
             let mut remove = transaction.prepare(r#"delete from "record" where "uri" = ?1"#)?;
-            // Written from scratch for every record, so one that stops pointing
-            // anywhere stops holding anything to one.
+            // Rewritten for every record, so one that stops pointing anywhere
+            // loses its links.
             let mut unlink = transaction.prepare(r#"delete from "backlink" where "uri" = ?1"#)?;
             let mut link = transaction.prepare(
                 r#"insert or ignore into "backlink" ("uri", "path", "linkTo") values (?1, ?2, ?3)"#,
             )?;
-            // Every blob the batch leaves a record holding, so one taken from
-            // a record and put on another in the same commit is not swept out
-            // between the two.
             let kept: std::collections::HashSet<String> = records
                 .iter()
                 .filter_map(|record| match record {
@@ -478,8 +475,7 @@ impl Actor {
         let Some((mime, size)) = held else {
             return Err(Error::BlobMissing(blob.cid));
         };
-        // What the record says the bytes are has to be what was uploaded, or a
-        // record could say anything about somebody else's blob.
+        // Or a record could say anything about somebody else's blob.
         if mime != blob.mime {
             return Err(Error::BlobMismatch("Mimetype", mime, blob.mime.clone()));
         }

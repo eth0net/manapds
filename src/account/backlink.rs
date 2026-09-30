@@ -19,9 +19,8 @@ const SUBJECT_URI: &str = "subject.uri";
 
 /// What this record may only hold one of, if it is one of the four.
 ///
-/// A subject that will not parse is left unindexed rather than refused: the
-/// record is the caller's to write, and all this decides is whether anything
-/// else has to make way for it.
+/// A subject that will not parse is left unindexed rather than refused: all
+/// this decides is what makes way.
 #[must_use]
 pub fn of(record: &Ipld) -> Vec<Backlink> {
     let Ipld::Map(fields) = record else {
@@ -54,8 +53,7 @@ pub fn of(record: &Ipld) -> Vec<Backlink> {
     }]
 }
 
-/// Whether a collection is one of the four at all, which is what decides
-/// whether the index is asked anything.
+/// Whether a collection is one of the four at all.
 #[must_use]
 pub fn held_to_one(collection: &Nsid) -> bool {
     matches!(collection.as_str(), FOLLOW | BLOCK | LIKE | REPOST)

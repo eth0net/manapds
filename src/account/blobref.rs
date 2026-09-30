@@ -10,8 +10,7 @@ use crate::store::Blob;
 /// What a record's blob reference has to hold, and all it may hold.
 const KEYS: [&str; 4] = ["$type", "ref", "mimeType", "size"];
 
-/// Every blob a record names, in the order they are met. What it says they
-/// are is the record's claim, which the store checks against the upload.
+/// Every blob a record names, in the order they are met.
 #[must_use]
 pub fn of(record: &Ipld) -> Vec<Blob> {
     let mut found = Vec::new();
@@ -45,8 +44,7 @@ fn named(fields: &std::collections::BTreeMap<String, Ipld>) -> Option<Blob> {
     let Some(Ipld::Link(cid)) = fields.get("ref") else {
         return None;
     };
-    // The whole of what the other server checks a type for, which leaves the
-    // rest to whoever reads the blob.
+    // The whole of what the other server checks a mime type for.
     let Some(Ipld::String(mime)) = fields.get("mimeType") else {
         return None;
     };
