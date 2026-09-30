@@ -129,10 +129,24 @@ impl From<store::Error> for Error {
 }
 
 impl Error {
+    /// Whether waiting and asking again is what would help.
+    #[must_use]
+    pub fn busy(&self) -> bool {
+        match self {
+            Self::Repo(error) => error.busy(),
+            Self::Storage(error) => error.busy(),
+            Self::Contended => true,
+            _ => false,
+        }
+    }
+
     /// The name its lexicon gives the failure, which is what a client branches
     /// on.
     #[must_use]
     pub fn name(&self) -> &'static str {
+        if self.busy() {
+            return "NotEnoughResources";
+        }
         match self {
             // A name held back is `HandleNotAvailable`; one somebody already
             // holds is not, on this method. Changing a handle draws the line

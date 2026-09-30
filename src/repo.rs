@@ -113,6 +113,14 @@ pub enum Write {
     },
 }
 
+impl Error {
+    /// Whether waiting and asking again is what would help.
+    #[must_use]
+    pub fn busy(&self) -> bool {
+        matches!(self, Self::StoreBusy)
+    }
+}
+
 impl Write {
     /// The collection and key this operation is about.
     #[must_use]

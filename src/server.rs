@@ -107,13 +107,16 @@ impl FromRef<Context> for Option<Arc<Limits>> {
 impl From<account::Error> for xrpc::Error {
     fn from(error: account::Error) -> Self {
         use account::Error;
+        // Storage that would not answer this time is worth saying so about:
+        // the caller can come back, where a fault on this side it cannot.
+        if error.busy() {
+            return Self::new(xrpc::Status::NotEnoughResources).saying(error.to_string());
+        }
         let status = match error {
             Error::Credentials => xrpc::Status::AuthenticationRequired,
             Error::Plc(_) | Error::Repo(_) | Error::Storage(_) => {
                 return Self::internal(error.to_string());
             }
-            // Not a budget, but the same answer: come back and it will land.
-            Error::Contended => xrpc::Status::RateLimitExceeded,
             _ => xrpc::Status::InvalidRequest,
         };
         Self::new(status)

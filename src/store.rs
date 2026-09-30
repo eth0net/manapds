@@ -49,6 +49,18 @@ pub enum Error {
     Key(#[from] crate::crypto::Error),
 }
 
+impl Error {
+    /// Whether waiting and asking again is what would help, which is the one
+    /// thing a caller can act on: SQLite takes one writer at a time.
+    #[must_use]
+    pub fn busy(&self) -> bool {
+        matches!(self, Self::Sqlite(error) if matches!(
+            error.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+        ))
+    }
+}
+
 mod accounts;
 mod actor;
 pub mod blobs;

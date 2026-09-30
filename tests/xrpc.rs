@@ -1066,3 +1066,23 @@ fn a_repository_write_spends_a_budget_the_account_holds() {
     let other: Did = "did:plc:mav423b24thku7ezkx7yaray".parse().expect("a DID");
     assert_eq!(limits.writing(&other, limit::CREATE), None);
 }
+
+#[test]
+fn storage_that_would_not_answer_this_time_says_come_back() {
+    // A caller can act on a busy database and cannot act on a fault, so the
+    // two do not come back as the same answer.
+    let busy = manapds::store::Error::Sqlite(rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(5),
+        Some("database is locked".to_owned()),
+    ));
+    assert!(busy.busy());
+    let refused = Error::from(manapds::account::Error::Storage(busy));
+    assert_eq!(refused.status(), Status::NotEnoughResources);
+    assert_eq!(refused.name(), "NotEnoughResources");
+    assert_eq!(refused.status().code(), StatusCode::SERVICE_UNAVAILABLE);
+
+    let broken = manapds::store::Error::Malformed("a row nothing here writes");
+    assert!(!broken.busy());
+    let refused = Error::from(manapds::account::Error::Storage(broken));
+    assert_eq!(refused.status(), Status::InternalServerError);
+}
