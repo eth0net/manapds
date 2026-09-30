@@ -347,7 +347,9 @@ impl Actor {
     /// Writes down a blob that has been stored, or leaves the row that is
     /// already there.
     ///
-    /// `tempKey` is set because no record has claimed it yet.
+    /// `tempKey` is set because no record has claimed it yet, and uploading
+    /// one again puts it back at the start of the window it is kept for. A
+    /// blob a record already claimed is left alone.
     ///
     /// todo(blob lifecycle): nothing clears the key and nothing sweeps a blob
     /// no record ever named.
@@ -357,7 +359,8 @@ impl Actor {
     /// If the write fails.
     pub fn add_blob(&self, blob: &Blob) -> Result<(), Error> {
         self.db.execute(
-            r#"insert or ignore into "blob" ("cid", "mimeType", "size", "tempKey", "createdAt") values (?1, ?2, ?3, ?4, ?5)"#,
+            r#"insert into "blob" ("cid", "mimeType", "size", "tempKey", "createdAt") values (?1, ?2, ?3, ?4, ?5)
+               on conflict("cid") do update set "createdAt" = ?5 where "tempKey" is not null"#,
             params![
                 blob.cid.to_string(),
                 blob.mime,
