@@ -820,7 +820,7 @@ async fn a_signup_the_caller_gives_up_on_mid_registration_is_left_standing() {
     // Kept: hanging up says nothing about what the directory did with the
     // operation.
     assert!(manager.resolve(&handle).await.expect("reads").is_some());
-    assert!(!files(data.path()).is_empty());
+    assert_ne!(files(data.path()), Vec::<String>::new());
 }
 
 /// Every file under a directory, however deep, by name.

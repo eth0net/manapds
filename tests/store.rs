@@ -936,11 +936,9 @@ fn an_app_password_is_found_by_its_hash_and_revoked_by_its_name() {
             .expect("revokes")
     );
     assert_eq!(accounts.session("phone session").expect("reads"), None);
-    assert!(
-        accounts
-            .app_passwords(&account())
-            .expect("reads")
-            .is_empty()
+    assert_eq!(
+        accounts.app_passwords(&account()).expect("reads"),
+        Vec::new()
     );
     assert!(
         !accounts
@@ -1341,11 +1339,9 @@ fn deleting_an_account_takes_everything_hanging_off_it() {
 
     assert_eq!(accounts.by_did(&account()).expect("reads"), None);
     assert_eq!(accounts.session("a session").expect("reads"), None);
-    assert!(
-        accounts
-            .app_passwords(&account())
-            .expect("reads")
-            .is_empty()
+    assert_eq!(
+        accounts.app_passwords(&account()).expect("reads"),
+        Vec::new()
     );
     // And the handle is free again, which is the point of undoing a signup.
     accounts.create(&registered).expect("creates again");

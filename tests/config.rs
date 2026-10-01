@@ -218,5 +218,5 @@ fn a_name_held_back_is_a_label_rather_than_a_handle() {
 #[test]
 fn holding_back_nothing_is_the_default() {
     let config = starting(&[]).expect("starts");
-    assert!(config.reserved_handles.is_empty());
+    assert_eq!(config.reserved_handles, Vec::<String>::new());
 }
