@@ -514,26 +514,32 @@ impl Actor {
     /// If nothing uploaded that blob, or the record names it as something
     /// other than what was uploaded.
     fn claim(transaction: &rusqlite::Transaction<'_>, uri: &str, blob: &Blob) -> Result<(), Error> {
-        let held: Option<(String, i64)> = transaction
+        let held: Option<(Option<String>, String, i64)> = transaction
             .query_row(
-                r#"select "mimeType", "size" from "blob" where "cid" = ?1 and "takedownRef" is null"#,
+                r#"select "tempKey", "mimeType", "size" from "blob" where "cid" = ?1 and "takedownRef" is null"#,
                 params![blob.cid.to_string()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
-        let Some((mime, size)) = held else {
+        let Some((unclaimed, mime, size)) = held else {
             return Err(Error::BlobMissing(blob.cid));
         };
-        // Or a record could say anything about somebody else's blob.
-        if mime != blob.mime {
-            return Err(Error::BlobMismatch("Mimetype", mime, blob.mime.clone()));
-        }
-        if u64::try_from(size).unwrap_or_default() != blob.size {
-            return Err(Error::BlobMismatch(
-                "Size",
-                size.to_string(),
-                blob.size.to_string(),
-            ));
+
+        // Checked once, when the blob stops being an upload and starts being
+        // part of a record: or a record could say anything about somebody
+        // else's blob. A second record naming it is taking what the first one
+        // settled.
+        if unclaimed.is_some() {
+            if mime != blob.mime {
+                return Err(Error::BlobMismatch("Mimetype", mime, blob.mime.clone()));
+            }
+            if u64::try_from(size).unwrap_or_default() != blob.size {
+                return Err(Error::BlobMismatch(
+                    "Size",
+                    size.to_string(),
+                    blob.size.to_string(),
+                ));
+            }
         }
 
         transaction.execute(

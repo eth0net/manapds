@@ -1217,3 +1217,19 @@ async fn a_batch_that_writes_one_key_twice_leaves_no_blob_behind() {
         "the sweep cannot reach a claimed blob, so it must not be left one"
     );
 }
+
+#[tokio::test]
+async fn a_second_record_naming_a_blob_is_taken_at_what_the_first_settled() {
+    let (router, _manager, _data) = served();
+    let blob = uploaded(&router, vec![1u8, 2, 3, 4]).await;
+
+    let (status, written) = holding(&router, "3jqfcqzm4fa2j", &blob).await;
+    assert_eq!(status, StatusCode::OK, "{written}");
+
+    // The size and the type are checked where the blob stops being an upload,
+    // so a second record carrying a hand-written reference is not asked again.
+    let mut loose = blob;
+    loose["mimeType"] = serde_json::json!("image/jpeg");
+    let (status, written) = holding(&router, "3jqfcqzm4fb2j", &loose).await;
+    assert_eq!(status, StatusCode::OK, "{written}");
+}
