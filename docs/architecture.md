@@ -142,10 +142,11 @@ server draws both lines.
 
 An upload is a promise rather than a reference: the bytes arrive before the
 record naming them and hold nothing until it does. The check that a record's
-blob was uploaded, and at the size and type the record claims, runs inside the
-commit transaction, so a record that names one wrongly leaves no revision
-behind. What no record names is swept on that account's next upload rather than
-on a timer, since an account uploading is the account with blobs to clear. The
+blob was uploaded runs inside the commit transaction, so a record that names
+one wrongly leaves no revision behind. Its size and type are checked against
+the upload by the first record to name it and taken as settled after that.
+What no record names is swept on that account's next upload rather than on a
+timer, since an account uploading is the account with blobs to clear. The
 other server never sweeps and its own lexicon says it will, which is the one
 place here worth reading the lexicon instead.
 
