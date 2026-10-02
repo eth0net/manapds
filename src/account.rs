@@ -49,11 +49,6 @@ const PASSWORD: usize = 256;
 /// held to: a longer one matches nothing this server could be holding.
 const STORED_PASSWORD: usize = 512;
 
-/// How long a blob nobody has named in a record is kept. The lexicon says
-/// minutes; an hour leaves room for a client that uploads, asks the user
-/// something, and only then writes the record.
-const UNCLAIMED: SignedDuration = SignedDuration::from_hours(1);
-
 /// The floor on how many passwords are hashed at once.
 const HASHES: usize = 4;
 
@@ -824,10 +819,10 @@ impl Manager {
     ///
     /// If the account holds no repository, or storage will not answer.
     pub async fn sweep_blobs(&self, did: &Did) -> Result<usize, Error> {
+        let kept = i64::try_from(self.config.blob_unclaimed_hours).unwrap_or(i64::MAX);
+        let cutoff = jiff::Timestamp::now() - SignedDuration::from_hours(kept);
         let swept = self
-            .actor(did, move |actor| {
-                actor.sweep_unclaimed(jiff::Timestamp::now() - UNCLAIMED)
-            })
+            .actor(did, move |actor| actor.sweep_unclaimed(cutoff))
             .await?;
         let taken = swept.len();
         self.unlink(did, swept).await;

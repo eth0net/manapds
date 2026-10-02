@@ -189,7 +189,15 @@ matching them costs nothing and buys the whole existing operational toolkit.
 Variables for features this server does not have are read and ignored rather
 than rejected, so a reference `pds.env` starts it unedited.
 
-One is not the reference's. `PDS_RESERVED_HANDLES` takes a comma-separated
+Two are not the reference's. `PDS_BLOB_UNCLAIMED_HOURS` is how long a blob no
+record has named is kept, and it exists because the sweep does: the reference
+has neither, so there is no name to match and no number to inherit. The
+protocol suggests minutes and says nothing further, which makes this the
+operator's disk weighed against their users' slowest compose. A day is the
+default because losing an image somebody is still writing around is the worse
+of the two failures.
+
+`PDS_RESERVED_HANDLES` takes a comma-separated
 list, and every name in it joins the built-in list rather than standing in for
 it, so setting it can only ever refuse more. A server that leaves it alone
 hands out precisely what upstream would, which is why there is no matching way

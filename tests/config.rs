@@ -220,3 +220,17 @@ fn holding_back_nothing_is_the_default() {
     let config = starting(&[]).expect("starts");
     assert_eq!(config.reserved_handles, Vec::<String>::new());
 }
+
+#[test]
+fn how_long_an_unclaimed_blob_is_kept_is_the_operator_s_to_set() {
+    assert_eq!(
+        starting(&[]).expect("a configuration").blob_unclaimed_hours,
+        24
+    );
+    assert_eq!(
+        starting(&[("PDS_BLOB_UNCLAIMED_HOURS", "1")])
+            .expect("a configuration")
+            .blob_unclaimed_hours,
+        1
+    );
+}

@@ -73,6 +73,9 @@ pub struct Config {
     pub reserved_handles: Vec<String>,
     pub invite_required: bool,
     pub blob_upload_limit: u64,
+    /// How long an unclaimed blob is kept, in hours;
+    /// `docs/architecture.md` has why this is the operator's to pick.
+    pub blob_unclaimed_hours: u64,
     pub privacy_policy_url: Option<String>,
     pub terms_of_service_url: Option<String>,
     pub contact_email: Option<String>,
@@ -140,6 +143,7 @@ impl Config {
                 .map_err(|_| ConfigError::NotADidKey("PDS_RECOVERY_DID_KEY"))?,
             invite_required: boolean("PDS_INVITE_REQUIRED")?.unwrap_or(true),
             blob_upload_limit: number("PDS_BLOB_UPLOAD_LIMIT")?.unwrap_or(5 * 1024 * 1024),
+            blob_unclaimed_hours: number("PDS_BLOB_UNCLAIMED_HOURS")?.unwrap_or(24),
             privacy_policy_url: string("PDS_PRIVACY_POLICY_URL"),
             terms_of_service_url: string("PDS_TERMS_OF_SERVICE_URL"),
             contact_email: string("PDS_CONTACT_EMAIL_ADDRESS"),

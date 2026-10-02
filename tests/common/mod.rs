@@ -34,6 +34,7 @@ pub(crate) fn config(hostname: &str, data: impl AsRef<Path>, plc: &str) -> Confi
         recovery_key: None,
         invite_required: false,
         blob_upload_limit: 5 * 1024 * 1024,
+        blob_unclaimed_hours: 24,
         privacy_policy_url: None,
         terms_of_service_url: None,
         contact_email: None,
