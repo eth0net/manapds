@@ -1254,3 +1254,50 @@ async fn liking_one_post_twice_at_one_key_lands() {
     .await;
     assert_eq!(page["records"].as_array().expect("records").len(), 1);
 }
+
+#[tokio::test]
+async fn a_record_holding_something_that_claims_to_be_a_blob_is_refused() {
+    let (router, manager, _data) = served();
+
+    // Each of these is blob-shaped and is not a blob reference. Taking the
+    // record would leave it pointing at bytes nothing is keeping, so a sweep
+    // would later take them out from under it.
+    for bad in [
+        serde_json::json!({
+            "$type": "blob",
+            "ref": { "$link": "bafkreidfcltdzyzp4dmvoeohhrhi6z2lhsbhgorpuoqqzvpxrbfuspqsoq" },
+            "mimeType": "image/png",
+            "size": -1,
+        }),
+        serde_json::json!({
+            "cid": "bafkreidfcltdzyzp4dmvoeohhrhi6z2lhsbhgorpuoqqzvpxrbfuspqsoq",
+            "mimeType": "image/png",
+            "$type": "blob",
+        }),
+        serde_json::json!({
+            "$type": "blob",
+            "ref": { "$link": "bafkreidfcltdzyzp4dmvoeohhrhi6z2lhsbhgorpuoqqzvpxrbfuspqsoq" },
+            "mimeType": "notamimetype",
+            "size": 4,
+        }),
+    ] {
+        let (status, refused) = holding(&router, "3jqfcqzm4fa2j", &bad).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    }
+
+    // And nothing was written under any of them.
+    assert_eq!(
+        manager
+            .records(
+                &account(),
+                &"com.example.record".parse().expect("an NSID"),
+                10,
+                None,
+                false
+            )
+            .await
+            .expect("reads")
+            .len(),
+        0
+    );
+}

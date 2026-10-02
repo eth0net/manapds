@@ -107,6 +107,10 @@ impl FromRef<Context> for Option<Arc<Limits>> {
 impl From<account::Error> for xrpc::Error {
     fn from(error: account::Error) -> Self {
         use account::Error;
+        // What the caller sent, rather than anything this server did with it.
+        if error.sent() {
+            return Self::invalid_request(error.to_string());
+        }
         // Retryable, where everything under it is not.
         if error.busy() {
             return Self::new(xrpc::Status::NotEnoughResources).saying(error.to_string());

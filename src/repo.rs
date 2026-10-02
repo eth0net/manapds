@@ -114,6 +114,12 @@ pub enum Write {
 }
 
 impl Error {
+    /// Whether what arrived is the caller's fault rather than this server's.
+    #[must_use]
+    pub fn sent(&self) -> bool {
+        matches!(self, Self::NotRecordData(_))
+    }
+
     /// Whether waiting and asking again is what would help.
     #[must_use]
     pub fn busy(&self) -> bool {

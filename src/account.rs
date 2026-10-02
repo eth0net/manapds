@@ -138,6 +138,12 @@ impl From<store::Error> for Error {
 }
 
 impl Error {
+    /// Whether what arrived is the caller's fault rather than this server's.
+    #[must_use]
+    pub fn sent(&self) -> bool {
+        matches!(self, Self::Repo(error) if error.sent())
+    }
+
     /// Whether waiting and asking again is what would help.
     #[must_use]
     pub fn busy(&self) -> bool {
@@ -155,6 +161,9 @@ impl Error {
     pub fn name(&self) -> &'static str {
         if self.busy() {
             return "NotEnoughResources";
+        }
+        if self.sent() {
+            return "InvalidRequest";
         }
         match self {
             // A name held back is `HandleNotAvailable`; one somebody already
@@ -1440,7 +1449,11 @@ fn plan(
 
         writes.push(write.clone());
         let links = write.record().map(backlink::of).unwrap_or_default();
-        let blobs = write.record().map(blobref::of).unwrap_or_default();
+        let blobs = write
+            .record()
+            .map(blobref::of)
+            .transpose()?
+            .unwrap_or_default();
         let (action, cid) = match write {
             repo::Write::Create { record, .. } => {
                 ("create", Some(repo::cid_for(&repo::encode(record)?)))
