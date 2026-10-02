@@ -819,8 +819,12 @@ impl Manager {
     ///
     /// If the account holds no repository, or storage will not answer.
     pub async fn sweep_blobs(&self, did: &Did) -> Result<usize, Error> {
-        let kept = i64::try_from(self.config.blob_unclaimed_hours).unwrap_or(i64::MAX);
-        let cutoff = jiff::Timestamp::now() - SignedDuration::from_hours(kept);
+        // Nothing, and a window longer than a timestamp can hold, both mean
+        // keep everything: either way the number asks for blobs to stay, not
+        // for an upload to fault.
+        let Some(cutoff) = kept_until(self.config.blob_unclaimed_hours) else {
+            return Ok(0);
+        };
         let swept = self
             .actor(did, move |actor| actor.sweep_unclaimed(cutoff))
             .await?;
@@ -1481,6 +1485,21 @@ fn plan(
         ops,
         results,
     })
+}
+
+/// When a blob uploaded now stops being worth keeping, or nothing where the
+/// window is off or longer than a timestamp reaches.
+#[must_use]
+pub fn kept_until(hours: u64) -> Option<jiff::Timestamp> {
+    if hours == 0 {
+        return None;
+    }
+    let seconds = hours
+        .checked_mul(3600)
+        .and_then(|s| i64::try_from(s).ok())?;
+    jiff::Timestamp::now()
+        .checked_sub(SignedDuration::from_secs(seconds))
+        .ok()
 }
 
 /// Runs work that has no way not to block on a thread that is allowed to,

@@ -1064,3 +1064,13 @@ async fn a_signup_the_directory_refuses_puts_nothing_in_the_log() {
         None
     );
 }
+
+#[test]
+fn a_window_nothing_could_mean_keeps_everything_rather_than_faulting() {
+    // Off, and anything a timestamp could not reach, both mean keep: either
+    // way the number asks for blobs to stay, not for an upload to fault.
+    assert_eq!(account::kept_until(0), None);
+    assert_eq!(account::kept_until(u64::MAX), None);
+    assert_eq!(account::kept_until(200_000_000), None);
+    assert!(account::kept_until(24).is_some());
+}
