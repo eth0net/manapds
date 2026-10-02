@@ -108,8 +108,8 @@ pub enum Error {
     /// Too many writes at once for any one of them to land.
     #[error("Repository is being written to too quickly")]
     Contended,
-    /// A record naming a blob nothing uploaded, or naming one as something
-    /// other than what was uploaded.
+    /// What the store refused about a blob a record named, which is the
+    /// caller's fault rather than this server's.
     #[error("{0}")]
     Blob(store::Error),
     /// The repository would not be built.
@@ -654,11 +654,11 @@ impl Manager {
         })
         .await;
         let _writing = writing;
-        let Some(landed) = landed? else {
+        let Some(mut landed) = landed? else {
             return Ok(None);
         };
 
-        self.unlink(did, landed.orphaned.clone()).await;
+        self.unlink(did, std::mem::take(&mut landed.orphaned)).await;
 
         // Both of these follow a commit that has already landed, so neither is
         // worth failing the call over.
