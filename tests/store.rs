@@ -1475,8 +1475,6 @@ fn a_blob_nothing_ever_named_is_swept_and_one_a_record_holds_is_not() {
         )
         .expect("commits");
 
-    // Uploading one again puts it back at the start of the window, so a client
-    // that comes back to a half-written record does not lose it.
     let waited = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
     assert_eq!(
         store.sweep_unclaimed(waited).expect("sweeps"),

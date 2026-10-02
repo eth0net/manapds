@@ -58,8 +58,8 @@ conflating the two would loosen the wrong one.
 
 Records left one of their own standing. A record is stored as it arrives rather
 than checked against the lexicon it names, so `validate` refuses nothing; all
-it decides is whether a record may take the place of one it is held to a single
-instance of.
+it decides is whether `createRecord` may take the place of a record held to a
+single instance.
 
 Two smaller ones sit beside it. An upload is taken at the type its caller
 declares rather than the type its bytes are, where the reference sniffs and

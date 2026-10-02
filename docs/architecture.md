@@ -135,10 +135,10 @@ that, and it is the only thing between two of them pointed at the same files.
 A like, a repost, a follow and a block each name a subject an account may hold
 only one record for. No lexicon says so, so the four are indexed as they are
 written, and `createRecord` takes the older record's place in the same commit
-rather than refusing the newer one — a client that retried a lost request would
-otherwise be told it had failed. Every other write leaves them alone, and an
-explicit `validate: false` turns it off, which is where the other server draws
-both lines.
+rather than refusing the newer one — a client that retried a lost request
+would otherwise be told it had failed. Every other write leaves them alone,
+and an explicit `validate: false` turns it off, which is where the other
+server draws both lines.
 
 An upload is a promise rather than a reference: the bytes arrive before the
 record naming them and hold nothing until it does. The check that a record's
@@ -154,14 +154,14 @@ than being moved there when a record claims it: this one reads the whole body
 before it answers, so it knows the CID already. The cost is that an unclaimed
 blob is servable to anyone holding the uploader's DID and the exact CID.
 
+Blobs are files on disk, addressed by CID under a per-account directory. A
+blob is immutable and content-addressed, so there is nothing a database gives
+it but overhead.
+
 The data directory needs a POSIX filesystem. An account's files sit under its
 DID, a DID has colons in it, and Windows will not have a colon in a path
 component — so this runs where the reference runs and not on Windows, which
 could not have written that layout either.
-
-Blobs are files on disk, addressed by CID under a per-account directory. A
-blob is immutable and content-addressed, so there is nothing a database gives
-it but overhead.
 
 ## Keys
 
@@ -190,12 +190,10 @@ Variables for features this server does not have are read and ignored rather
 than rejected, so a reference `pds.env` starts it unedited.
 
 Two are not the reference's. `PDS_BLOB_UNCLAIMED_HOURS` is how long a blob no
-record has named is kept, and it exists because the sweep does: the reference
-has neither, so there is no name to match and no number to inherit. The
-protocol suggests minutes and says nothing further, which makes this the
-operator's disk weighed against their users' slowest compose. A day is the
-default because losing an image somebody is still writing around is the worse
-of the two failures.
+record has named is kept; the sweep it bounds has no counterpart above, so
+there is no name to match and no number to inherit. The protocol suggests
+minutes and says nothing further. A day is the default because losing an image
+somebody is still writing around is the worse of the two failures.
 
 `PDS_RESERVED_HANDLES` takes a comma-separated
 list, and every name in it joins the built-in list rather than standing in for

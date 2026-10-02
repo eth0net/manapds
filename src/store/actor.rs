@@ -207,9 +207,8 @@ impl Actor {
         }
         let kept = Self::index(&transaction, did, root, records, &stamp, &mut orphaned)?;
 
-        // A batch that writes one key twice can leave a blob the rescue above
-        // spared and the record it was spared for no longer names, so what was
-        // spared is asked for again once every record has had its turn.
+        // `kept` spares a blob for a record a later write may have replaced, so
+        // each of them is asked for once every record has had its turn.
         for cid in kept {
             if Self::held(&transaction, &cid)? {
                 continue;
@@ -351,9 +350,6 @@ impl Actor {
     /// one again puts it back at the start of the window it is kept for. A
     /// blob a record already claimed is left alone.
     ///
-    /// todo(blob lifecycle): nothing clears the key and nothing sweeps a blob
-    /// no record ever named.
-    ///
     /// # Errors
     ///
     /// If the write fails.
@@ -476,8 +472,8 @@ impl Actor {
         Ok(kept)
     }
 
-    /// Whether this server holds anything under this blob at all, which is
-    /// what says a file is nobody's.
+    /// Whether no row is left under this blob, which is what makes its file
+    /// nobody's.
     ///
     /// # Errors
     ///
@@ -525,10 +521,8 @@ impl Actor {
             return Err(Error::BlobMissing(blob.cid));
         };
 
-        // Checked once, when the blob stops being an upload and starts being
-        // part of a record: or a record could say anything about somebody
-        // else's blob. A second record naming it is taking what the first one
-        // settled.
+        // Only while it is still an upload: a second record naming a blob takes
+        // what the first one settled.
         if unclaimed.is_some() {
             if mime != blob.mime {
                 return Err(Error::BlobMismatch("Mimetype", mime, blob.mime.clone()));

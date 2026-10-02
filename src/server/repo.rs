@@ -32,7 +32,7 @@ pub(crate) struct Creating {
     rkey: Option<String>,
     record: Value,
     swap_commit: Option<String>,
-    /// Only an explicit `false` turns the checks off; unset is not `false`.
+    /// Only an explicit `false` turns the checks off.
     validate: Option<bool>,
 }
 
@@ -410,7 +410,8 @@ pub(crate) async fn apply_writes(
         }));
     };
 
-    // One answer per write asked for, which is what makes the two line up.
+    // zip truncates rather than failing, so a write injected into the plan
+    // would misalign every answer after it.
     debug_assert_eq!(written.results.len(), kinds.len());
     Ok(Json(Applied {
         commit: Some(At {
