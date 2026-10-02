@@ -1233,3 +1233,24 @@ async fn a_second_record_naming_a_blob_is_taken_at_what_the_first_settled() {
     let (status, written) = holding(&router, "3jqfcqzm4fb2j", &loose).await;
     assert_eq!(status, StatusCode::OK, "{written}");
 }
+
+#[tokio::test]
+async fn liking_one_post_twice_at_one_key_lands() {
+    let (router, _manager, _data) = served();
+    let subject = "at://did:plc:ewvi7nxzyoun6zhxrhs64oiz/app.bsky.feed.post/3jqfcqzm4fc2j";
+
+    // The second one supersedes the first at the key the first is already at,
+    // so the key has to be emptied before it is written again.
+    for _ in 0..2 {
+        let (status, written) = liking(&router, "3jqfcqzm4fa2j", subject).await;
+        assert_eq!(status, StatusCode::OK, "{written}");
+    }
+
+    let (_, page) = get(
+        &router,
+        "/xrpc/com.atproto.repo.listRecords\
+         ?repo=alice.pds.example.com&collection=app.bsky.feed.like",
+    )
+    .await;
+    assert_eq!(page["records"].as_array().expect("records").len(), 1);
+}

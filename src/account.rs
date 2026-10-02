@@ -1282,7 +1282,7 @@ fn superseded(
     store: &store::Actor,
     write: &repo::Write,
 ) -> Result<Vec<(repo::Write, store::Indexed, event::Op)>, Error> {
-    let (collection, rkey) = write.target();
+    let (collection, _) = write.target();
     let Some(record) = write.record() else {
         return Ok(Vec::new());
     };
@@ -1293,9 +1293,6 @@ fn superseded(
     let mut taken = Vec::new();
     for link in backlink::of(record) {
         for held in store.pointing_at(collection, &link)? {
-            if &held == rkey {
-                continue;
-            }
             let path = format!("{collection}/{held}");
             let prev = repo.get(store, collection, &held)?;
             taken.push((
