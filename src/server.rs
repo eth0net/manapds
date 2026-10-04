@@ -213,6 +213,10 @@ fn routes(context: Context) -> Router {
             xrpc::query(sync::get_repo_status),
         )
         .route(
+            "/xrpc/com.atproto.sync.listRepos",
+            xrpc::query(sync::list_repos),
+        )
+        .route(
             "/xrpc/com.atproto.repo.getRecord",
             xrpc::query(repo::get_record),
         )

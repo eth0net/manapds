@@ -755,6 +755,21 @@ impl Manager {
         self.actor(did, store::Actor::root).await
     }
 
+    /// One page of the repositories this server holds, oldest account first.
+    ///
+    /// # Errors
+    ///
+    /// If storage will not answer.
+    pub async fn repos(
+        &self,
+        limit: u32,
+        from: Option<store::Cursor>,
+    ) -> Result<Vec<store::Hosted>, Error> {
+        Ok(self
+            .accounts(move |accounts| accounts.hosted(limit, from.as_ref()))
+            .await?)
+    }
+
     /// The record at a key, if the account holds one there.
     ///
     /// # Errors

@@ -139,6 +139,75 @@ fn blobs() -> manapds::store::Blobs {
 }
 
 #[tokio::test]
+async fn every_repository_here_is_listed_oldest_account_first() {
+    let (router, manager, _data) = served();
+    let written = manager
+        .write(
+            &alice(),
+            vec![record("3jqfcqzm4fc2j", "first").into()],
+            None,
+        )
+        .await
+        .expect("a commit")
+        .expect("a write");
+
+    let (status, body) = get(&router, "/xrpc/com.atproto.sync.listRepos?limit=1").await;
+    assert_eq!(status, StatusCode::OK);
+    let repos = body["repos"].as_array().expect("repos");
+    assert_eq!(repos.len(), 1);
+    assert_eq!(repos[0]["did"], alice().as_str());
+    assert_eq!(repos[0]["head"], written.commit.to_string());
+    assert_eq!(repos[0]["rev"], written.rev.as_str());
+    assert_eq!(repos[0]["active"], true);
+    assert_eq!(repos[0]["status"], Value::Null);
+
+    let cursor = body["cursor"].as_str().expect("a cursor").to_owned();
+    let (status, body) = get(
+        &router,
+        &format!("/xrpc/com.atproto.sync.listRepos?limit=1&cursor={cursor}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let repos = body["repos"].as_array().expect("repos");
+    assert_eq!(repos.len(), 1);
+    assert_eq!(repos[0]["did"], bob().as_str());
+
+    // The page that empties the listing carries no cursor, which is how a
+    // caller knows it has every repository.
+    let cursor = body["cursor"].as_str().expect("a cursor").to_owned();
+    let (status, body) = get(
+        &router,
+        &format!("/xrpc/com.atproto.sync.listRepos?limit=1&cursor={cursor}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["repos"].as_array().expect("repos").len(), 0);
+    assert_eq!(body["cursor"], Value::Null);
+
+    // Both of them fit on a page nobody sized, and that page is the end of
+    // the listing too.
+    let (status, body) = get(&router, "/xrpc/com.atproto.sync.listRepos").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["repos"].as_array().expect("repos").len(), 2);
+    assert_eq!(body["cursor"], Value::Null);
+}
+
+#[tokio::test]
+async fn a_cursor_this_server_never_wrote_is_refused() {
+    let (router, _manager, _data) = served();
+
+    for cursor in ["nonsense", "nonsense::did:plc:4cjoyc3cgpal7gnrpzyjhnv3"] {
+        let (status, body) = get(
+            &router,
+            &format!("/xrpc/com.atproto.sync.listRepos?cursor={cursor}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{cursor}");
+        assert_eq!(body["message"], "Malformed cursor");
+    }
+}
+
+#[tokio::test]
 async fn the_latest_commit_is_the_one_the_last_write_left() {
     let (router, manager, _data) = served();
     let written = manager

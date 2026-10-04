@@ -173,6 +173,26 @@ pub struct Registration {
     pub session: Option<Session>,
 }
 
+/// One account's repository, as a listing across every account sees it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Hosted {
+    /// Whose it is.
+    pub did: Did,
+    /// The commit this database was last told about.
+    pub root: super::Root,
+    /// When the account was made, which is the order a listing is in.
+    pub created_at: Timestamp,
+}
+
+/// Where a page of that listing picks up.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Cursor {
+    /// The moment the account before this page was made.
+    pub created_at: Timestamp,
+    /// Its DID, which settles the accounts made in the same millisecond.
+    pub did: String,
+}
+
 /// The accounts this server holds.
 #[derive(Debug)]
 pub struct Accounts {
@@ -335,6 +355,54 @@ impl Accounts {
             ],
         )?;
         Ok(())
+    }
+
+    /// One page of the repositories here, oldest account first, starting
+    /// after `from`.
+    ///
+    /// # Errors
+    ///
+    /// If a row holds a DID, a commit or a timestamp nothing here writes.
+    pub fn hosted(&self, limit: u32, from: Option<&Cursor>) -> Result<Vec<Hosted>, Error> {
+        let (created_at, did) = match from {
+            Some(cursor) => (Some(stamp(cursor.created_at)), Some(cursor.did.as_str())),
+            None => (None, None),
+        };
+        self.db
+            .prepare(
+                r#"select "actor"."did", "repo_root"."cid", "repo_root"."rev", "actor"."createdAt"
+                   from "actor" join "repo_root" on "repo_root"."did" = "actor"."did"
+                   where ?1 is null or ("actor"."createdAt", "actor"."did") > (?1, ?2)
+                   order by "actor"."createdAt", "actor"."did" limit ?3"#,
+            )?
+            .query_map(params![created_at, did, limit], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?
+            .map(|row| {
+                let (did, cid, rev, created_at) = row?;
+                Ok(Hosted {
+                    did: did
+                        .parse()
+                        .map_err(|_| Error::Malformed("a stored DID that is not one"))?,
+                    root: super::Root {
+                        cid: cid
+                            .parse()
+                            .map_err(|_| Error::Malformed("a repo root that is not a CID"))?,
+                        rev: rev
+                            .parse()
+                            .map_err(|_| Error::Malformed("a repo revision that is not a TID"))?,
+                    },
+                    created_at: created_at
+                        .parse()
+                        .map_err(|_| Error::Malformed("a stored timestamp that is not one"))?,
+                })
+            })
+            .collect()
     }
 
     /// The account with this DID.
