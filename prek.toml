@@ -25,7 +25,9 @@ hooks = [
   { id = "check-merge-conflict" },
   { id = "check-case-conflict" },
   # Windows is not a target, but the source tree still has to check out on one.
-  { id = "check-illegal-windows-names" },
+  # Held to the commit stage: at the message stage it is handed the path to
+  # COMMIT_EDITMSG, which from a linked worktree is a `..` walk it refuses.
+  { id = "check-illegal-windows-names", stages = ["pre-commit"] },
   { id = "check-added-large-files" },
   { id = "check-toml" },
   { id = "check-yaml" },
