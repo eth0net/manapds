@@ -550,6 +550,7 @@ impl Manager {
     ) -> Result<(store::Root, repo::BlockMap), Error> {
         let key = self.directory.actor_key(did);
         let path = self.directory.actor_store(did);
+        let blobs = self.directory.blobs();
         let (did, signing_key) = (did.clone(), signing_key.clone());
         let clock = Arc::clone(&self.clock);
         blocking(move || {
@@ -567,7 +568,7 @@ impl Manager {
                 rev: repo.rev().clone(),
             };
             // A first commit holds no records, so there is nothing to index.
-            actor.commit(None, &root, &blocks, &[])?;
+            actor.commit(None, &root, &blocks, &[], &blobs)?;
             Ok((root, blocks))
         })
         .await
@@ -655,10 +656,11 @@ impl Manager {
 
         let key = self.directory.actor_key(did);
         let path = self.directory.actor_store(did);
+        let blobs = self.directory.blobs();
         let clock = Arc::clone(&self.clock);
         let account = did.clone();
         let (landed, writing) = blocking(move || {
-            let landed = commit_writes(&key, &path, &clock, account, &requested, swap);
+            let landed = commit_writes(&key, &path, &blobs, &clock, account, &requested, swap);
             (landed, writing)
         })
         .await;
@@ -667,7 +669,7 @@ impl Manager {
             return Ok(None);
         };
 
-        self.unlink(did, std::mem::take(&mut landed.orphaned)).await;
+        self.cleared(did, &mut landed.committed).await;
 
         // Both of these follow a commit that has already landed, so neither is
         // worth failing the call over.
@@ -809,9 +811,10 @@ impl Manager {
             mime,
         };
         let written = blob.clone();
+        let key = upload_key();
         self.actor(did, move |actor| {
-            blobs.put(&account, &written.cid, &bytes)?;
-            actor.add_blob(&written)
+            blobs.put(&account, &key, &written.cid, &bytes)?;
+            actor.add_blob(&written, &key)
         })
         .await?;
 
@@ -837,18 +840,27 @@ impl Manager {
         let swept = self
             .actor(did, move |actor| actor.sweep_unclaimed(cutoff))
             .await?;
-        let taken = swept.len();
-        self.unlink(did, swept).await;
-        Ok(taken)
+        let count = swept.len();
+        self.cleared(
+            did,
+            &mut store::Committed {
+                orphaned: Vec::new(),
+                taken: swept,
+            },
+        )
+        .await;
+        Ok(count)
     }
 
-    /// Takes the files of blobs this server holds nothing under.
+    /// Clears up the disk behind a commit: the files of blobs nothing holds,
+    /// and the uploads of blobs a record has taken.
     ///
-    /// Asked again for each one, because between losing its row and losing its
-    /// file a blob can be uploaded afresh, and unlinking then would leave the
-    /// new row pointing at nothing.
-    async fn unlink(&self, did: &Did, dropped: Vec<Cid>) {
-        if dropped.is_empty() {
+    /// An upload is dropped only once the commit taking it is on disk, so a
+    /// commit that rolls back leaves it where a second attempt will find it.
+    async fn cleared(&self, did: &Did, committed: &mut store::Committed) {
+        let dropped = std::mem::take(&mut committed.orphaned);
+        let taken = std::mem::take(&mut committed.taken);
+        if dropped.is_empty() && taken.is_empty() {
             return;
         }
         let blobs = self.directory.blobs();
@@ -863,11 +875,16 @@ impl Manager {
                         tracing::error!(%cid, %error, "a blob nothing holds was not removed");
                     }
                 }
+                for key in taken {
+                    if let Err(error) = blobs.delete_upload(&account, &key) {
+                        tracing::error!(%key, %error, "an upload a record took was not cleared");
+                    }
+                }
                 Ok(())
             })
             .await
         {
-            tracing::error!(%did, %error, "blobs nothing holds were not removed");
+            tracing::error!(%did, %error, "the disk behind a commit was not cleared");
         }
     }
 
@@ -884,7 +901,9 @@ impl Manager {
         let blobs = self.directory.blobs();
         let (account, cid) = (did.clone(), *cid);
         self.actor(did, move |actor| {
-            let Some(blob) = actor.blob(&cid)? else {
+            // A row with no file is an upload no record has claimed, which is
+            // nothing to serve.
+            let Some(blob) = actor.blob(&cid)?.filter(|_| blobs.has(&account, &cid)) else {
                 return Ok(None);
             };
             Ok(Some((blob, blobs.get(&account, &cid)?)))
@@ -1281,7 +1300,7 @@ struct Landed {
     ops: Vec<event::Op>,
     since: Tid,
     prev_data: Cid,
-    orphaned: Vec<Cid>,
+    committed: store::Committed,
 }
 
 /// Every record this one would take the place of, as the writes that take
@@ -1333,6 +1352,7 @@ fn superseded(
 fn commit_writes(
     key: &Path,
     path: &Path,
+    blobs: &store::Blobs,
     clock: &Mutex<TidClock>,
     account: Did,
     requested: &[Requested],
@@ -1372,7 +1392,8 @@ fn commit_writes(
             cid: repo.cid(),
             rev: repo.rev().clone(),
         };
-        let Some(orphaned) = actor.commit(Some(&from), &root, &blocks, &planned.index)? else {
+        let Some(committed) = actor.commit(Some(&from), &root, &blocks, &planned.index, blobs)?
+        else {
             continue;
         };
         return Ok(Some(Landed {
@@ -1386,7 +1407,7 @@ fn commit_writes(
             ops: planned.ops,
             since,
             prev_data,
-            orphaned,
+            committed,
         }));
     }
     Err(Error::Contended)
@@ -1560,6 +1581,14 @@ fn rotate(accounts: &mut store::Accounts, id: &str) -> Result<Option<store::Sess
             return Ok(Some(next));
         }
     }
+}
+
+/// What a blob is held under until a record names it, which is a name of its
+/// own so that two uploads of one blob cannot write the same file at once.
+fn upload_key() -> String {
+    let mut bytes = [0u8; 20];
+    rand::fill(&mut bytes);
+    crypto::base32(&bytes)
 }
 
 /// A new app password, four groups of four in lowercase base32, which is the

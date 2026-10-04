@@ -59,6 +59,15 @@ pub struct Record {
     pub value: Vec<u8>,
 }
 
+/// What a commit leaves for the caller to clear up on disk.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Committed {
+    /// Blobs no record names any more, whose files are nobody's.
+    pub orphaned: Vec<Cid>,
+    /// Uploads a record took, which are served from their own name now.
+    pub taken: Vec<String>,
+}
+
 /// A blob this account has uploaded, as the index holds it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Blob {
@@ -187,10 +196,11 @@ impl Actor {
         root: &Root,
         blocks: &BlockMap,
         records: &[Indexed],
-    ) -> Result<Option<Vec<Cid>>, Error> {
+        blobs: &super::Blobs,
+    ) -> Result<Option<Committed>, Error> {
         let stamp = jiff::Timestamp::now();
         let did = &self.did;
-        let mut orphaned = Vec::new();
+        let mut cleared = Committed::default();
         let transaction = self.db.transaction()?;
         {
             let mut insert = transaction.prepare(
@@ -205,7 +215,15 @@ impl Actor {
                 ])?;
             }
         }
-        let kept = Self::index(&transaction, did, root, records, &stamp, &mut orphaned)?;
+        let kept = Self::index(
+            &transaction,
+            blobs,
+            did,
+            root,
+            records,
+            &stamp,
+            &mut cleared,
+        )?;
 
         // `kept` spares a blob for a record a later write may have replaced, so
         // each of them is asked for once every record has had its turn.
@@ -214,7 +232,7 @@ impl Actor {
                 continue;
             }
             transaction.execute(r#"delete from "blob" where "cid" = ?1"#, params![cid])?;
-            orphaned.push(
+            cleared.orphaned.push(
                 cid.parse()
                     .map_err(|_| Error::Malformed("a blob that is not a CID"))?,
             );
@@ -247,7 +265,7 @@ impl Actor {
             return Ok(None);
         }
         transaction.commit()?;
-        Ok(Some(orphaned))
+        Ok(Some(cleared))
     }
 
     /// The record at a key, if the index holds one there.
@@ -353,15 +371,15 @@ impl Actor {
     /// # Errors
     ///
     /// If the write fails.
-    pub fn add_blob(&self, blob: &Blob) -> Result<(), Error> {
+    pub fn add_blob(&self, blob: &Blob, key: &str) -> Result<(), Error> {
         self.db.execute(
             r#"insert into "blob" ("cid", "mimeType", "size", "tempKey", "createdAt") values (?1, ?2, ?3, ?4, ?5)
-               on conflict("cid") do update set "createdAt" = ?5 where "tempKey" is not null"#,
+               on conflict("cid") do update set "tempKey" = ?4, "createdAt" = ?5 where "tempKey" is not null"#,
             params![
                 blob.cid.to_string(),
                 blob.mime,
                 i64::try_from(blob.size).unwrap_or(i64::MAX),
-                blob.cid.to_string(),
+                key,
                 super::stamp(jiff::Timestamp::now())
             ],
         )?;
@@ -407,12 +425,14 @@ impl Actor {
     /// and says which blobs the batch spared so the caller can ask again.
     fn index(
         transaction: &rusqlite::Transaction<'_>,
+        blobs: &super::Blobs,
         did: &Did,
         root: &Root,
         records: &[Indexed],
         stamp: &jiff::Timestamp,
-        orphaned: &mut Vec<Cid>,
+        cleared: &mut Committed,
     ) -> Result<std::collections::HashSet<String>, Error> {
+        let (orphaned, taken) = (&mut cleared.orphaned, &mut cleared.taken);
         let mut put = transaction.prepare(
             r#"insert into "record" ("uri", "cid", "collection", "rkey", "repoRev", "indexedAt") values (?1, ?2, ?3, ?4, ?5, ?6)
                on conflict("uri") do update set "cid" = ?2, "repoRev" = ?5, "indexedAt" = ?6"#,
@@ -441,7 +461,7 @@ impl Actor {
                     rkey,
                     cid,
                     links,
-                    blobs,
+                    blobs: named,
                 } => {
                     let at = uri(did, collection, rkey);
                     unlink.execute(params![at])?;
@@ -449,8 +469,8 @@ impl Actor {
                         link.execute(params![at, backlink.path, backlink.link_to])?;
                     }
                     orphaned.extend(Self::dereference(transaction, &at, &kept)?);
-                    for blob in blobs {
-                        Self::claim(transaction, &at, blob)?;
+                    for blob in named {
+                        Self::claim(transaction, blobs, did, &at, blob, taken)?;
                     }
                     put.execute(params![
                         at,
@@ -509,7 +529,14 @@ impl Actor {
     ///
     /// If nothing uploaded that blob, or the record names it as something
     /// other than what was uploaded.
-    fn claim(transaction: &rusqlite::Transaction<'_>, uri: &str, blob: &Blob) -> Result<(), Error> {
+    fn claim(
+        transaction: &rusqlite::Transaction<'_>,
+        blobs: &super::Blobs,
+        did: &Did,
+        uri: &str,
+        blob: &Blob,
+        taken: &mut Vec<String>,
+    ) -> Result<(), Error> {
         let held: Option<(Option<String>, String, i64)> = transaction
             .query_row(
                 r#"select "tempKey", "mimeType", "size" from "blob" where "cid" = ?1 and "takedownRef" is null"#,
@@ -523,7 +550,7 @@ impl Actor {
 
         // Only while it is still an upload: a second record naming a blob takes
         // what the first one settled.
-        if unclaimed.is_some() {
+        if let Some(key) = &unclaimed {
             if mime != blob.mime {
                 return Err(Error::BlobMismatch("Mimetype", mime, blob.mime.clone()));
             }
@@ -534,6 +561,10 @@ impl Actor {
                     blob.size.to_string(),
                 ));
             }
+            // Linked under the transaction that claims it, so nothing is
+            // served from a name no row has taken.
+            blobs.claim(did, key, &blob.cid)?;
+            taken.push(key.clone());
         }
 
         transaction.execute(
@@ -557,28 +588,27 @@ impl Actor {
     ///
     /// If the read or the write fails, or a row names something that is not a
     /// CID.
-    pub fn sweep_unclaimed(&self, cutoff: jiff::Timestamp) -> Result<Vec<Cid>, Error> {
-        let stale: Vec<String> = self
+    pub fn sweep_unclaimed(&self, cutoff: jiff::Timestamp) -> Result<Vec<String>, Error> {
+        let stale: Vec<(String, String)> = self
             .db
             .prepare(
-                r#"select "cid" from "blob" where "tempKey" is not null and "createdAt" < ?1"#,
+                r#"select "cid", "tempKey" from "blob" where "tempKey" is not null and "createdAt" < ?1"#,
             )?
-            .query_map(params![super::stamp(cutoff)], |row| row.get(0))?
+            .query_map(params![super::stamp(cutoff)], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })?
             .collect::<Result<_, _>>()?;
 
         let mut swept = Vec::new();
-        for cid in stale {
+        for (cid, key) in stale {
             // Still asking for an unclaimed one, since a record may have taken
             // it between the read and here.
-            let taken = self.db.execute(
+            let gone = self.db.execute(
                 r#"delete from "blob" where "cid" = ?1 and "tempKey" is not null"#,
                 params![cid],
             )?;
-            if taken > 0 {
-                swept.push(
-                    cid.parse()
-                        .map_err(|_| Error::Malformed("a blob that is not a CID"))?,
-                );
+            if gone > 0 {
+                swept.push(key);
             }
         }
         Ok(swept)

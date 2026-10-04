@@ -13,6 +13,11 @@ use manapds::store::{blobs, keys};
 use manapds::syntax::{Did, Nsid, RecordKey, TidClock};
 use rusqlite::Connection;
 
+/// A blob store under a directory nothing else is using.
+fn blobs() -> manapds::store::Blobs {
+    Directory::new(std::env::temp_dir().join("manapds-blobs")).blobs()
+}
+
 fn account() -> Did {
     "did:plc:4cjoyc3cgpal7gnrpzyjhnv3".parse().expect("a DID")
 }
@@ -223,6 +228,7 @@ fn a_repository_round_trips_through_a_file() {
                 },
                 &blocks,
                 &[],
+                &blobs(),
             )
             .expect("commits");
 
@@ -250,6 +256,7 @@ fn a_repository_round_trips_through_a_file() {
                     indexed("3jqfcqzm4fc2j", "first"),
                     indexed("3jqfcqzm4fd2j", "second"),
                 ],
+                &blobs(),
             )
             .expect("commits");
     }
@@ -308,7 +315,7 @@ fn the_index_follows_what_the_commit_did() {
     let (mut repo, blocks) = Repo::create(account(), &key, &mut clock).expect("creates");
     let mut store = Actor::open(&path, account()).expect("opens");
     store
-        .commit(None, &at(&repo), &blocks, &[])
+        .commit(None, &at(&repo), &blocks, &[], &blobs())
         .expect("commits");
     assert_eq!(indexed_rows(&path), vec![]);
 
@@ -327,6 +334,7 @@ fn the_index_follows_what_the_commit_did() {
             &at(&repo),
             &written,
             &[indexed("3jqfcqzm4fc2j", "first")],
+            &blobs(),
         )
         .expect("commits");
     assert_eq!(
@@ -358,6 +366,7 @@ fn the_index_follows_what_the_commit_did() {
             &at(&repo),
             &written,
             &[indexed("3jqfcqzm4fc2j", "second")],
+            &blobs(),
         )
         .expect("commits");
     // The same row, moved on rather than written twice.
@@ -389,6 +398,7 @@ fn the_index_follows_what_the_commit_did() {
             &at(&repo),
             &written,
             &[Indexed::Delete { collection, rkey }],
+            &blobs(),
         )
         .expect("commits");
     assert_eq!(indexed_rows(&path), vec![]);
@@ -431,7 +441,7 @@ fn a_commit_built_on_a_root_somebody_else_moved_is_refused() {
     let (repo, blocks) = Repo::create(account(), &key, &mut clock).expect("creates");
     let mut store = Actor::memory(account()).expect("opens");
     store
-        .commit(None, &at(&repo), &blocks, &[])
+        .commit(None, &at(&repo), &blocks, &[], &blobs())
         .expect("commits");
 
     // Two writers, both working from the root the genesis left.
@@ -455,7 +465,8 @@ fn a_commit_built_on_a_root_somebody_else_moved_is_refused() {
                 Some(&from),
                 &at(&first),
                 &one,
-                &[indexed("3jqfcqzm4fa2j", "mine")]
+                &[indexed("3jqfcqzm4fa2j", "mine")],
+                &blobs(),
             )
             .expect("commits")
             .is_some()
@@ -468,7 +479,8 @@ fn a_commit_built_on_a_root_somebody_else_moved_is_refused() {
                 Some(&from),
                 &at(&second),
                 &other,
-                &[indexed("3jqfcqzm4fb2j", "theirs")]
+                &[indexed("3jqfcqzm4fb2j", "theirs")],
+                &blobs(),
             )
             .expect("answers")
             .is_none()
@@ -494,7 +506,7 @@ fn a_collection_pages_newest_first_unless_asked_the_other_way() {
     let (mut repo, blocks) = Repo::create(account(), &key, &mut clock).expect("creates");
     let mut store = Actor::memory(account()).expect("opens");
     store
-        .commit(None, &at(&repo), &blocks, &[])
+        .commit(None, &at(&repo), &blocks, &[], &blobs())
         .expect("commits");
 
     let from = at(&repo);
@@ -522,6 +534,7 @@ fn a_collection_pages_newest_first_unless_asked_the_other_way() {
                 indexed("3jqfcqzm4fc2j", "third"),
                 indexed_in("com.example.other", "3jqfcqzm4fd2j", "elsewhere"),
             ],
+            &blobs(),
         )
         .expect("commits");
 
@@ -1010,9 +1023,23 @@ fn a_blob_is_stored_under_the_cid_of_its_bytes() {
     let bytes = b"not really a picture";
     let cid = blobs::cid_for(bytes);
 
+    // An upload holds nothing, so it is not yet served from its own name.
+    blobs
+        .put(&account(), "somekey", &cid, bytes)
+        .expect("stores");
     assert!(!blobs.has(&account(), &cid));
-    blobs.put(&account(), &cid, bytes).expect("stores");
+
+    // A record claiming it is what puts it where it is served from, and the
+    // upload stays until that commit is on disk.
+    blobs.claim(&account(), "somekey", &cid).expect("claims");
     assert!(blobs.has(&account(), &cid));
+    assert_eq!(blobs.get(&account(), &cid).expect("reads"), bytes);
+    blobs
+        .claim(&account(), "somekey", &cid)
+        .expect("claiming twice is claiming once");
+    blobs
+        .delete_upload(&account(), "somekey")
+        .expect("clears the upload");
     assert_eq!(blobs.get(&account(), &cid).expect("reads"), bytes);
 
     // The reference lays them out as <blocks>/<did>/<cid>.
@@ -1048,7 +1075,11 @@ fn bytes_that_are_not_their_cid_are_refused() {
     let blobs = Directory::new(home.path()).blobs();
     let cid = blobs::cid_for(b"one thing");
 
-    assert!(blobs.put(&account(), &cid, b"another thing").is_err());
+    assert!(
+        blobs
+            .put(&account(), "somekey", &cid, b"another thing")
+            .is_err()
+    );
     assert!(!blobs.has(&account(), &cid));
 }
 
@@ -1058,7 +1089,10 @@ fn quarantine_hides_a_blob_without_losing_it() {
     let blobs = Directory::new(home.path()).blobs();
     let bytes = b"not really a picture";
     let cid = blobs::cid_for(bytes);
-    blobs.put(&account(), &cid, bytes).expect("stores");
+    blobs
+        .put(&account(), "somekey", &cid, bytes)
+        .expect("stores");
+    blobs.claim(&account(), "somekey", &cid).expect("claims");
 
     blobs.quarantine(&account(), &cid).expect("quarantines");
     assert!(!blobs.has(&account(), &cid));
@@ -1388,7 +1422,10 @@ fn a_stored_blob_leaves_nothing_beside_it_and_no_way_in() {
     let blobs = Directory::new(home.path()).blobs();
     let bytes = b"a blob, written whole or not at all";
     let cid = blobs::cid_for(bytes);
-    blobs.put(&account(), &cid, bytes).expect("stores");
+    blobs
+        .put(&account(), "somekey", &cid, bytes)
+        .expect("stores");
+    blobs.claim(&account(), "somekey", &cid).expect("claims");
 
     let path = blobs.path(&account(), &cid);
     let parent = path.parent().expect("a parent");
@@ -1418,10 +1455,12 @@ fn a_blob_that_cannot_be_put_in_place_leaves_nothing_behind() {
 
     // Something already occupies the name, and is not a file, so the move onto
     // it cannot succeed.
-    let path = blobs.path(&account(), &cid);
+    let path = blobs.temp_path(&account(), "somekey");
     std::fs::create_dir_all(&path).expect("a directory in the way");
 
-    blobs.put(&account(), &cid, bytes).expect_err("cannot land");
+    blobs
+        .put(&account(), "somekey", &cid, bytes)
+        .expect_err("cannot land");
 
     let parent = path.parent().expect("a parent");
     let held: Vec<_> = std::fs::read_dir(parent)
@@ -1444,15 +1483,23 @@ fn a_blob_nothing_ever_named_is_swept_and_one_a_record_holds_is_not() {
         mime: "image/png".to_owned(),
         size: 5,
     };
-    store.add_blob(&held).expect("writes");
-    store.add_blob(&loose).expect("writes");
+    // Both uploaded, so a record claiming one has something to claim.
+    let blobs = blobs();
+    blobs
+        .put(&account(), "heldkey", &held.cid, b"held")
+        .expect("stores");
+    blobs
+        .put(&account(), "loosekey", &loose.cid, b"loose")
+        .expect("stores");
+    store.add_blob(&held, "heldkey").expect("writes");
+    store.add_blob(&loose, "loosekey").expect("writes");
 
     // Nothing is old enough yet, which is what the window is for.
     assert_eq!(
         store
             .sweep_unclaimed(jiff::Timestamp::now() - jiff::SignedDuration::from_hours(1))
             .expect("sweeps"),
-        Vec::new()
+        Vec::<String>::new()
     );
 
     // One of them is claimed by a record, the way a write claims it.
@@ -1472,27 +1519,28 @@ fn a_blob_nothing_ever_named_is_swept_and_one_a_record_holds_is_not() {
                 links: Vec::new(),
                 blobs: vec![held.clone()],
             }],
+            &blobs,
         )
         .expect("commits");
 
     let waited = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
     assert_eq!(
         store.sweep_unclaimed(waited).expect("sweeps"),
-        vec![loose.cid]
+        vec!["loosekey".to_owned()]
     );
-    store.add_blob(&loose).expect("writes again");
+    store.add_blob(&loose, "loosekey").expect("writes again");
     assert_eq!(
         store
             .sweep_unclaimed(jiff::Timestamp::now() - jiff::SignedDuration::from_hours(1))
             .expect("sweeps"),
-        Vec::new()
+        Vec::<String>::new()
     );
 
     // Past the window, the one nothing named goes and the held one stays.
     let swept = store
         .sweep_unclaimed(jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1))
         .expect("sweeps");
-    assert_eq!(swept, vec![loose.cid]);
+    assert_eq!(swept, vec!["loosekey".to_owned()]);
     assert_eq!(store.blob(&held.cid).expect("reads"), Some(held));
     assert_eq!(store.blob(&loose.cid).expect("reads"), None);
 }

@@ -58,17 +58,48 @@ impl Blobs {
         self.0.join("tempt").join(did.as_str()).join(key)
     }
 
-    /// Stores a blob, refusing bytes that are not what the CID says.
+    /// Stores a blob nothing has claimed yet, under a key of its own rather
+    /// than under its CID; `docs/architecture.md` has why.
     ///
     /// # Errors
     ///
     /// If the CID is not the one over these bytes, or the write fails.
-    pub fn put(&self, did: &Did, cid: &Cid, bytes: &[u8]) -> Result<(), Error> {
+    pub fn put(&self, did: &Did, key: &str, cid: &Cid, bytes: &[u8]) -> Result<(), Error> {
         if cid_for(bytes) != *cid {
             return Err(Error::WrongCid(*cid));
         }
+        write(&self.temp_path(did, key), bytes)
+    }
+
+    /// Puts a blob where it is served from, leaving what it was uploaded as.
+    ///
+    /// Doing it twice is doing it once, which is what lets a write that lost
+    /// a race work itself out again.
+    ///
+    /// # Errors
+    ///
+    /// If the upload is not there, or will not link.
+    pub fn claim(&self, did: &Did, key: &str, cid: &Cid) -> Result<(), Error> {
         let path = self.path(did, cid);
-        write(&path, bytes)
+        if let Some(parent) = path.parent() {
+            super::directory(parent)?;
+        }
+        match std::fs::hard_link(self.temp_path(did, key), &path) {
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            result => Ok(result?),
+        }
+    }
+
+    /// Drops what a blob was uploaded as, once it is served from its own name.
+    ///
+    /// # Errors
+    ///
+    /// If it is there and will not delete.
+    pub fn delete_upload(&self, did: &Did, key: &str) -> Result<(), Error> {
+        match std::fs::remove_file(self.temp_path(did, key)) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            result => Ok(result?),
+        }
     }
 
     /// Reads a blob back.

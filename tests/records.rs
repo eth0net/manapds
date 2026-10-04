@@ -29,6 +29,11 @@ fn somebody_else() -> Did {
     "did:plc:mav423b24thku7ezkx7yaray".parse().expect("a DID")
 }
 
+/// A blob store under a directory nothing else is using.
+fn blobs() -> store::Blobs {
+    store::Directory::new(std::env::temp_dir().join("manapds-blobs")).blobs()
+}
+
 fn account() -> Did {
     "did:plc:4cjoyc3cgpal7gnrpzyjhnv3".parse().expect("a DID")
 }
@@ -87,7 +92,7 @@ fn standing(
     };
     store::Actor::open(&directory.actor_store(&did), did.clone())
         .expect("a store")
-        .commit(None, &root, &blocks, &[])
+        .commit(None, &root, &blocks, &[], &blobs())
         .expect("a commit");
 
     let mut accounts = store::Accounts::memory().expect("a database");
@@ -503,6 +508,17 @@ async fn a_blob_is_taken_in_and_handed_back_as_it_was_sent() {
         .as_str()
         .expect("a link")
         .to_owned();
+
+    // An upload holds nothing until a record names it, and holds nothing to
+    // serve either.
+    let unclaimed = get(
+        &router,
+        &format!("/xrpc/com.atproto.sync.getBlob?did={did}&cid={cid}"),
+    )
+    .await;
+    assert_eq!(unclaimed.0, StatusCode::BAD_REQUEST);
+    let (status, written) = holding(&router, "3jqfcqzm4fa2j", &uploaded["blob"]).await;
+    assert_eq!(status, StatusCode::OK, "{written}");
 
     let mut request = Request::builder()
         .method("GET")

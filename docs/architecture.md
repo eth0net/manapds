@@ -150,10 +150,12 @@ timer, since an account uploading is the account with blobs to clear. The
 other server never sweeps and its own lexicon says it will, which is the one
 place here worth reading the lexicon instead.
 
-Unlike that server, a blob sits at its CID from the moment it arrives rather
-than being moved there when a record claims it: this one reads the whole body
-before it answers, so it knows the CID already. The cost is that an unclaimed
-blob is servable to anyone holding the uploader's DID and the exact CID.
+An upload sits under a name of its own until a record takes it, and the name
+it is served from is written only by the commit that takes it. That is what
+keeps an upload and a delete of the same bytes from crossing: nothing but a
+claim ever writes where a blob is read from. The claim links rather than moves,
+so a commit that rolls back leaves the upload where the next attempt finds it,
+and the upload is dropped once that commit is on disk.
 
 Blobs are files on disk, addressed by CID under a per-account directory. A
 blob is immutable and content-addressed, so there is nothing a database gives
