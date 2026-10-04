@@ -172,6 +172,40 @@ async fn the_latest_commit_is_the_one_the_last_write_left() {
 }
 
 #[tokio::test]
+async fn a_repository_here_is_active_and_at_its_latest_revision() {
+    let (router, manager, _data) = served();
+    let written = manager
+        .write(
+            &alice(),
+            vec![record("3jqfcqzm4fc2j", "first").into()],
+            None,
+        )
+        .await
+        .expect("a commit")
+        .expect("a write");
+
+    let (status, body) = get(
+        &router,
+        &format!("/xrpc/com.atproto.sync.getRepoStatus?did={}", alice()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["did"], alice().as_str());
+    assert_eq!(body["active"], true);
+    assert_eq!(body["rev"], written.rev.as_str());
+    // Nothing is taken down or deactivated here, so no reason is ever given.
+    assert_eq!(body["status"], Value::Null);
+
+    let (status, body) = get(
+        &router,
+        "/xrpc/com.atproto.sync.getRepoStatus?did=did:plc:mav423b24thku7ezkx7yarax",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "RepoNotFound");
+}
+
+#[tokio::test]
 async fn a_repository_nobody_here_holds_is_refused() {
     let (router, _manager, _data) = served();
 

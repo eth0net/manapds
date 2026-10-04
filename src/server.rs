@@ -141,6 +141,7 @@ pub fn router(context: Context) -> NormalizePath<Router> {
     NormalizePath::trim_trailing_slash(routes(context))
 }
 
+#[expect(clippy::too_many_lines, reason = "a table of routes")]
 fn routes(context: Context) -> Router {
     let limits = context.limits.clone();
     // Only the blob route takes a body this large; every other one is a small
@@ -206,6 +207,10 @@ fn routes(context: Context) -> Router {
         .route(
             "/xrpc/com.atproto.sync.getLatestCommit",
             xrpc::query(sync::get_latest_commit),
+        )
+        .route(
+            "/xrpc/com.atproto.sync.getRepoStatus",
+            xrpc::query(sync::get_repo_status),
         )
         .route(
             "/xrpc/com.atproto.repo.getRecord",

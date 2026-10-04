@@ -23,6 +23,16 @@ pub(crate) struct Latest {
     rev: String,
 }
 
+/// Whether a repository is still hosted here, and where it has got to.
+#[derive(Debug, Serialize)]
+pub(crate) struct Status {
+    did: String,
+    /// Never false: nothing here deactivates or takes an account down, so the
+    /// reason the lexicon pairs with that is never written either.
+    active: bool,
+    rev: String,
+}
+
 /// `com.atproto.sync.getLatestCommit`
 ///
 /// # Errors
@@ -36,6 +46,25 @@ pub(crate) async fn get_latest_commit(
     let root = root(&accounts, &did(&query.did)?).await?;
     Ok(Json(Latest {
         cid: root.cid.to_string(),
+        rev: root.rev.into_string(),
+    }))
+}
+
+/// `com.atproto.sync.getRepoStatus`
+///
+/// # Errors
+///
+/// If nothing answers to the identifier, it holds no repository, or storage
+/// will not answer.
+pub(crate) async fn get_repo_status(
+    State(accounts): State<Arc<Manager>>,
+    Params(query): Params<Wanted>,
+) -> xrpc::Result<Json<Status>> {
+    let did = did(&query.did)?;
+    let root = root(&accounts, &did).await?;
+    Ok(Json(Status {
+        did: did.into_string(),
+        active: true,
         rev: root.rev.into_string(),
     }))
 }
