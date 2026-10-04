@@ -13,9 +13,10 @@ use manapds::store::{blobs, keys};
 use manapds::syntax::{Did, Nsid, RecordKey, TidClock};
 use rusqlite::Connection;
 
-/// A blob store under a directory nothing else is using.
+/// A blob store for a commit that writes no blobs, which touches no file. A
+/// test that does hands in one of its own.
 fn blobs() -> manapds::store::Blobs {
-    Directory::new(std::env::temp_dir().join("manapds-blobs")).blobs()
+    Directory::new("/nonexistent/manapds").blobs()
 }
 
 fn account() -> Did {
@@ -1484,7 +1485,8 @@ fn a_blob_nothing_ever_named_is_swept_and_one_a_record_holds_is_not() {
         size: 5,
     };
     // Both uploaded, so a record claiming one has something to claim.
-    let blobs = blobs();
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let blobs = Directory::new(home.path()).blobs();
     blobs
         .put(&account(), "heldkey", &held.cid, b"held")
         .expect("stores");

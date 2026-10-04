@@ -29,9 +29,10 @@ fn somebody_else() -> Did {
     "did:plc:mav423b24thku7ezkx7yaray".parse().expect("a DID")
 }
 
-/// A blob store under a directory nothing else is using.
+/// A blob store for a commit that writes no blobs, which touches no file. A
+/// test that does hands in one of its own.
 fn blobs() -> store::Blobs {
-    store::Directory::new(std::env::temp_dir().join("manapds-blobs")).blobs()
+    store::Directory::new("/nonexistent/manapds").blobs()
 }
 
 fn account() -> Did {
