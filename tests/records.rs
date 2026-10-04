@@ -1366,3 +1366,94 @@ async fn a_batch_that_does_not_commit_serves_none_of_its_blobs() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{served}");
 }
+
+/// The CID a blob reference names.
+fn link(blob: &Value) -> String {
+    blob["ref"]["$link"].as_str().expect("a link").to_owned()
+}
+
+#[tokio::test]
+async fn blobs_are_listed_in_cid_order_once_a_record_names_them() {
+    let (router, _manager, _data) = served();
+    let first = uploaded(&router, vec![1u8, 2, 3, 4]).await;
+    let second = uploaded(&router, vec![5u8, 6, 7, 8]).await;
+    let loose = uploaded(&router, vec![9u8, 10, 11, 12]).await;
+
+    let (status, written) = holding(&router, "3jqfcqzm4fa2j", &first).await;
+    assert_eq!(status, StatusCode::OK, "{written}");
+    let rev = written["commit"]["rev"].as_str().expect("a rev").to_owned();
+    let (status, written) = holding(&router, "3jqfcqzm4fb2j", &second).await;
+    assert_eq!(status, StatusCode::OK, "{written}");
+
+    let mut named = vec![link(&first), link(&second)];
+    named.sort();
+
+    let (status, page) = get(
+        &router,
+        &format!("/xrpc/com.atproto.sync.listBlobs?did={}", account()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["cids"], serde_json::json!(named));
+    assert!(
+        !page["cids"]
+            .as_array()
+            .expect("cids")
+            .contains(&Value::String(link(&loose))),
+        "an upload no record has claimed is not listed"
+    );
+    assert_eq!(page["cursor"], Value::Null);
+
+    let (status, page) = get(
+        &router,
+        &format!("/xrpc/com.atproto.sync.listBlobs?did={}&limit=1", account()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["cids"], serde_json::json!([named[0]]));
+    assert_eq!(page["cursor"], named[0]);
+
+    let (status, page) = get(
+        &router,
+        &format!(
+            "/xrpc/com.atproto.sync.listBlobs?did={}&limit=1&cursor={}",
+            account(),
+            named[0]
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["cids"], serde_json::json!([named[1]]));
+
+    // Only what a record written after that revision names.
+    let (status, page) = get(
+        &router,
+        &format!(
+            "/xrpc/com.atproto.sync.listBlobs?did={}&since={rev}",
+            account()
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["cids"], serde_json::json!([link(&second)]));
+}
+
+#[tokio::test]
+async fn blobs_are_listed_for_a_did_and_for_nothing_else() {
+    let (router, _manager, _data) = served();
+
+    let (status, refused) = get(
+        &router,
+        "/xrpc/com.atproto.sync.listBlobs?did=alice.pds.example.com",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+
+    let (status, refused) = get(
+        &router,
+        "/xrpc/com.atproto.sync.listBlobs?did=did:plc:ewvi7nxzyoun6zhxrhs64oiz",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"], "RepoNotFound");
+}

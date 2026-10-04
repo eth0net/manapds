@@ -1,4 +1,4 @@
-//! Blobs: taking one in, and handing it back.
+//! Blobs: taking one in, handing it back, and listing what records name.
 
 use std::sync::Arc;
 
@@ -13,17 +13,40 @@ use serde::{Deserialize, Serialize};
 
 use crate::account::Manager;
 use crate::store;
-use crate::syntax::Did;
+use crate::syntax::{Did, Tid};
 use crate::xrpc::{self, Params, auth::Access};
 
 /// What an upload is taken as when the caller says nothing.
 const UNSAID: &str = "application/octet-stream";
+
+/// What a page holds when the caller does not ask for a size.
+const PAGE: u32 = 500;
+
+/// The most any page holds, however many are asked for.
+const LONGEST_PAGE: u32 = 1000;
 
 /// Which blob to serve, and whose.
 #[derive(Debug, Deserialize)]
 pub(crate) struct Wanted {
     did: String,
     cid: String,
+}
+
+/// Whose blobs to page through, and from where.
+#[derive(Debug, Deserialize)]
+pub(crate) struct Listing {
+    did: String,
+    since: Option<String>,
+    limit: Option<u32>,
+    cursor: Option<String>,
+}
+
+/// One page of the blobs an account's records name.
+#[derive(Debug, Serialize)]
+pub(crate) struct Page {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cursor: Option<String>,
+    cids: Vec<String>,
 }
 
 /// A blob as a record refers to one.
@@ -128,6 +151,43 @@ pub(crate) async fn get(
         bytes,
     )
         .into_response())
+}
+
+/// `com.atproto.sync.listBlobs`
+///
+/// # Errors
+///
+/// If the identifier is not a DID or `since` is not a revision, nothing
+/// answers to the identifier, or storage will not answer.
+pub(crate) async fn list(
+    State(accounts): State<Arc<Manager>>,
+    Params(query): Params<Listing>,
+) -> xrpc::Result<Json<Page>> {
+    let did: Did = query
+        .did
+        .parse()
+        .map_err(|_| xrpc::Error::invalid_request("Invalid did"))?;
+    let since = query
+        .since
+        .map(|since| {
+            since
+                .parse::<Tid>()
+                .map_err(|_| xrpc::Error::invalid_request("Invalid since"))
+        })
+        .transpose()?;
+    let limit = query.limit.unwrap_or(PAGE).clamp(1, LONGEST_PAGE);
+    let cids: Vec<String> = accounts
+        .blobs(&did, since, limit, query.cursor)
+        .await?
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+
+    // A short page carries no cursor, which is what stops a client asking.
+    let cursor = (u32::try_from(cids.len()).unwrap_or(u32::MAX) == limit)
+        .then(|| cids.last().cloned())
+        .flatten();
+    Ok(Json(Page { cursor, cids }))
 }
 
 /// One stored blob, in the shape a record would name it.

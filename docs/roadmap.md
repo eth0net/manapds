@@ -25,8 +25,8 @@ not by what is interesting.
    `getRecord`, `listRecords`, `describeRepo`, `uploadBlob`, `getBlob`.
 7. **OAuth.** The authorization server. See [`oauth.md`](oauth.md).
 8. **Sync reads.** `getRepo`, `getLatestCommit`, `getRecord`, `getBlocks`,
-   `listRepos`, `getRepoStatus` — what a relay or another server fetches,
-   without yet holding a socket open.
+   `listRepos`, `getRepoStatus`, `listBlobs` — what a relay or another server
+   fetches, without yet holding a socket open.
 
 The first tag waits for step 6. That is the earliest point another person can
 start this and have a client sign in and read something back, and a version

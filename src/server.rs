@@ -204,6 +204,7 @@ fn routes(context: Context) -> Router {
             xrpc::procedure(blob::upload).layer(DefaultBodyLimit::max(uploads)),
         )
         .route("/xrpc/com.atproto.sync.getBlob", xrpc::query(blob::get))
+        .route("/xrpc/com.atproto.sync.listBlobs", xrpc::query(blob::list))
         .route(
             "/xrpc/com.atproto.sync.getLatestCommit",
             xrpc::query(sync::get_latest_commit),

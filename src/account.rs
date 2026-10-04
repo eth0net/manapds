@@ -935,6 +935,24 @@ impl Manager {
         .await
     }
 
+    /// One page of the blobs an account's records name, in CID order.
+    ///
+    /// # Errors
+    ///
+    /// If the account holds no repository, or storage will not answer.
+    pub async fn blobs(
+        &self,
+        did: &Did,
+        since: Option<Tid>,
+        limit: u32,
+        cursor: Option<String>,
+    ) -> Result<Vec<Cid>, Error> {
+        self.actor(did, move |actor| {
+            actor.blobs(since.as_ref().map(Tid::as_str), limit, cursor.as_deref())
+        })
+        .await
+    }
+
     /// Runs one call against an account's own database, on a thread that is
     /// allowed to block.
     ///

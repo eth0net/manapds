@@ -673,6 +673,43 @@ impl Actor {
             .transpose()
     }
 
+    /// One page of the blobs this account's records name, in CID order and
+    /// starting after `cursor`.
+    ///
+    /// `since` keeps only the blobs named by a record a later revision wrote.
+    /// An upload no record has claimed is not here at all.
+    ///
+    /// # Errors
+    ///
+    /// If the read fails, or a row names something that is not a CID.
+    pub fn blobs(
+        &self,
+        since: Option<&str>,
+        limit: u32,
+        cursor: Option<&str>,
+    ) -> Result<Vec<Cid>, Error> {
+        let query = format!(
+            r#"select "blobCid" from "record_blob" {}
+               where (?2 is null or "blobCid" > ?2)
+               group by "blobCid" order by "blobCid" asc limit ?3"#,
+            match since {
+                Some(_) => {
+                    r#"join "record" on "record"."uri" = "record_blob"."recordUri"
+                       and "record"."repoRev" > ?1"#
+                }
+                None => "",
+            },
+        );
+        self.db
+            .prepare(&query)?
+            .query_map(params![since, cursor, limit], |row| row.get::<_, String>(0))?
+            .map(|cid| {
+                cid?.parse()
+                    .map_err(|_| Error::Malformed("a blob that is not a CID"))
+            })
+            .collect()
+    }
+
     /// Whose store this is.
     #[must_use]
     pub fn did(&self) -> &Did {
