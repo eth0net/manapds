@@ -953,6 +953,24 @@ impl Manager {
         .await
     }
 
+    /// One page of the blobs an account's records name that it never
+    /// uploaded, in CID order.
+    ///
+    /// # Errors
+    ///
+    /// If the account holds no repository, or storage will not answer.
+    pub async fn missing_blobs(
+        &self,
+        did: &Did,
+        limit: u32,
+        cursor: Option<String>,
+    ) -> Result<Vec<store::MissingBlob>, Error> {
+        self.actor(did, move |actor| {
+            actor.missing_blobs(limit, cursor.as_deref())
+        })
+        .await
+    }
+
     /// Runs one call against an account's own database, on a thread that is
     /// allowed to block.
     ///

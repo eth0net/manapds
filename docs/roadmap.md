@@ -22,7 +22,8 @@ not by what is interesting.
    at the directory, handle resolution, password and app-password sessions,
    refresh tokens.
 6. **Records.** `createRecord`, `putRecord`, `deleteRecord`, `applyWrites`,
-   `getRecord`, `listRecords`, `describeRepo`, `uploadBlob`, `getBlob`.
+   `getRecord`, `listRecords`, `describeRepo`, `uploadBlob`, `getBlob`,
+   `listMissingBlobs`.
 7. **OAuth.** The authorization server. See [`oauth.md`](oauth.md).
 8. **Sync reads.** `getRepo`, `getLatestCommit`, `getRecord`, `getBlocks`,
    `listRepos`, `getRepoStatus`, `listBlobs` — what a relay or another server
@@ -130,7 +131,8 @@ the tool that converts back.
   migration, but nothing consumes it yet and the first accounts here do not
   need to be crawled.
 - **Account migration.** `importRepo`, `getServiceAuth`, PLC operation signing,
-  activation and deactivation.
+  activation and deactivation. `listMissingBlobs` is served, and has nothing to
+  report until an import can bring records in without their blobs.
 - **AppView proxying.** Serving `app.bsky.*` by forwarding to Bluesky, which is
   what makes the official client work against a PDS. Cheap to add and useless
   until wanted.

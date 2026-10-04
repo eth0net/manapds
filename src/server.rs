@@ -141,6 +141,21 @@ pub fn router(context: Context) -> NormalizePath<Router> {
     NormalizePath::trim_trailing_slash(routes(context))
 }
 
+/// The blob methods.
+fn blobs(uploads: usize) -> Router<Context> {
+    Router::new()
+        .route(
+            "/xrpc/com.atproto.repo.uploadBlob",
+            xrpc::procedure(blob::upload).layer(DefaultBodyLimit::max(uploads)),
+        )
+        .route("/xrpc/com.atproto.sync.getBlob", xrpc::query(blob::get))
+        .route("/xrpc/com.atproto.sync.listBlobs", xrpc::query(blob::list))
+        .route(
+            "/xrpc/com.atproto.repo.listMissingBlobs",
+            xrpc::query(blob::list_missing),
+        )
+}
+
 #[expect(clippy::too_many_lines, reason = "a table of routes")]
 fn routes(context: Context) -> Router {
     let limits = context.limits.clone();
@@ -199,12 +214,7 @@ fn routes(context: Context) -> Router {
             "/xrpc/com.atproto.repo.applyWrites",
             xrpc::procedure(repo::apply_writes),
         )
-        .route(
-            "/xrpc/com.atproto.repo.uploadBlob",
-            xrpc::procedure(blob::upload).layer(DefaultBodyLimit::max(uploads)),
-        )
-        .route("/xrpc/com.atproto.sync.getBlob", xrpc::query(blob::get))
-        .route("/xrpc/com.atproto.sync.listBlobs", xrpc::query(blob::list))
+        .merge(blobs(uploads))
         .route(
             "/xrpc/com.atproto.sync.getLatestCommit",
             xrpc::query(sync::get_latest_commit),

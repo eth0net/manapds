@@ -49,6 +49,29 @@ pub(crate) struct Page {
     cids: Vec<String>,
 }
 
+/// Which page of the blobs nothing uploaded to ask for.
+#[derive(Debug, Deserialize)]
+pub(crate) struct Missing {
+    limit: Option<u32>,
+    cursor: Option<String>,
+}
+
+/// One page of the blobs a record names that nothing uploaded.
+#[derive(Debug, Serialize)]
+pub(crate) struct MissingPage {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cursor: Option<String>,
+    blobs: Vec<RecordBlob>,
+}
+
+/// One of them, beside a record naming it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RecordBlob {
+    cid: String,
+    record_uri: String,
+}
+
 /// A blob as a record refers to one.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -188,6 +211,33 @@ pub(crate) async fn list(
         .then(|| cids.last().cloned())
         .flatten();
     Ok(Json(Page { cursor, cids }))
+}
+
+/// `com.atproto.repo.listMissingBlobs`
+///
+/// # Errors
+///
+/// If the caller holds no repository, or storage will not answer.
+pub(crate) async fn list_missing(
+    State(accounts): State<Arc<Manager>>,
+    access: Access,
+    Params(query): Params<Missing>,
+) -> xrpc::Result<Json<MissingPage>> {
+    let limit = query.limit.unwrap_or(PAGE).clamp(1, LONGEST_PAGE);
+    let blobs: Vec<RecordBlob> = accounts
+        .missing_blobs(&access.did, limit, query.cursor)
+        .await?
+        .into_iter()
+        .map(|missing| RecordBlob {
+            cid: missing.cid.to_string(),
+            record_uri: missing.uri,
+        })
+        .collect();
+
+    let cursor = (u32::try_from(blobs.len()).unwrap_or(u32::MAX) == limit)
+        .then(|| blobs.last().map(|last| last.cid.clone()))
+        .flatten();
+    Ok(Json(MissingPage { cursor, blobs }))
 }
 
 /// One stored blob, in the shape a record would name it.

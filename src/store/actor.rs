@@ -86,6 +86,15 @@ pub struct Blob {
     pub size: u64,
 }
 
+/// A blob a record names that this account never uploaded.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MissingBlob {
+    /// What the record addresses it by.
+    pub cid: Cid,
+    /// One of the records naming it.
+    pub uri: String,
+}
+
 /// What a record points at that it may only point at once.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Backlink {
@@ -706,6 +715,40 @@ impl Actor {
             .map(|cid| {
                 cid?.parse()
                     .map_err(|_| Error::Malformed("a blob that is not a CID"))
+            })
+            .collect()
+    }
+
+    /// One page of the blobs this account's records name that it never
+    /// uploaded, in CID order and starting after `cursor`.
+    ///
+    /// # Errors
+    ///
+    /// If the read fails, or a row names something that is not a CID.
+    pub fn missing_blobs(
+        &self,
+        limit: u32,
+        cursor: Option<&str>,
+    ) -> Result<Vec<MissingBlob>, Error> {
+        // The record named is chosen, not whichever row the group yields.
+        self.db
+            .prepare(
+                r#"select "blobCid", min("recordUri") from "record_blob"
+                   where not exists (select 1 from "blob" where "blob"."cid" = "record_blob"."blobCid")
+                     and (?1 is null or "blobCid" > ?1)
+                   group by "blobCid" order by "blobCid" asc limit ?2"#,
+            )?
+            .query_map(params![cursor, limit], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .map(|row| {
+                let (cid, uri) = row?;
+                Ok(MissingBlob {
+                    cid: cid
+                        .parse()
+                        .map_err(|_| Error::Malformed("a blob that is not a CID"))?,
+                    uri,
+                })
             })
             .collect()
     }
