@@ -23,6 +23,7 @@ mod identity;
 mod repo;
 mod session;
 mod signup;
+mod sync;
 
 use crate::account;
 use crate::config::Config;
@@ -202,6 +203,10 @@ fn routes(context: Context) -> Router {
             xrpc::procedure(blob::upload).layer(DefaultBodyLimit::max(uploads)),
         )
         .route("/xrpc/com.atproto.sync.getBlob", xrpc::query(blob::get))
+        .route(
+            "/xrpc/com.atproto.sync.getLatestCommit",
+            xrpc::query(sync::get_latest_commit),
+        )
         .route(
             "/xrpc/com.atproto.repo.getRecord",
             xrpc::query(repo::get_record),

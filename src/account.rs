@@ -746,6 +746,15 @@ impl Manager {
         Ok(self.plc.resolve(did).await?)
     }
 
+    /// The commit an account's repository is on.
+    ///
+    /// # Errors
+    ///
+    /// If the account holds no repository, or storage will not answer.
+    pub async fn root(&self, did: &Did) -> Result<Option<store::Root>, Error> {
+        self.actor(did, store::Actor::root).await
+    }
+
     /// The record at a key, if the account holds one there.
     ///
     /// # Errors
