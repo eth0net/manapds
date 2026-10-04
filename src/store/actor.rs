@@ -59,6 +59,13 @@ pub struct Record {
     pub value: Vec<u8>,
 }
 
+/// What a revision has put on disk before it is known to have landed.
+#[derive(Debug, Default)]
+struct Leaving {
+    cleared: Committed,
+    linked: Vec<Cid>,
+}
+
 /// What a commit leaves for the caller to clear up on disk.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Committed {
@@ -198,6 +205,31 @@ impl Actor {
         records: &[Indexed],
         blobs: &super::Blobs,
     ) -> Result<Option<Committed>, Error> {
+        // A link is not part of the transaction, so one made by a revision
+        // that does not land has to be taken back by hand, or a blob nothing
+        // took stays readable under its own name.
+        let did = self.did.clone();
+        let mut leaving = Leaving::default();
+        let landed = self.landing(from, root, blocks, records, blobs, &mut leaving);
+        if !matches!(landed, Ok(Some(_))) {
+            for cid in leaving.linked {
+                if let Err(error) = blobs.delete(&did, &cid) {
+                    tracing::error!(%cid, %error, "a blob no revision took was left readable");
+                }
+            }
+        }
+        landed
+    }
+
+    fn landing(
+        &mut self,
+        from: Option<&Root>,
+        root: &Root,
+        blocks: &BlockMap,
+        records: &[Indexed],
+        blobs: &super::Blobs,
+        leaving: &mut Leaving,
+    ) -> Result<Option<Committed>, Error> {
         let stamp = jiff::Timestamp::now();
         let did = &self.did;
         let mut cleared = Committed::default();
@@ -215,15 +247,7 @@ impl Actor {
                 ])?;
             }
         }
-        let kept = Self::index(
-            &transaction,
-            blobs,
-            did,
-            root,
-            records,
-            &stamp,
-            &mut cleared,
-        )?;
+        let kept = Self::index(&transaction, blobs, did, root, records, &stamp, leaving)?;
 
         // `kept` spares a blob for a record a later write may have replaced, so
         // each of them is asked for once every record has had its turn.
@@ -430,8 +454,9 @@ impl Actor {
         root: &Root,
         records: &[Indexed],
         stamp: &jiff::Timestamp,
-        cleared: &mut Committed,
+        leaving: &mut Leaving,
     ) -> Result<std::collections::HashSet<String>, Error> {
+        let Leaving { cleared, linked } = leaving;
         let (orphaned, taken) = (&mut cleared.orphaned, &mut cleared.taken);
         let mut put = transaction.prepare(
             r#"insert into "record" ("uri", "cid", "collection", "rkey", "repoRev", "indexedAt") values (?1, ?2, ?3, ?4, ?5, ?6)
@@ -470,7 +495,7 @@ impl Actor {
                     }
                     orphaned.extend(Self::dereference(transaction, &at, &kept)?);
                     for blob in named {
-                        Self::claim(transaction, blobs, did, &at, blob, taken)?;
+                        Self::claim(transaction, blobs, did, &at, blob, taken, linked)?;
                     }
                     put.execute(params![
                         at,
@@ -536,6 +561,7 @@ impl Actor {
         uri: &str,
         blob: &Blob,
         taken: &mut Vec<String>,
+        linked: &mut Vec<Cid>,
     ) -> Result<(), Error> {
         let held: Option<(Option<String>, String, i64)> = transaction
             .query_row(
@@ -563,7 +589,9 @@ impl Actor {
             }
             // Linked under the transaction that claims it, so nothing is
             // served from a name no row has taken.
-            blobs.claim(did, key, &blob.cid)?;
+            if blobs.claim(did, key, &blob.cid)? {
+                linked.push(blob.cid);
+            }
             taken.push(key.clone());
         }
 
@@ -601,11 +629,11 @@ impl Actor {
 
         let mut swept = Vec::new();
         for (cid, key) in stale {
-            // Still asking for an unclaimed one, since a record may have taken
-            // it between the read and here.
+            // Named, not just unclaimed: an upload that arrived since the read
+            // is a different promise and its own window.
             let gone = self.db.execute(
-                r#"delete from "blob" where "cid" = ?1 and "tempKey" is not null"#,
-                params![cid],
+                r#"delete from "blob" where "cid" = ?1 and "tempKey" = ?2"#,
+                params![cid, key],
             )?;
             if gone > 0 {
                 swept.push(key);

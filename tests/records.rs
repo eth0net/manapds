@@ -1317,3 +1317,51 @@ async fn a_record_holding_something_that_claims_to_be_a_blob_is_refused() {
         0
     );
 }
+
+#[tokio::test]
+async fn a_batch_that_does_not_commit_serves_none_of_its_blobs() {
+    let (router, _manager, _data) = served();
+    let blob = uploaded(&router, vec![1u8, 2, 3, 4]).await;
+    let cid = blob["ref"]["$link"].as_str().expect("a link").to_owned();
+
+    // The second write names a blob nobody uploaded, so nothing commits — and
+    // the first write's blob must not be left readable by that.
+    let (status, refused) = post(
+        &router,
+        "/xrpc/com.atproto.repo.applyWrites",
+        serde_json::json!({
+            "repo": account().as_str(),
+            "writes": [
+                {
+                    "$type": "com.atproto.repo.applyWrites#create",
+                    "collection": "com.example.record",
+                    "rkey": "3jqfcqzm4fa2j",
+                    "value": { "$type": "com.example.record", "image": blob },
+                },
+                {
+                    "$type": "com.atproto.repo.applyWrites#create",
+                    "collection": "com.example.record",
+                    "rkey": "3jqfcqzm4fb2j",
+                    "value": {
+                        "$type": "com.example.record",
+                        "image": {
+                            "$type": "blob",
+                            "ref": { "$link": "bafkreidfcltdzyzp4dmvoeohhrhi6z2lhsbhgorpuoqqzvpxrbfuspqsoq" },
+                            "mimeType": "image/png",
+                            "size": 4,
+                        },
+                    },
+                },
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+
+    let (status, served) = get(
+        &router,
+        &format!("/xrpc/com.atproto.sync.getBlob?did={}&cid={cid}", account()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{served}");
+}

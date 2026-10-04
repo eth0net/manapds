@@ -73,20 +73,24 @@ impl Blobs {
 
     /// Puts a blob where it is served from, leaving what it was uploaded as.
     ///
-    /// Doing it twice is doing it once, which is what lets a write that lost
-    /// a race work itself out again.
+    /// Answers whether this call is what put it there, which says whose it is
+    /// to take back: doing it twice is doing it once, and the second caller
+    /// must not undo the first.
     ///
     /// # Errors
     ///
     /// If the upload is not there, or will not link.
-    pub fn claim(&self, did: &Did, key: &str, cid: &Cid) -> Result<(), Error> {
+    pub fn claim(&self, did: &Did, key: &str, cid: &Cid) -> Result<bool, Error> {
         let path = self.path(did, cid);
         if let Some(parent) = path.parent() {
             super::directory(parent)?;
         }
         match std::fs::hard_link(self.temp_path(did, key), &path) {
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-            result => Ok(result?),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            result => {
+                result?;
+                Ok(true)
+            }
         }
     }
 
