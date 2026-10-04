@@ -1,4 +1,7 @@
 /target
+
+# Worktrees an agent is given to work in.
+/.claude/worktrees
 # Runtime state: SQLite databases, blobs and keys a local server writes.
 /data
 *.db
