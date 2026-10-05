@@ -332,6 +332,30 @@ impl Actor {
         Ok(blocks)
     }
 
+    /// The blocks a caller named, beside the CIDs this repository has nothing
+    /// under.
+    ///
+    /// # Errors
+    ///
+    /// If the read fails.
+    pub fn blocks(&self, cids: &[Cid]) -> Result<(BlockMap, Vec<Cid>), Error> {
+        let mut statement = self
+            .db
+            .prepare(r#"select "content" from "repo_block" where "cid" = ?1"#)?;
+        let mut blocks = BlockMap::new();
+        let mut missing = Vec::new();
+        for cid in cids {
+            match statement
+                .query_row(params![cid.to_string()], |row| row.get::<_, Vec<u8>>(0))
+                .optional()?
+            {
+                Some(content) => blocks.insert(*cid, content),
+                None => missing.push(*cid),
+            }
+        }
+        Ok((blocks, missing))
+    }
+
     /// The record at a key, if the index holds one there.
     ///
     /// # Errors

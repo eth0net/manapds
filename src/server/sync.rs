@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::account::Manager;
 use crate::store;
 use crate::syntax::{Did, Tid};
-use crate::xrpc::{self, Params};
+use crate::xrpc::{self, Listed, Params};
 
 /// How many repositories a page holds when the caller does not say.
 const PAGE: u32 = 500;
@@ -97,6 +97,34 @@ pub(crate) async fn get_repo(
         })
         .transpose()?;
     Ok(file(accounts.export(&did(&query.did)?, since).await?))
+}
+
+/// `com.atproto.sync.getBlocks`
+///
+/// # Errors
+///
+/// If the identifier is not a DID, no CID is named or one of them is not a
+/// CID, nothing answers to the identifier, the repository holds no block
+/// under one of them, or storage will not answer.
+pub(crate) async fn get_blocks(
+    State(accounts): State<Arc<Manager>>,
+    Params(query): Params<Wanted>,
+    listed: Listed,
+) -> xrpc::Result<Response> {
+    let wanted = listed.all("cids");
+    if wanted.is_empty() {
+        return Err(xrpc::Error::invalid_request(
+            r#"Params must have the property "cids""#,
+        ));
+    }
+    let cids = wanted
+        .into_iter()
+        .map(|cid| {
+            cid.parse()
+                .map_err(|_| xrpc::Error::invalid_request("Invalid cid"))
+        })
+        .collect::<xrpc::Result<Vec<_>>>()?;
+    Ok(file(accounts.blocks(&did(&query.did)?, cids).await?))
 }
 
 /// `com.atproto.sync.getLatestCommit`

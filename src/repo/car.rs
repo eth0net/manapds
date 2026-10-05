@@ -25,10 +25,21 @@ struct Header {
 ///
 /// If the header will not encode.
 pub fn write(root: Cid, blocks: &BlockMap) -> Result<Vec<u8>, Error> {
-    let header = super::encode(&Header {
-        version: 1,
-        roots: vec![root],
-    })?;
+    rooted(vec![root], blocks)
+}
+
+/// Writes every block under no root, which is what a file carrying a slice of
+/// a repository rather than a whole one names.
+///
+/// # Errors
+///
+/// If the header will not encode.
+pub fn write_blocks(blocks: &BlockMap) -> Result<Vec<u8>, Error> {
+    rooted(Vec::new(), blocks)
+}
+
+fn rooted(roots: Vec<Cid>, blocks: &BlockMap) -> Result<Vec<u8>, Error> {
+    let header = super::encode(&Header { version: 1, roots })?;
     let mut car = Vec::new();
     push_varint(&mut car, header.len() as u64);
     car.extend_from_slice(&header);
@@ -49,14 +60,33 @@ pub fn write(root: Cid, blocks: &BlockMap) -> Result<Vec<u8>, Error> {
 /// If the file is truncated or malformed, names other than one root, or holds
 /// a block that is not what its CID says.
 pub fn read(car: &[u8]) -> Result<(Cid, BlockMap), Error> {
+    let (roots, blocks) = read_roots(car)?;
+    let [root] = roots[..] else {
+        return Err(Error::MalformedCar("not exactly one root"));
+    };
+    if !blocks.contains(&root)? {
+        return Err(Error::MissingBlock(root));
+    }
+    Ok((root, blocks))
+}
+
+/// The blocks in a file, whatever it names as its roots and whether or not it
+/// names any.
+///
+/// # Errors
+///
+/// If the file is truncated or malformed, or holds a block that is not what
+/// its CID says.
+pub fn read_blocks(car: &[u8]) -> Result<BlockMap, Error> {
+    Ok(read_roots(car)?.1)
+}
+
+fn read_roots(car: &[u8]) -> Result<(Vec<Cid>, BlockMap), Error> {
     let (header, mut rest) = take_chunk(car)?;
     let header: Header = super::decode(header)?;
     if header.version != 1 {
         return Err(Error::MalformedCar("not a version 1 file"));
     }
-    let [root] = header.roots[..] else {
-        return Err(Error::MalformedCar("not exactly one root"));
-    };
 
     let mut blocks = BlockMap::new();
     while !rest.is_empty() {
@@ -70,11 +100,7 @@ pub fn read(car: &[u8]) -> Result<(Cid, BlockMap), Error> {
         }
         blocks.insert(cid, reading.to_vec());
     }
-
-    if !blocks.contains(&root)? {
-        return Err(Error::MissingBlock(root));
-    }
-    Ok((root, blocks))
+    Ok((header.roots, blocks))
 }
 
 /// Splits off one length-prefixed chunk, and what follows it.

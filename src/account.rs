@@ -99,6 +99,9 @@ pub enum Error {
     /// finished.
     #[error("Could not find repo for {0}")]
     NoRepo(Did),
+    /// Blocks a caller named that the repository has nothing under.
+    #[error("Could not find cids: {0}")]
+    NoBlocks(String),
     /// The commit the caller expected to be replacing is not the one there.
     #[error("Commit was at {0}")]
     Swap(Cid),
@@ -141,7 +144,7 @@ impl Error {
     /// Whether what arrived is the caller's fault rather than this server's.
     #[must_use]
     pub fn sent(&self) -> bool {
-        matches!(self, Self::Repo(error) if error.sent())
+        matches!(self, Self::NoBlocks(_)) || matches!(self, Self::Repo(error) if error.sent())
     }
 
     /// Whether waiting and asking again is what would help.
@@ -182,6 +185,7 @@ impl Error {
             Self::Swap(_) | Self::SwapRecord(_) => "InvalidSwap",
             Self::Contended
             | Self::Email
+            | Self::NoBlocks(_)
             | Self::PasswordTooLong
             | Self::Taken(_)
             | Self::TooManyInvites => "InvalidRequest",
@@ -785,6 +789,29 @@ impl Manager {
                 root.cid,
                 &actor.blocks_since(since.as_ref())?,
             )?)
+        })
+        .await
+    }
+
+    /// The blocks a caller named, as a CAR file naming no root.
+    ///
+    /// # Errors
+    ///
+    /// If the account holds no repository, the repository has nothing under
+    /// one of those CIDs, or storage will not answer.
+    pub async fn blocks(&self, did: &Did, cids: Vec<Cid>) -> Result<Vec<u8>, Error> {
+        self.opened(did, move |actor| {
+            let (blocks, missing) = actor.blocks(&cids)?;
+            if !missing.is_empty() {
+                return Err(Error::NoBlocks(
+                    missing
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(","),
+                ));
+            }
+            Ok(repo::car::write_blocks(&blocks)?)
         })
         .await
     }

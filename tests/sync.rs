@@ -402,6 +402,101 @@ async fn a_download_since_a_revision_carries_only_what_came_after() {
 }
 
 #[tokio::test]
+async fn the_blocks_a_caller_names_come_back_and_nothing_else_does() {
+    let (router, manager, _data) = served();
+    let written = manager
+        .write(
+            &alice(),
+            vec![record("3jqfcqzm4fc2j", "first").into()],
+            None,
+        )
+        .await
+        .expect("a commit")
+        .expect("a write");
+    let record = written.results[0].cid.expect("a record");
+
+    let (status, mime, body) = fetch(
+        &router,
+        &format!(
+            "/xrpc/com.atproto.sync.getBlocks?did={}&cids={}&cids={}",
+            alice(),
+            written.commit,
+            record
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(mime, "application/vnd.ipld.car");
+
+    // A slice of a repository hangs from nothing, so the file names no root
+    // and the whole of it is the two blocks asked for.
+    let blocks = car::read_blocks(&body).expect("a car file");
+    assert_eq!(blocks.len(), 2);
+    assert!(blocks.contains(&written.commit).expect("a lookup"));
+    assert!(blocks.contains(&record).expect("a lookup"));
+    assert_eq!(
+        car::read(&body),
+        Err(manapds::repo::Error::MalformedCar("not exactly one root"))
+    );
+}
+
+#[tokio::test]
+async fn a_cid_the_repository_holds_nothing_under_is_refused() {
+    let (router, manager, _data) = served();
+    let written = manager
+        .write(
+            &alice(),
+            vec![record("3jqfcqzm4fc2j", "first").into()],
+            None,
+        )
+        .await
+        .expect("a commit")
+        .expect("a write");
+    // Bob's repository is a different one, so his commit is a CID Alice's
+    // holds nothing under.
+    let elsewhere = manager
+        .root(&bob())
+        .await
+        .expect("a root")
+        .expect("a repository")
+        .cid;
+
+    let (status, body) = get(
+        &router,
+        &format!(
+            "/xrpc/com.atproto.sync.getBlocks?did={}&cids={}&cids={}",
+            alice(),
+            written.commit,
+            elsewhere
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "InvalidRequest");
+    assert_eq!(body["message"], format!("Could not find cids: {elsewhere}"));
+
+    // Naming none of them, and naming one that is not a CID at all.
+    let (status, body) = get(
+        &router,
+        &format!("/xrpc/com.atproto.sync.getBlocks?did={}", alice()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["message"], r#"Params must have the property "cids""#);
+
+    let (status, body) = get(
+        &router,
+        &format!(
+            "/xrpc/com.atproto.sync.getBlocks?did={}&cids=nonsense",
+            alice()
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["message"], "Invalid cid");
+}
+
+#[tokio::test]
 async fn a_download_of_a_repository_nobody_here_holds_is_refused() {
     let (router, _manager, _data) = served();
 
