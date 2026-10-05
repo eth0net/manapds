@@ -572,7 +572,11 @@ impl Manager {
                 rev: repo.rev().clone(),
             };
             // A first commit holds no records, so there is nothing to index.
-            actor.commit(None, &root, &blocks, &[], &blobs)?;
+            let stored = store::Blocks {
+                written: &blocks,
+                dropped: &[],
+            };
+            actor.commit(None, &root, stored, &[], &blobs)?;
             Ok((root, blocks))
         })
         .await
@@ -1529,7 +1533,7 @@ fn commit_writes(
             return Err(Error::Swap(from.cid));
         }
 
-        let blocks = repo.apply(
+        let (blocks, dropped) = repo.apply(
             &actor,
             &planned.writes,
             &signing_key,
@@ -1541,7 +1545,11 @@ fn commit_writes(
             cid: repo.cid(),
             rev: repo.rev().clone(),
         };
-        let Some(committed) = actor.commit(Some(&from), &root, &blocks, &planned.index, blobs)?
+        let stored = store::Blocks {
+            written: &blocks,
+            dropped: &dropped,
+        };
+        let Some(committed) = actor.commit(Some(&from), &root, stored, &planned.index, blobs)?
         else {
             continue;
         };

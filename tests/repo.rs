@@ -603,10 +603,10 @@ fn a_repository_survives_the_round_trip_through_a_car() {
             record: post("second"),
         },
     ];
-    store.merge(
-        repo.apply(&store, &writes, &key, &mut clock)
-            .expect("applies"),
-    );
+    let (written, _) = repo
+        .apply(&store, &writes, &key, &mut clock)
+        .expect("applies");
+    store.merge(written);
 
     assert!(repo.rev() > &first, "{} follows {first}", repo.rev());
     assert_eq!(repo.records(&store).expect("reads").len(), 2);
@@ -643,10 +643,10 @@ fn a_write_that_fails_leaves_the_revision_where_it_was() {
         rkey: rkey("3jqfcqzm4fc2j"),
         record: post(text),
     };
-    store.merge(
-        repo.apply(&store, &[create("first")], &key, &mut clock)
-            .expect("applies"),
-    );
+    let (written, _) = repo
+        .apply(&store, &[create("first")], &key, &mut clock)
+        .expect("applies");
+    store.merge(written);
     let settled = repo.cid();
     let rev = repo.rev().clone();
 
@@ -698,22 +698,22 @@ fn updates_and_deletes_move_the_root() {
         rkey: rkey("3jqfcqzm4fc2j"),
     };
 
-    store.merge(
-        repo.apply(&store, &[created], &key, &mut clock)
-            .expect("applies"),
-    );
+    let (written, _) = repo
+        .apply(&store, &[created], &key, &mut clock)
+        .expect("applies");
+    store.merge(written);
     let after_create = repo.commit().data;
 
-    store.merge(
-        repo.apply(&store, &[edited], &key, &mut clock)
-            .expect("applies"),
-    );
+    let (written, _) = repo
+        .apply(&store, &[edited], &key, &mut clock)
+        .expect("applies");
+    store.merge(written);
     assert_ne!(repo.commit().data, after_create);
 
-    store.merge(
-        repo.apply(&store, &[deleted], &key, &mut clock)
-            .expect("applies"),
-    );
+    let (written, _) = repo
+        .apply(&store, &[deleted], &key, &mut clock)
+        .expect("applies");
+    store.merge(written);
     assert_eq!(
         repo.commit().data,
         empty,
@@ -1006,7 +1006,7 @@ fn a_batch_writing_one_key_twice_stores_only_what_the_tree_reaches() {
     let key = Keypair::generate(Algorithm::Secp256k1);
     let mut clock = TidClock::new();
     let (mut repo, store) = Repo::create(account(), &key, &mut clock).expect("creates");
-    let written = repo
+    let (written, _) = repo
         .apply(
             &store,
             &[

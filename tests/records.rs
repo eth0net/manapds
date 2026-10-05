@@ -93,7 +93,16 @@ fn standing(
     };
     store::Actor::open(&directory.actor_store(&did), did.clone())
         .expect("a store")
-        .commit(None, &root, &blocks, &[], &blobs())
+        .commit(
+            None,
+            &root,
+            store::Blocks {
+                written: &blocks,
+                dropped: &[],
+            },
+            &[],
+            &blobs(),
+        )
         .expect("a commit");
 
     let mut accounts = store::Accounts::memory().expect("a database");

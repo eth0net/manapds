@@ -48,6 +48,15 @@ pub struct Root {
     pub rev: Tid,
 }
 
+/// What a revision leaves in the block store.
+#[derive(Clone, Copy, Debug)]
+pub struct Blocks<'a> {
+    /// Everything that has to be stored before the revision can be read.
+    pub written: &'a BlockMap,
+    /// Everything the revision before it reached and this one does not.
+    pub dropped: &'a [Cid],
+}
+
 /// A record as the index holds it, beside the block it points at.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Record {
@@ -193,8 +202,8 @@ impl Actor {
         .transpose()
     }
 
-    /// Stores a revision's blocks, indexes the records it touched, and moves
-    /// the root onto it, together or not at all.
+    /// Stores a revision's blocks, forgets the ones it drops, indexes the
+    /// records it touched, and moves the root onto it, together or not at all.
     ///
     /// `from` is the root this revision was built on, and the move lands only
     /// while that is still the one there. Answering `None` leaves the caller
@@ -210,7 +219,7 @@ impl Actor {
         &mut self,
         from: Option<&Root>,
         root: &Root,
-        blocks: &BlockMap,
+        blocks: Blocks<'_>,
         records: &[Indexed],
         blobs: &super::Blobs,
     ) -> Result<Option<Committed>, Error> {
@@ -234,7 +243,7 @@ impl Actor {
         &mut self,
         from: Option<&Root>,
         root: &Root,
-        blocks: &BlockMap,
+        blocks: Blocks<'_>,
         records: &[Indexed],
         blobs: &super::Blobs,
         leaving: &mut Leaving,
@@ -246,7 +255,7 @@ impl Actor {
             let mut insert = transaction.prepare(
                 r#"insert or ignore into "repo_block" ("cid", "repoRev", "size", "content") values (?1, ?2, ?3, ?4)"#,
             )?;
-            for (cid, bytes) in blocks {
+            for (cid, bytes) in blocks.written {
                 insert.execute(params![
                     cid.to_string(),
                     root.rev.as_str(),
@@ -256,6 +265,18 @@ impl Actor {
             }
         }
         let kept = Self::index(&transaction, blobs, did, root, records, &stamp, leaving)?;
+
+        // Indexed first, because the index is what says whether some other
+        // key still points at a block this one let go of.
+        {
+            let mut forget = transaction.prepare(
+                r#"delete from "repo_block" where "cid" = ?1
+                   and not exists (select 1 from "record" where "record"."cid" = ?1)"#,
+            )?;
+            for cid in blocks.dropped {
+                forget.execute(params![cid.to_string()])?;
+            }
+        }
 
         // `kept` spares a blob for a record a later write may have replaced, so
         // each of them is asked for once every record has had its turn.

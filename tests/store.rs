@@ -6,8 +6,8 @@ use std::path::Path;
 use manapds::crypto::{Algorithm, Keypair};
 use manapds::repo::{self, Ipld, Repo, Store, Write};
 use manapds::store::{
-    Account, Accounts, Actor, AppPassword, Blob, DidCache, Directory, Error, Event, Indexed,
-    Record, Registration, Root, Sequencer, Session,
+    Account, Accounts, Actor, AppPassword, Blob, Blocks, DidCache, Directory, Error, Event,
+    Indexed, Record, Registration, Root, Sequencer, Session,
 };
 use manapds::store::{blobs, keys};
 use manapds::syntax::{Did, Nsid, RecordKey, TidClock};
@@ -44,6 +44,22 @@ fn indexed_in(collection: &str, rkey: &str, text: &str) -> Indexed {
         cid: repo::cid_for(&repo::encode(&post(text)).expect("encodes")),
         links: Vec::new(),
         blobs: Vec::new(),
+    }
+}
+
+/// What a write leaves in the block store, as the store wants it.
+fn stored(written: &(repo::BlockMap, Vec<repo::Cid>)) -> Blocks<'_> {
+    Blocks {
+        written: &written.0,
+        dropped: &written.1,
+    }
+}
+
+/// The same for a first commit, which has nothing before it to drop.
+fn genesis(blocks: &repo::BlockMap) -> Blocks<'_> {
+    Blocks {
+        written: blocks,
+        dropped: &[],
     }
 }
 
@@ -227,7 +243,7 @@ fn a_repository_round_trips_through_a_file() {
                     cid: repo.cid(),
                     rev: repo.rev().clone(),
                 },
-                &blocks,
+                genesis(&blocks),
                 &[],
                 &blobs(),
             )
@@ -252,7 +268,7 @@ fn a_repository_round_trips_through_a_file() {
                     cid: repo.cid(),
                     rev: repo.rev().clone(),
                 },
-                &written,
+                stored(&written),
                 &[
                     indexed("3jqfcqzm4fc2j", "first"),
                     indexed("3jqfcqzm4fd2j", "second"),
@@ -316,7 +332,7 @@ fn the_index_follows_what_the_commit_did() {
     let (mut repo, blocks) = Repo::create(account(), &key, &mut clock).expect("creates");
     let mut store = Actor::open(&path, account()).expect("opens");
     store
-        .commit(None, &at(&repo), &blocks, &[], &blobs())
+        .commit(None, &at(&repo), genesis(&blocks), &[], &blobs())
         .expect("commits");
     assert_eq!(indexed_rows(&path), vec![]);
 
@@ -333,7 +349,7 @@ fn the_index_follows_what_the_commit_did() {
         .commit(
             Some(&from),
             &at(&repo),
-            &written,
+            stored(&written),
             &[indexed("3jqfcqzm4fc2j", "first")],
             &blobs(),
         )
@@ -365,7 +381,7 @@ fn the_index_follows_what_the_commit_did() {
         .commit(
             Some(&from),
             &at(&repo),
-            &written,
+            stored(&written),
             &[indexed("3jqfcqzm4fc2j", "second")],
             &blobs(),
         )
@@ -397,7 +413,7 @@ fn the_index_follows_what_the_commit_did() {
         .commit(
             Some(&from),
             &at(&repo),
-            &written,
+            stored(&written),
             &[Indexed::Delete { collection, rkey }],
             &blobs(),
         )
@@ -442,7 +458,7 @@ fn a_commit_built_on_a_root_somebody_else_moved_is_refused() {
     let (repo, blocks) = Repo::create(account(), &key, &mut clock).expect("creates");
     let mut store = Actor::memory(account()).expect("opens");
     store
-        .commit(None, &at(&repo), &blocks, &[], &blobs())
+        .commit(None, &at(&repo), genesis(&blocks), &[], &blobs())
         .expect("commits");
 
     // Two writers, both working from the root the genesis left.
@@ -465,7 +481,7 @@ fn a_commit_built_on_a_root_somebody_else_moved_is_refused() {
             .commit(
                 Some(&from),
                 &at(&first),
-                &one,
+                stored(&one),
                 &[indexed("3jqfcqzm4fa2j", "mine")],
                 &blobs(),
             )
@@ -479,7 +495,7 @@ fn a_commit_built_on_a_root_somebody_else_moved_is_refused() {
             .commit(
                 Some(&from),
                 &at(&second),
-                &other,
+                stored(&other),
                 &[indexed("3jqfcqzm4fb2j", "theirs")],
                 &blobs(),
             )
@@ -507,7 +523,7 @@ fn a_collection_pages_newest_first_unless_asked_the_other_way() {
     let (mut repo, blocks) = Repo::create(account(), &key, &mut clock).expect("creates");
     let mut store = Actor::memory(account()).expect("opens");
     store
-        .commit(None, &at(&repo), &blocks, &[], &blobs())
+        .commit(None, &at(&repo), genesis(&blocks), &[], &blobs())
         .expect("commits");
 
     let from = at(&repo);
@@ -528,7 +544,7 @@ fn a_collection_pages_newest_first_unless_asked_the_other_way() {
         .commit(
             Some(&from),
             &at(&repo),
-            &written,
+            stored(&written),
             &[
                 indexed("3jqfcqzm4fa2j", "first"),
                 indexed("3jqfcqzm4fb2j", "second"),
@@ -1513,7 +1529,7 @@ fn a_blob_nothing_ever_named_is_swept_and_one_a_record_holds_is_not() {
         .commit(
             None,
             &at(&repo),
-            &blocks,
+            genesis(&blocks),
             &[Indexed::Put {
                 collection: "com.example.record".parse().expect("an NSID"),
                 rkey: "3jqfcqzm4fc2j".parse().expect("a record key"),
@@ -1572,7 +1588,7 @@ fn a_commit_hands_back_the_uploads_it_took_and_the_blobs_it_let_go() {
         .commit(
             None,
             &at(&repo),
-            &blocks,
+            genesis(&blocks),
             &[Indexed::Put {
                 collection,
                 rkey,
@@ -1594,7 +1610,7 @@ fn a_commit_hands_back_the_uploads_it_took_and_the_blobs_it_let_go() {
         .commit(
             Some(&at(&repo)),
             &at(&repo),
-            &blocks,
+            genesis(&blocks),
             &[Indexed::Delete {
                 collection: "com.example.record".parse().expect("an NSID"),
                 rkey: "3jqfcqzm4fc2j".parse().expect("a record key"),

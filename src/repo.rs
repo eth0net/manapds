@@ -205,7 +205,8 @@ impl Repo {
     }
 
     /// Applies writes and signs the commit over what they leave, handing back
-    /// every block that has to be stored before this revision can be read.
+    /// every block that has to be stored before this revision can be read and
+    /// every CID the revision stops reaching.
     ///
     /// Nothing changes here unless all of it does: a write that fails leaves
     /// the repository on the revision it was already on.
@@ -220,7 +221,7 @@ impl Repo {
         writes: &[Write],
         keypair: &Keypair,
         clock: &mut TidClock,
-    ) -> Result<BlockMap, Error> {
+    ) -> Result<(BlockMap, Vec<Cid>), Error> {
         // Every record these writes encode, against the key each one ends at:
         // a batch that writes one key twice leaves the first block reachable
         // from nothing, and storing it would be storing rubbish.
@@ -262,10 +263,9 @@ impl Repo {
             blocks.insert(*cid, encoded.get(cid)?.into_owned());
         }
 
-        // todo: the CIDs this revision drops. Until they are collected a
-        // record a repository no longer holds is still exported.
         let (root, tree) = data.unstored_blocks(store)?;
         blocks.merge(tree);
+        let dropped = data.dropped(store, &self.data)?;
         let commit = Commit::sign(
             self.commit.did.clone(),
             clock
@@ -278,7 +278,7 @@ impl Repo {
         self.cid = blocks.add(&commit)?;
         self.commit = commit;
         self.data = data;
-        Ok(blocks)
+        Ok((blocks, dropped))
     }
 
     /// The block this repository's commit is in, which is its root.

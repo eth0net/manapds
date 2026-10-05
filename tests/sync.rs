@@ -36,18 +36,31 @@ fn tokens() -> Tokens {
     Tokens::new(common::SECRET, "did:web:pds.example.com")
 }
 
+/// What the records below hold.
+fn post(text: &str) -> Ipld {
+    Ipld::Map(BTreeMap::from([
+        (
+            "$type".to_owned(),
+            Ipld::String("com.example.record".to_owned()),
+        ),
+        ("text".to_owned(), Ipld::String(text.to_owned())),
+    ]))
+}
+
 /// One record, in a collection nothing here has a lexicon for.
 fn record(rkey: &str, text: &str) -> Write {
     Write::Create {
         collection: "com.example.record".parse::<Nsid>().expect("an NSID"),
         rkey: rkey.parse::<RecordKey>().expect("a record key"),
-        record: Ipld::Map(BTreeMap::from([
-            (
-                "$type".to_owned(),
-                Ipld::String("com.example.record".to_owned()),
-            ),
-            ("text".to_owned(), Ipld::String(text.to_owned())),
-        ])),
+        record: post(text),
+    }
+}
+
+/// The write that takes one of them out again.
+fn deletion(rkey: &str) -> Write {
+    Write::Delete {
+        collection: "com.example.record".parse::<Nsid>().expect("an NSID"),
+        rkey: rkey.parse::<RecordKey>().expect("a record key"),
     }
 }
 
@@ -106,7 +119,16 @@ fn repository(directory: &store::Directory, did: &Did) -> store::Root {
     };
     store::Actor::open(&directory.actor_store(did), did.clone())
         .expect("a store")
-        .commit(None, &root, &blocks, &[], &blobs())
+        .commit(
+            None,
+            &root,
+            store::Blocks {
+                written: &blocks,
+                dropped: &[],
+            },
+            &[],
+            &blobs(),
+        )
         .expect("a commit");
     root
 }
@@ -602,6 +624,135 @@ async fn a_cid_the_repository_holds_nothing_under_is_refused() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["message"], "Invalid cid");
+}
+
+#[tokio::test]
+async fn a_record_a_repository_no_longer_holds_is_not_handed_over() {
+    let (router, manager, _data) = served();
+    let written = manager
+        .write(
+            &alice(),
+            vec![record("3jqfcqzm4fc2j", "first").into()],
+            None,
+        )
+        .await
+        .expect("a commit")
+        .expect("a write");
+    let dropped = written.results[0].cid.expect("a record");
+
+    manager
+        .write(&alice(), vec![deletion("3jqfcqzm4fc2j").into()], None)
+        .await
+        .expect("a commit")
+        .expect("a write");
+
+    // Nothing holds it, so nothing may hand it out: an export is public and a
+    // deleted record is the caller's to have deleted.
+    let (_, _, body) = fetch(
+        &router,
+        &format!("/xrpc/com.atproto.sync.getRepo?did={}", alice()),
+    )
+    .await;
+    let (_, blocks) = car::read(&body).expect("a car file");
+    assert!(!blocks.contains(&dropped).expect("a lookup"));
+
+    // And not one at a time either.
+    let (status, _, named) = fetch(
+        &router,
+        &format!(
+            "/xrpc/com.atproto.sync.getBlocks?did={}&cids={dropped}",
+            alice()
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{}", named.len());
+}
+
+#[tokio::test]
+async fn a_block_two_records_share_outlives_the_first_of_them() {
+    let (router, manager, _data) = served();
+    let written = manager
+        .write(
+            &alice(),
+            vec![
+                record("3jqfcqzm4fc2j", "same").into(),
+                record("3jqfcqzm4fd2j", "same").into(),
+            ],
+            None,
+        )
+        .await
+        .expect("a commit")
+        .expect("a write");
+    let shared = written.results[0].cid.expect("a record");
+    assert_eq!(written.results[1].cid, Some(shared));
+
+    manager
+        .write(&alice(), vec![deletion("3jqfcqzm4fc2j").into()], None)
+        .await
+        .expect("a commit")
+        .expect("a write");
+
+    // One key let go of it and the other did not, and what a key let go of is
+    // not what the repository stopped holding.
+    let (_, _, body) = fetch(
+        &router,
+        &format!("/xrpc/com.atproto.sync.getRepo?did={}", alice()),
+    )
+    .await;
+    let (_, blocks) = car::read(&body).expect("a car file");
+    assert!(blocks.contains(&shared).expect("a lookup"));
+
+    let (status, _, _) = fetch(
+        &router,
+        &format!(
+            "/xrpc/com.atproto.sync.getBlocks?did={}&cids={shared}",
+            alice()
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_record_written_over_leaves_the_block_it_replaced_behind() {
+    let (router, manager, _data) = served();
+    let written = manager
+        .write(
+            &alice(),
+            vec![record("3jqfcqzm4fc2j", "first").into()],
+            None,
+        )
+        .await
+        .expect("a commit")
+        .expect("a write");
+    let before = written.results[0].cid.expect("a record");
+
+    let written = manager
+        .write(
+            &alice(),
+            vec![
+                Write::Update {
+                    collection: "com.example.record".parse::<Nsid>().expect("an NSID"),
+                    rkey: "3jqfcqzm4fc2j".parse::<RecordKey>().expect("a record key"),
+                    record: post("second"),
+                }
+                .into(),
+            ],
+            None,
+        )
+        .await
+        .expect("a commit")
+        .expect("a write");
+    let after = written.results[0].cid.expect("a record");
+
+    let (_, _, body) = fetch(
+        &router,
+        &format!("/xrpc/com.atproto.sync.getRepo?did={}", alice()),
+    )
+    .await;
+    let (_, blocks) = car::read(&body).expect("a car file");
+    assert!(!blocks.contains(&before).expect("a lookup"));
+    assert!(blocks.contains(&after).expect("a lookup"));
 }
 
 #[tokio::test]
