@@ -401,6 +401,114 @@ async fn a_download_since_a_revision_carries_only_what_came_after() {
     assert!(!blocks.contains(&first.commit).expect("a lookup"));
 }
 
+/// The repository Alice is left holding, and the three records in it.
+async fn three_records(manager: &account::Manager) -> account::Written {
+    manager
+        .write(
+            &alice(),
+            vec![
+                record("3jqfcqzm4fc2j", "first").into(),
+                record("3jqfcqzm4fc2k", "second").into(),
+                record("3jqfcqzm4fc2l", "third").into(),
+            ],
+            None,
+        )
+        .await
+        .expect("a commit")
+        .expect("a write")
+}
+
+/// Where those records live.
+fn kept(rkey: &str) -> (Nsid, RecordKey) {
+    (
+        "com.example.record".parse().expect("an NSID"),
+        rkey.parse().expect("a record key"),
+    )
+}
+
+#[tokio::test]
+async fn a_record_comes_back_with_the_blocks_that_prove_it() {
+    let (router, manager, _data) = served();
+    let written = three_records(&manager).await;
+    let wanted = written.results[1].cid.expect("a record");
+
+    let (status, mime, body) = fetch(
+        &router,
+        &format!(
+            "/xrpc/com.atproto.sync.getRecord?did={}&collection=com.example.record&rkey=3jqfcqzm4fc2k",
+            alice()
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(mime, "application/vnd.ipld.car");
+
+    // A proof rather than a copy: the tree walks from the commit to the
+    // record on these blocks alone, and the records beside it are not here.
+    let (root, blocks) = car::read(&body).expect("a car file");
+    assert_eq!(root, written.commit);
+    let (collection, rkey) = kept("3jqfcqzm4fc2k");
+    let mut repo = Repo::load(&blocks, root).expect("a repository");
+    assert_eq!(
+        repo.get(&blocks, &collection, &rkey).expect("a lookup"),
+        Some(wanted)
+    );
+    assert!(
+        !blocks
+            .contains(&written.results[0].cid.expect("a record"))
+            .expect("a lookup")
+    );
+}
+
+#[tokio::test]
+async fn a_key_nothing_is_at_comes_back_as_the_walk_that_shows_it() {
+    let (router, manager, _data) = served();
+    let written = three_records(&manager).await;
+
+    let (status, _, body) = fetch(
+        &router,
+        &format!(
+            "/xrpc/com.atproto.sync.getRecord?did={}&collection=com.example.record&rkey=3jqfcqzm4fc2z",
+            alice()
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (root, blocks) = car::read(&body).expect("a car file");
+    assert_eq!(root, written.commit);
+    let (collection, rkey) = kept("3jqfcqzm4fc2z");
+    let mut repo = Repo::load(&blocks, root).expect("a repository");
+    assert_eq!(
+        repo.get(&blocks, &collection, &rkey).expect("a lookup"),
+        None
+    );
+}
+
+#[tokio::test]
+async fn a_proof_for_a_repository_nobody_here_holds_is_refused() {
+    let (router, _manager, _data) = served();
+
+    let (status, body) = get(
+        &router,
+        "/xrpc/com.atproto.sync.getRecord?did=did:plc:mav423b24thku7ezkx7yarax&collection=com.example.record&rkey=3jqfcqzm4fc2j",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "RepoNotFound");
+
+    let (status, body) = get(
+        &router,
+        &format!(
+            "/xrpc/com.atproto.sync.getRecord?did={}&collection=not-an-nsid&rkey=3jqfcqzm4fc2j",
+            alice()
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["message"], "Invalid collection");
+}
+
 #[tokio::test]
 async fn the_blocks_a_caller_names_come_back_and_nothing_else_does() {
     let (router, manager, _data) = served();

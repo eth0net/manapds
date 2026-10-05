@@ -30,6 +30,14 @@ pub(crate) struct Wanted {
     did: String,
 }
 
+/// Which record to prove, and whose.
+#[derive(Debug, Deserialize)]
+pub(crate) struct Keyed {
+    did: String,
+    collection: String,
+    rkey: String,
+}
+
 /// Which repository to export, and how much of it.
 #[derive(Debug, Deserialize)]
 pub(crate) struct Export {
@@ -97,6 +105,32 @@ pub(crate) async fn get_repo(
         })
         .transpose()?;
     Ok(file(accounts.export(&did(&query.did)?, since).await?))
+}
+
+/// `com.atproto.sync.getRecord`
+///
+/// # Errors
+///
+/// If the identifier is not a DID, the collection is not an NSID or the key
+/// is not a record key, nothing answers to the identifier, or storage will
+/// not answer.
+pub(crate) async fn get_record(
+    State(accounts): State<Arc<Manager>>,
+    Params(query): Params<Keyed>,
+) -> xrpc::Result<Response> {
+    let collection = query
+        .collection
+        .parse()
+        .map_err(|_| xrpc::Error::invalid_request("Invalid collection"))?;
+    let rkey = query
+        .rkey
+        .parse()
+        .map_err(|_| xrpc::Error::invalid_request("Invalid record key"))?;
+    Ok(file(
+        accounts
+            .proof(&did(&query.did)?, &collection, &rkey)
+            .await?,
+    ))
 }
 
 /// `com.atproto.sync.getBlocks`

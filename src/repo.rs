@@ -318,6 +318,22 @@ impl Repo {
         self.data.get(store, &format!("{collection}/{rkey}"))
     }
 
+    /// Every block that proves what the repository says about a key, short of
+    /// the commit itself.
+    ///
+    /// # Errors
+    ///
+    /// If a block the tree reaches for is missing.
+    pub fn proof(
+        &mut self,
+        store: &dyn Store,
+        collection: &Nsid,
+        rkey: &RecordKey,
+    ) -> Result<Vec<Cid>, Error> {
+        self.data
+            .cids_for_path(store, &format!("{collection}/{rkey}"))
+    }
+
     /// Every record in the repository, in key order.
     ///
     /// # Errors

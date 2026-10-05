@@ -228,6 +228,45 @@ fn a_new_layer_can_be_two_above_the_old_one() {
 }
 
 #[test]
+fn a_walk_to_a_key_ends_at_what_is_there() {
+    // The tree an insert splits two layers down, so a key at the bottom is
+    // more than one node away from the root.
+    let mut mst = tree_of(&[
+        "com.example.record/3jqfcqzm3fo2j",
+        "com.example.record/3jqfcqzm3fp2j",
+        "com.example.record/3jqfcqzm3fr2j",
+        "com.example.record/3jqfcqzm3fs2j",
+        "com.example.record/3jqfcqzm3ft2j",
+        "com.example.record/3jqfcqzm3fx2j",
+        "com.example.record/3jqfcqzm3fz2j",
+        "com.example.record/3jqfcqzm4fc2j",
+        "com.example.record/3jqfcqzm4fd2j",
+        "com.example.record/3jqfcqzm4ff2j",
+        "com.example.record/3jqfcqzm4fg2j",
+        "com.example.record/3jqfcqzm4fh2j",
+    ]);
+    let (root, blocks) = mst.unstored_blocks(&BlockMap::new()).expect("blocks");
+
+    let held = Mst::load(root)
+        .cids_for_path(&blocks, "com.example.record/3jqfcqzm3fo2j")
+        .expect("a walk");
+    assert_eq!(held.first(), Some(&root));
+    assert_eq!(held.last(), Some(&record()));
+    assert!(held.len() > 2, "{held:?}");
+
+    // A key nothing is at stops at the nodes that show it, every one of them
+    // a node the reader already has.
+    let nothing = Mst::load(root)
+        .cids_for_path(&blocks, "com.example.record/3jqfcqzm3fq2j")
+        .expect("a walk");
+    assert_eq!(nothing.first(), Some(&root));
+    assert_ne!(nothing.last(), Some(&record()));
+    for cid in &nothing {
+        assert!(blocks.contains(cid).expect("a lookup"), "{cid}");
+    }
+}
+
+#[test]
 fn keys_are_a_collection_and_a_record_key() {
     let store = BlockMap::new();
     for key in [

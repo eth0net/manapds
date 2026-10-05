@@ -168,6 +168,10 @@ fn sync() -> Router<Context> {
             xrpc::query(sync::get_blocks),
         )
         .route(
+            "/xrpc/com.atproto.sync.getRecord",
+            xrpc::query(sync::get_record),
+        )
+        .route(
             "/xrpc/com.atproto.sync.getLatestCommit",
             xrpc::query(sync::get_latest_commit),
         )

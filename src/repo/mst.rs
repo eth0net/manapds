@@ -189,6 +189,36 @@ impl Mst {
         }
     }
 
+    /// Every node from here down to a key, and the record at it where the
+    /// tree holds one.
+    ///
+    /// What comes back for a key nothing holds is the walk that proves it:
+    /// the nodes a reader rehashes to see there is no leaf there.
+    ///
+    /// # Errors
+    ///
+    /// If a block it reaches for is missing.
+    pub fn cids_for_path(&mut self, store: &dyn Store, key: &str) -> Result<Vec<Cid>, Error> {
+        self.cids_for_path_in(&Reader::new(store), key)
+    }
+
+    fn cids_for_path_in(&mut self, reader: &Reader<'_>, key: &str) -> Result<Vec<Cid>, Error> {
+        let _descent = reader.descend()?;
+        let mut cids = vec![self.root_in(reader)?];
+        let index = self.index_of(reader, key)?;
+        let entries = self.entries(reader)?;
+        if let Some(Entry::Leaf(leaf)) = entries.get(index)
+            && leaf.key == key
+        {
+            cids.push(leaf.value);
+            return Ok(cids);
+        }
+        if let Some(Entry::Tree(subtree)) = index.checked_sub(1).and_then(|i| entries.get_mut(i)) {
+            cids.extend(subtree.cids_for_path_in(reader, key)?);
+        }
+        Ok(cids)
+    }
+
     /// Adds a record at a key nothing holds yet.
     ///
     /// # Errors
