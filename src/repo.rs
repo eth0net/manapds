@@ -262,7 +262,8 @@ impl Repo {
             blocks.insert(*cid, encoded.get(cid)?.into_owned());
         }
 
-        // todo: the CIDs this revision drops, so stale blocks can be collected.
+        // todo: the CIDs this revision drops. Until they are collected a
+        // record a repository no longer holds is still exported.
         let (root, tree) = data.unstored_blocks(store)?;
         blocks.merge(tree);
         let commit = Commit::sign(
