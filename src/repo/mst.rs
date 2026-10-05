@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use std::cell::{Cell, RefCell};
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
 use super::{BlockMap, Error, Store, cid_for, encode, read};
@@ -324,6 +325,114 @@ impl Mst {
         Ok((root, blocks))
     }
 
+    /// The blocks the tree before this one reached and this one does not.
+    ///
+    /// Two records with the same bytes are one block, so a CID this tree puts
+    /// back somewhere comes off the list.
+    ///
+    /// # Errors
+    ///
+    /// If a block either tree reaches for is missing, or will not encode.
+    pub fn dropped(&self, store: &dyn Store, prev: &Self) -> Result<Vec<Cid>, Error> {
+        let mut diff = Diff::default();
+        let mut left = Walker::new(store, prev.clone())?;
+        let mut right = Walker::new(store, self.clone())?;
+        loop {
+            let (here, there) = match (left.at(), right.at()) {
+                (None, None) => break,
+                (Some(_), None) => {
+                    let cid = left.cid()?;
+                    diff.remove(cid);
+                    left.advance()?;
+                    continue;
+                }
+                (None, Some(_)) => {
+                    let cid = right.cid()?;
+                    diff.add(cid);
+                    right.advance()?;
+                    continue;
+                }
+                (Some(here), Some(there)) => (here, there),
+            };
+
+            if here == At::Leaf && there == At::Leaf {
+                match left.key().cmp(&right.key()) {
+                    Ordering::Equal => {
+                        let (before, after) = (left.cid()?, right.cid()?);
+                        if before != after {
+                            diff.remove(before);
+                            diff.add(after);
+                        }
+                        left.advance()?;
+                        right.advance()?;
+                    }
+                    Ordering::Less => {
+                        let cid = left.cid()?;
+                        diff.remove(cid);
+                        left.advance()?;
+                    }
+                    Ordering::Greater => {
+                        let cid = right.cid()?;
+                        diff.add(cid);
+                        right.advance()?;
+                    }
+                }
+                continue;
+            }
+
+            // Entries only compare on one layer, so the higher walker steps
+            // down, or the lower one moves up where it cannot.
+            if left.layer() > right.layer() {
+                if here == At::Leaf {
+                    let cid = right.cid()?;
+                    diff.add(cid);
+                    right.advance()?;
+                } else {
+                    let cid = left.cid()?;
+                    diff.remove(cid);
+                    left.step_into()?;
+                }
+                continue;
+            }
+            if left.layer() < right.layer() {
+                if there == At::Leaf {
+                    let cid = left.cid()?;
+                    diff.remove(cid);
+                    left.advance()?;
+                } else {
+                    let cid = right.cid()?;
+                    diff.add(cid);
+                    right.step_into()?;
+                }
+                continue;
+            }
+
+            if here == At::Tree && there == At::Tree {
+                let (before, after) = (left.cid()?, right.cid()?);
+                // Whatever hashes the same holds the same, so a subtree the
+                // revision left alone is stepped past unread.
+                if before == after {
+                    left.step_over();
+                    right.step_over();
+                } else {
+                    diff.remove(before);
+                    diff.add(after);
+                    left.step_into()?;
+                    right.step_into()?;
+                }
+            } else if here == At::Tree {
+                let cid = left.cid()?;
+                diff.remove(cid);
+                left.step_into()?;
+            } else {
+                let cid = right.cid()?;
+                diff.add(cid);
+                right.step_into()?;
+            }
+        }
+        Ok(diff.removed.into_iter().collect())
+    }
+
     // Building
     // --------
 
@@ -620,6 +729,192 @@ impl Mst {
     /// This node as it is stored, with every subtree's CID settled first.
     fn node_data(&mut self, reader: &Reader<'_>) -> Result<NodeData, Error> {
         serialize(self.entries(reader)?, reader)
+    }
+}
+
+/// What one revision put in and what it took out, with a block on both sides
+/// taken off each.
+#[derive(Default)]
+struct Diff {
+    added: BTreeSet<Cid>,
+    removed: BTreeSet<Cid>,
+}
+
+impl Diff {
+    fn add(&mut self, cid: Cid) {
+        if !self.removed.remove(&cid) {
+            self.added.insert(cid);
+        }
+    }
+
+    fn remove(&mut self, cid: Cid) {
+        if !self.added.remove(&cid) {
+            self.removed.insert(cid);
+        }
+    }
+}
+
+/// What a walker is on.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum At {
+    Leaf,
+    Tree,
+}
+
+/// Where a walker is: on the root, inside the node its stack ends at, or past
+/// the end.
+enum Cursor {
+    Root(Mst),
+    Node,
+    Done,
+}
+
+/// One node a walk is inside, and how far through it the cursor is.
+struct Level {
+    entries: Vec<Entry>,
+    index: usize,
+    layer: usize,
+}
+
+impl Level {
+    fn of(node: &mut Mst, reader: &Reader<'_>) -> Result<Self, Error> {
+        let layer = node.layer(reader)?;
+        let entries = node.entries(reader)?.clone();
+        Ok(Self {
+            entries,
+            index: 0,
+            layer,
+        })
+    }
+}
+
+/// A cursor over a tree, which steps past a subtree or down into it.
+///
+/// Each walker reads through a reader of its own, so a node both trees hold
+/// is not the repeat a single traversal refuses.
+struct Walker<'a> {
+    reader: Reader<'a>,
+    stack: Vec<Level>,
+    cursor: Cursor,
+    /// The layer the root stands at, which is one above what it holds.
+    above: usize,
+}
+
+impl<'a> Walker<'a> {
+    fn new(store: &'a dyn Store, mut root: Mst) -> Result<Self, Error> {
+        let reader = Reader::new(store);
+        let above = root.layer(&reader)? + 1;
+        Ok(Self {
+            reader,
+            stack: Vec::new(),
+            cursor: Cursor::Root(root),
+            above,
+        })
+    }
+
+    fn entry(&self) -> Option<&Entry> {
+        let level = self.stack.last()?;
+        level.entries.get(level.index)
+    }
+
+    /// What the cursor is on, or `None` once the walk is over.
+    fn at(&self) -> Option<At> {
+        match self.cursor {
+            Cursor::Root(_) => Some(At::Tree),
+            Cursor::Node => match self.entry()? {
+                Entry::Leaf(_) => Some(At::Leaf),
+                Entry::Tree(_) => Some(At::Tree),
+            },
+            Cursor::Done => None,
+        }
+    }
+
+    /// The key under the cursor, where it is on a leaf.
+    fn key(&self) -> Option<&str> {
+        match self.entry()? {
+            Entry::Leaf(leaf) => Some(leaf.key.as_str()),
+            Entry::Tree(_) => None,
+        }
+    }
+
+    /// The layer of the node being walked.
+    fn layer(&self) -> usize {
+        self.stack.last().map_or(self.above, |level| level.layer)
+    }
+
+    /// The block under the cursor.
+    fn cid(&mut self) -> Result<Cid, Error> {
+        match &mut self.cursor {
+            Cursor::Root(root) => root.root_in(&self.reader),
+            Cursor::Done => Err(Error::MalformedNode("a walk past its last entry")),
+            Cursor::Node => {
+                let level = self
+                    .stack
+                    .last_mut()
+                    .ok_or(Error::MalformedNode("a walk inside no node"))?;
+                match level.entries.get_mut(level.index) {
+                    Some(Entry::Leaf(leaf)) => Ok(leaf.value),
+                    Some(Entry::Tree(subtree)) => subtree.root_in(&self.reader),
+                    None => Err(Error::MalformedNode("a walk past its last entry")),
+                }
+            }
+        }
+    }
+
+    /// Moves past what the cursor is on, subtree and all.
+    fn step_over(&mut self) {
+        if matches!(self.cursor, Cursor::Done) {
+            return;
+        }
+        if matches!(self.cursor, Cursor::Root(_)) {
+            self.cursor = Cursor::Done;
+            return;
+        }
+        while let Some(level) = self.stack.last_mut() {
+            level.index += 1;
+            if level.index < level.entries.len() {
+                return;
+            }
+            self.stack.pop();
+        }
+        self.cursor = Cursor::Done;
+    }
+
+    /// Moves down into the subtree the cursor is on.
+    fn step_into(&mut self) -> Result<(), Error> {
+        if self.stack.len() >= MAX_DEPTH {
+            return Err(Error::MalformedNode("a tree deeper than its keys allow"));
+        }
+        let level = match &mut self.cursor {
+            Cursor::Done => return Ok(()),
+            Cursor::Root(root) => Level::of(root, &self.reader)?,
+            Cursor::Node => {
+                let level = self
+                    .stack
+                    .last_mut()
+                    .ok_or(Error::MalformedNode("a walk inside no node"))?;
+                match level.entries.get_mut(level.index) {
+                    Some(Entry::Tree(subtree)) => Level::of(subtree, &self.reader)?,
+                    _ => return Err(Error::MalformedNode("a walk stepping into a leaf")),
+                }
+            }
+        };
+        self.stack.push(level);
+        self.cursor = Cursor::Node;
+        if self.entry().is_none() {
+            self.step_over();
+        }
+        Ok(())
+    }
+
+    /// Moves on, into the subtree the cursor is on where there is one.
+    fn advance(&mut self) -> Result<(), Error> {
+        if self.at() == Some(At::Leaf) {
+            self.step_over();
+            Ok(())
+        } else {
+            self.step_into()
+        }
     }
 }
 

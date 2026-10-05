@@ -1,7 +1,9 @@
 //! The repository layer, against the CIDs the reference publishes.
 
 use manapds::crypto::{Algorithm, Keypair};
-use std::collections::BTreeMap;
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 
 use manapds::repo::{
     BlockMap, Cid, Commit, Error, Ipld, Mst, Repo, Store, VERSION, Write, car, cid_for, decode,
@@ -264,6 +266,131 @@ fn a_walk_to_a_key_ends_at_what_is_there() {
     for cid in &nothing {
         assert!(blocks.contains(cid).expect("a lookup"), "{cid}");
     }
+}
+
+/// A store that remembers every block it was asked to read, which is how a
+/// walk that skipped a subtree is told from one that went through it.
+struct Counted<'a> {
+    blocks: &'a BlockMap,
+    read: RefCell<BTreeSet<Cid>>,
+}
+
+impl Store for Counted<'_> {
+    fn get(&self, cid: &Cid) -> Result<Cow<'_, [u8]>, Error> {
+        self.read.borrow_mut().insert(*cid);
+        self.blocks.get(cid)
+    }
+
+    fn contains(&self, cid: &Cid) -> Result<bool, Error> {
+        self.blocks.contains(cid)
+    }
+}
+
+#[test]
+fn a_diff_steps_past_the_subtrees_a_write_left_alone() {
+    // The tree an insert splits two layers down, so the two keys below sit
+    // under different subtrees of the root.
+    let mut built = tree_of(&[
+        "com.example.record/3jqfcqzm3fo2j",
+        "com.example.record/3jqfcqzm3fp2j",
+        "com.example.record/3jqfcqzm3fr2j",
+        "com.example.record/3jqfcqzm3fs2j",
+        "com.example.record/3jqfcqzm3ft2j",
+        "com.example.record/3jqfcqzm3fx2j",
+        "com.example.record/3jqfcqzm3fz2j",
+        "com.example.record/3jqfcqzm4fc2j",
+        "com.example.record/3jqfcqzm4fd2j",
+        "com.example.record/3jqfcqzm4ff2j",
+        "com.example.record/3jqfcqzm4fg2j",
+        "com.example.record/3jqfcqzm4fh2j",
+    ]);
+    let (root, mut store) = built.unstored_blocks(&BlockMap::new()).expect("blocks");
+
+    let touched = "com.example.record/3jqfcqzm3fo2j";
+    let elsewhere = "com.example.record/3jqfcqzm4fh2j";
+    let prev = Mst::load(root);
+    let mut next = prev
+        .clone()
+        .update(&store, touched, cid_for(b"\xa0"))
+        .expect("updates");
+    store.merge(next.unstored_blocks(&store).expect("blocks").1);
+
+    let counted = Counted {
+        blocks: &store,
+        read: RefCell::new(BTreeSet::new()),
+    };
+    let dropped = next.dropped(&counted, &prev).expect("a diff");
+
+    let path = |key| {
+        Mst::load(root)
+            .cids_for_path(&store, key)
+            .expect("a walk")
+            .into_iter()
+            .collect::<BTreeSet<Cid>>()
+    };
+    let apart: Vec<Cid> = path(elsewhere)
+        .difference(&path(touched))
+        .copied()
+        .filter(|cid| store.contains(cid).expect("a lookup"))
+        .collect();
+    assert_ne!(apart, Vec::new());
+    for cid in apart {
+        assert!(!counted.read.borrow().contains(&cid), "read {cid}");
+        assert!(!dropped.contains(&cid), "dropped {cid}");
+    }
+}
+
+#[test]
+fn a_rebalance_drops_every_node_it_rebuilt() {
+    // Taking the key between them out leaves the two nodes either side to be
+    // merged into one.
+    let mut built = tree_of(&[
+        "com.example.record/3jqfcqzm3fn2j",
+        "com.example.record/3jqfcqzm3fo2j",
+        "com.example.record/3jqfcqzm3fp2j",
+        "com.example.record/3jqfcqzm3fs2j",
+        "com.example.record/3jqfcqzm3ft2j",
+        "com.example.record/3jqfcqzm3fu2j",
+    ]);
+    let (root, mut store) = built.unstored_blocks(&BlockMap::new()).expect("blocks");
+    let nodes: BTreeSet<Cid> = store.iter().map(|(cid, _)| *cid).collect();
+
+    let prev = Mst::load(root);
+    let mut next = prev
+        .clone()
+        .delete(&store, "com.example.record/3jqfcqzm3fs2j")
+        .expect("deletes");
+    store.merge(next.unstored_blocks(&store).expect("blocks").1);
+
+    let dropped: BTreeSet<Cid> = next
+        .dropped(&store, &prev)
+        .expect("a diff")
+        .into_iter()
+        .collect();
+    assert!(nodes.is_subset(&dropped), "{nodes:?} against {dropped:?}");
+}
+
+#[test]
+fn a_key_dropping_a_block_another_key_takes_up_keeps_it() {
+    let store = BlockMap::new();
+    let shared = cid_for(b"\xa0");
+    let (one, two) = (
+        "com.example.record/3jqfcqzm3fo2j",
+        "com.example.record/3jqfcqzm4fh2j",
+    );
+
+    let prev = Mst::empty().add(&store, one, shared).expect("adds");
+    let mut next = prev
+        .clone()
+        .delete(&store, one)
+        .expect("deletes")
+        .add(&store, two, shared)
+        .expect("adds");
+    let (_, mut blocks) = prev.clone().unstored_blocks(&store).expect("blocks");
+    blocks.merge(next.unstored_blocks(&store).expect("blocks").1);
+
+    let dropped = next.dropped(&blocks, &prev).expect("a diff");
+    assert!(!dropped.contains(&shared), "{dropped:?}");
 }
 
 #[test]
