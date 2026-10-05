@@ -38,11 +38,9 @@ const GLOBAL_WINDOW: Duration = Duration::from_mins(5);
 /// dies takes every account down with it.
 const KEYS: usize = 100_000;
 
-/// A sync path large enough that one call would eat a shared budget, so it
-/// is left to the budget its own method holds.
-// todo(getRepo): upstream pairs this exemption with 6000 points per five
-// minutes on the method itself.
-const UNBUDGETED: &str = "/xrpc/com.atproto.sync.getRepo";
+/// What downloading a repository costs, on a budget of its own because one
+/// call is large enough to eat a shared one.
+const REPO: (u32, Duration) = (6000, Duration::from_mins(5));
 
 /// What signing in costs, on two windows at once.
 const SESSION: [(u32, Duration); 2] = [
@@ -68,6 +66,7 @@ pub const DELETE: u32 = 1;
 
 const CREATE_SESSION: &str = "/xrpc/com.atproto.server.createSession";
 const CREATE_ACCOUNT: &str = "/xrpc/com.atproto.server.createAccount";
+const GET_REPO: &str = "/xrpc/com.atproto.sync.getRepo";
 
 /// How much of a sign-in is read to find the account it names.
 const SIGN_IN: usize = 8 * 1024;
@@ -242,6 +241,7 @@ pub struct Limits {
     global: Limiter,
     session: Vec<Limiter>,
     signup: Limiter,
+    repo: Limiter,
     writes: Vec<Limiter>,
     bypass_key: Option<Secret>,
     bypass_ips: Vec<IpAddr>,
@@ -268,6 +268,7 @@ impl Limits {
                 .map(|(points, window)| Limiter::new(points, window))
                 .collect(),
             signup: Limiter::new(SIGNUP.0, SIGNUP.1),
+            repo: Limiter::new(REPO.0, REPO.1),
             writes: WRITES
                 .into_iter()
                 .map(|(points, window)| Limiter::new(points, window))
@@ -285,6 +286,10 @@ impl Limits {
         match request.uri().path() {
             CREATE_ACCOUNT => {
                 let reading = self.signup.consume(caller, 1);
+                (request, vec![reading])
+            }
+            GET_REPO => {
+                let reading = self.repo.consume(caller, 1);
                 (request, vec![reading])
             }
             CREATE_SESSION => {
@@ -349,7 +354,7 @@ pub async fn global(
     }
 
     let key = budget(caller);
-    let shared = (path != UNBUDGETED).then(|| limits.global.consume(&key, 1));
+    let shared = (path != GET_REPO).then(|| limits.global.consume(&key, 1));
 
     // A caller already out of the shared budget is turned away before any other
     // is asked, so a flood cannot fill a table on its way to being refused.

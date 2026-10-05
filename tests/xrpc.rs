@@ -722,7 +722,7 @@ async fn a_caller_past_its_budget_is_refused_and_told_when_to_return() {
 }
 
 #[tokio::test]
-async fn the_one_path_with_its_own_budget_is_not_counted_here() {
+async fn the_one_path_with_its_own_budget_spends_that_and_not_the_shared_one() {
     let mut config = config();
     config.rate_limits = true;
     let router = server::router(context_from(config));
@@ -736,7 +736,13 @@ async fn the_one_path_with_its_own_budget_is_not_counted_here() {
     ));
 
     let response = router.oneshot(request).await.expect("an answer");
-    assert!(response.headers().get("ratelimit-limit").is_none());
+    assert_eq!(
+        response
+            .headers()
+            .get("ratelimit-limit")
+            .and_then(|value| value.to_str().ok()),
+        Some("6000")
+    );
 }
 
 #[tokio::test]
