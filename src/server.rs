@@ -156,7 +156,27 @@ fn blobs(uploads: usize) -> Router<Context> {
         )
 }
 
-#[expect(clippy::too_many_lines, reason = "a table of routes")]
+/// The sync methods that answer about a repository rather than a blob.
+fn sync() -> Router<Context> {
+    Router::new()
+        .route(
+            "/xrpc/com.atproto.sync.getRepo",
+            xrpc::query(sync::get_repo),
+        )
+        .route(
+            "/xrpc/com.atproto.sync.getLatestCommit",
+            xrpc::query(sync::get_latest_commit),
+        )
+        .route(
+            "/xrpc/com.atproto.sync.getRepoStatus",
+            xrpc::query(sync::get_repo_status),
+        )
+        .route(
+            "/xrpc/com.atproto.sync.listRepos",
+            xrpc::query(sync::list_repos),
+        )
+}
+
 fn routes(context: Context) -> Router {
     let limits = context.limits.clone();
     // Only the blob route takes a body this large; every other one is a small
@@ -215,18 +235,7 @@ fn routes(context: Context) -> Router {
             xrpc::procedure(repo::apply_writes),
         )
         .merge(blobs(uploads))
-        .route(
-            "/xrpc/com.atproto.sync.getLatestCommit",
-            xrpc::query(sync::get_latest_commit),
-        )
-        .route(
-            "/xrpc/com.atproto.sync.getRepoStatus",
-            xrpc::query(sync::get_repo_status),
-        )
-        .route(
-            "/xrpc/com.atproto.sync.listRepos",
-            xrpc::query(sync::list_repos),
-        )
+        .merge(sync())
         .route(
             "/xrpc/com.atproto.repo.getRecord",
             xrpc::query(repo::get_record),

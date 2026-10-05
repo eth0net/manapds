@@ -15,7 +15,7 @@ use axum::{
 };
 use manapds::account;
 use manapds::crypto::{Algorithm, Keypair};
-use manapds::repo::{Ipld, Repo, Write};
+use manapds::repo::{Ipld, Repo, Store as _, Write, car};
 use manapds::syntax::{Did, Nsid, RecordKey, TidClock};
 use manapds::xrpc::auth::Tokens;
 use manapds::{server, store, store::keys};
@@ -113,6 +113,13 @@ fn repository(directory: &store::Directory, did: &Did) -> store::Root {
 
 /// One query, answered. None of these needs credentials.
 async fn get(router: &NormalizePath<Router>, path: &str) -> (StatusCode, Value) {
+    let (status, _, body) = fetch(router, path).await;
+    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+}
+
+/// The same, where the answer is bytes rather than JSON, beside the type it
+/// arrived under.
+async fn fetch(router: &NormalizePath<Router>, path: &str) -> (StatusCode, String, Vec<u8>) {
     let mut request = Request::builder()
         .method("GET")
         .uri(path)
@@ -127,10 +134,16 @@ async fn get(router: &NormalizePath<Router>, path: &str) -> (StatusCode, Value) 
         .await
         .expect("the router answers");
     let status = response.status();
+    let mime = response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
     let body = axum::body::to_bytes(response.into_body(), 256 * 1024)
         .await
         .expect("a body");
-    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+    (status, mime, body.to_vec())
 }
 
 /// A blob store for a commit that writes no blobs, which touches no file.
@@ -295,4 +308,121 @@ async fn a_repository_nobody_here_holds_is_refused() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "InvalidRequest");
+}
+
+#[tokio::test]
+async fn a_repository_comes_back_as_a_car_rooted_at_its_commit() {
+    let (router, manager, _data) = served();
+    let written = manager
+        .write(
+            &alice(),
+            vec![record("3jqfcqzm4fc2j", "first").into()],
+            None,
+        )
+        .await
+        .expect("a commit")
+        .expect("a write");
+
+    let (status, mime, body) = fetch(
+        &router,
+        &format!("/xrpc/com.atproto.sync.getRepo?did={}", alice()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(mime, "application/vnd.ipld.car");
+
+    let (root, blocks) = car::read(&body).expect("a car file");
+    assert_eq!(root, written.commit);
+    let record = written.results[0].cid.expect("a record");
+    assert!(blocks.contains(&record).expect("a lookup"));
+
+    // Bob's repository is still where signing up left it, so the two files
+    // hang from different roots.
+    let signed_up = manager
+        .root(&bob())
+        .await
+        .expect("a root")
+        .expect("a repository");
+    let (_, _, other) = fetch(
+        &router,
+        &format!("/xrpc/com.atproto.sync.getRepo?did={}", bob()),
+    )
+    .await;
+    assert_eq!(car::read(&other).expect("a car file").0, signed_up.cid);
+}
+
+#[tokio::test]
+async fn a_download_since_a_revision_carries_only_what_came_after() {
+    let (router, manager, _data) = served();
+    let first = manager
+        .write(
+            &alice(),
+            vec![record("3jqfcqzm4fc2j", "first").into()],
+            None,
+        )
+        .await
+        .expect("a commit")
+        .expect("a write");
+    let second = manager
+        .write(
+            &alice(),
+            vec![record("3jqfcqzm4fc2k", "second").into()],
+            None,
+        )
+        .await
+        .expect("a commit")
+        .expect("a write");
+
+    let (status, _, body) = fetch(
+        &router,
+        &format!(
+            "/xrpc/com.atproto.sync.getRepo?did={}&since={}",
+            alice(),
+            first.rev
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The root is the commit the repository is on either way, so a caller
+    // knows what the blocks it was handed add up to.
+    let (root, blocks) = car::read(&body).expect("a car file");
+    assert_eq!(root, second.commit);
+    assert!(
+        blocks
+            .contains(&second.results[0].cid.expect("a record"))
+            .expect("a lookup")
+    );
+    assert!(
+        !blocks
+            .contains(&first.results[0].cid.expect("a record"))
+            .expect("a lookup")
+    );
+    assert!(!blocks.contains(&first.commit).expect("a lookup"));
+}
+
+#[tokio::test]
+async fn a_download_of_a_repository_nobody_here_holds_is_refused() {
+    let (router, _manager, _data) = served();
+
+    let (status, body) = get(
+        &router,
+        "/xrpc/com.atproto.sync.getRepo?did=did:plc:mav423b24thku7ezkx7yarax",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "RepoNotFound");
+
+    // A revision is a TID and nothing else, so a `since` that is not one is
+    // refused rather than read as the start of time.
+    let (status, body) = get(
+        &router,
+        &format!(
+            "/xrpc/com.atproto.sync.getRepo?did={}&since=nonsense",
+            alice()
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["message"], "Invalid since");
 }

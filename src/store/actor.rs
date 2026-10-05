@@ -300,6 +300,38 @@ impl Actor {
         Ok(Some(std::mem::take(&mut leaving.cleared)))
     }
 
+    /// Every block this repository holds, or only those a revision after
+    /// `since` wrote.
+    ///
+    /// Blocks no revision reaches any more are in here too, since nothing
+    /// collects them.
+    ///
+    /// # Errors
+    ///
+    /// If the read fails, or a row names a block that is not a CID.
+    // todo: hand these back a page at a time, so a large repository is not
+    // held in memory twice over on its way out.
+    pub fn blocks_since(&self, since: Option<&Tid>) -> Result<BlockMap, Error> {
+        let mut blocks = BlockMap::new();
+        let rows = self
+            .db
+            .prepare(
+                r#"select "cid", "content" from "repo_block"
+                   where ?1 is null or "repoRev" > ?1"#,
+            )?
+            .query_map(params![since.map(Tid::as_str)], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (cid, content) in rows {
+            let cid = cid
+                .parse()
+                .map_err(|_| Error::Malformed("a stored block that is not a CID"))?;
+            blocks.insert(cid, content);
+        }
+        Ok(blocks)
+    }
+
     /// The record at a key, if the index holds one there.
     ///
     /// # Errors

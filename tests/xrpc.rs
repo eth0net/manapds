@@ -110,7 +110,7 @@ async fn a_method_this_server_does_not_serve_says_so() {
     let (status, body) = call(
         &router,
         "GET",
-        "/xrpc/com.atproto.sync.getRepo",
+        "/xrpc/com.atproto.sync.subscribeRepos",
         "1.2.3.4:9",
     )
     .await;

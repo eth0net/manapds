@@ -2,12 +2,17 @@
 
 use std::sync::Arc;
 
-use axum::{Json, extract::State};
+use axum::{
+    Json,
+    extract::State,
+    http::header,
+    response::{IntoResponse, Response},
+};
 use serde::{Deserialize, Serialize};
 
 use crate::account::Manager;
 use crate::store;
-use crate::syntax::Did;
+use crate::syntax::{Did, Tid};
 use crate::xrpc::{self, Params};
 
 /// How many repositories a page holds when the caller does not say.
@@ -16,10 +21,20 @@ const PAGE: u32 = 500;
 /// The ceiling on that, however many are asked for.
 const LONGEST_PAGE: u32 = 1000;
 
+/// What every method here that answers with blocks answers as.
+const CAR: &str = "application/vnd.ipld.car";
+
 /// Which repository to answer about.
 #[derive(Debug, Deserialize)]
 pub(crate) struct Wanted {
     did: String,
+}
+
+/// Which repository to export, and how much of it.
+#[derive(Debug, Deserialize)]
+pub(crate) struct Export {
+    did: String,
+    since: Option<String>,
 }
 
 /// Which page of the repositories here to answer with.
@@ -61,6 +76,27 @@ pub(crate) struct Page {
     #[serde(skip_serializing_if = "Option::is_none")]
     cursor: Option<String>,
     repos: Vec<Held>,
+}
+
+/// `com.atproto.sync.getRepo`
+///
+/// # Errors
+///
+/// If the identifier is not a DID or `since` is not a revision, nothing
+/// answers to the identifier, or storage will not answer.
+pub(crate) async fn get_repo(
+    State(accounts): State<Arc<Manager>>,
+    Params(query): Params<Export>,
+) -> xrpc::Result<Response> {
+    let since = query
+        .since
+        .map(|since| {
+            since
+                .parse::<Tid>()
+                .map_err(|_| xrpc::Error::invalid_request("Invalid since"))
+        })
+        .transpose()?;
+    Ok(file(accounts.export(&did(&query.did)?, since).await?))
 }
 
 /// `com.atproto.sync.getLatestCommit`
@@ -151,6 +187,11 @@ fn shown(hosted: store::Hosted) -> Held {
         rev: hosted.root.rev.into_string(),
         active: true,
     }
+}
+
+/// A CAR file, in the answer a method sends it as.
+fn file(car: Vec<u8>) -> Response {
+    ([(header::CONTENT_TYPE, CAR)], car).into_response()
 }
 
 /// The identifier a caller named. The lexicon asks for a DID, so a handle is

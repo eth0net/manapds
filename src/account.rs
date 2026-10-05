@@ -770,6 +770,25 @@ impl Manager {
             .await?)
     }
 
+    /// An account's repository as a CAR file, holding every block or only
+    /// what a revision after `since` wrote.
+    ///
+    /// # Errors
+    ///
+    /// If the account holds no repository, or storage will not answer.
+    pub async fn export(&self, did: &Did, since: Option<Tid>) -> Result<Vec<u8>, Error> {
+        self.opened(did, move |actor| {
+            let root = actor
+                .root()?
+                .ok_or_else(|| Error::NoRepo(actor.did().clone()))?;
+            Ok(repo::car::write(
+                root.cid,
+                &actor.blocks_since(since.as_ref())?,
+            )?)
+        })
+        .await
+    }
+
     /// The record at a key, if the account holds one there.
     ///
     /// # Errors
@@ -983,13 +1002,26 @@ impl Manager {
         did: &Did,
         work: impl FnOnce(&store::Actor) -> Result<T, store::Error> + Send + 'static,
     ) -> Result<T, Error> {
+        self.opened(did, move |actor| Ok(work(actor)?)).await
+    }
+
+    /// The same, for a call that can fail at more than storage.
+    ///
+    /// # Errors
+    ///
+    /// If there is no database to open, or the call itself fails.
+    async fn opened<T: Send + 'static>(
+        &self,
+        did: &Did,
+        work: impl FnOnce(&store::Actor) -> Result<T, Error> + Send + 'static,
+    ) -> Result<T, Error> {
         let path = self.directory.actor_store(did);
         let account = did.clone();
         blocking(move || {
             if !path.exists() {
                 return Err(Error::NoRepo(account));
             }
-            Ok(work(&store::Actor::open(&path, account)?)?)
+            work(&store::Actor::open(&path, account)?)
         })
         .await
     }
