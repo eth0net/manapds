@@ -1546,3 +1546,63 @@ fn a_blob_nothing_ever_named_is_swept_and_one_a_record_holds_is_not() {
     assert_eq!(store.blob(&held.cid).expect("reads"), Some(held));
     assert_eq!(store.blob(&loose.cid).expect("reads"), None);
 }
+
+#[test]
+fn a_commit_hands_back_the_uploads_it_took_and_the_blobs_it_let_go() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let blobs = Directory::new(home.path()).blobs();
+    let blob = Blob {
+        cid: manapds::store::blobs::cid_for(b"held"),
+        mime: "image/png".to_owned(),
+        size: 4,
+    };
+    blobs
+        .put(&account(), "heldkey", &blob.cid, b"held")
+        .expect("stores");
+
+    let mut store = Actor::memory(account()).expect("opens");
+    store.add_blob(&blob, "heldkey").expect("writes");
+
+    let key = Keypair::generate(Algorithm::Secp256k1);
+    let mut clock = TidClock::new();
+    let (repo, blocks) = Repo::create(account(), &key, &mut clock).expect("creates");
+    let rkey = "3jqfcqzm4fc2j".parse().expect("a record key");
+    let collection = "com.example.record".parse().expect("an NSID");
+    let taken = store
+        .commit(
+            None,
+            &at(&repo),
+            &blocks,
+            &[Indexed::Put {
+                collection,
+                rkey,
+                cid: repo::cid_for(&repo::encode(&post("first")).expect("encodes")),
+                links: Vec::new(),
+                blobs: vec![blob.clone()],
+            }],
+            &blobs,
+        )
+        .expect("commits")
+        .expect("lands");
+
+    // Without these the upload's name is never dropped, and because it is a
+    // link to the same bytes the blob is served from, nothing can free them.
+    assert_eq!(taken.taken, vec!["heldkey".to_owned()]);
+    assert_eq!(taken.orphaned, []);
+
+    let let_go = store
+        .commit(
+            Some(&at(&repo)),
+            &at(&repo),
+            &blocks,
+            &[Indexed::Delete {
+                collection: "com.example.record".parse().expect("an NSID"),
+                rkey: "3jqfcqzm4fc2j".parse().expect("a record key"),
+            }],
+            &blobs,
+        )
+        .expect("commits")
+        .expect("lands");
+
+    assert_eq!(let_go.orphaned, vec![blob.cid]);
+}

@@ -241,7 +241,6 @@ impl Actor {
     ) -> Result<Option<Committed>, Error> {
         let stamp = jiff::Timestamp::now();
         let did = &self.did;
-        let mut cleared = Committed::default();
         let transaction = self.db.transaction()?;
         {
             let mut insert = transaction.prepare(
@@ -265,7 +264,7 @@ impl Actor {
                 continue;
             }
             transaction.execute(r#"delete from "blob" where "cid" = ?1"#, params![cid])?;
-            cleared.orphaned.push(
+            leaving.cleared.orphaned.push(
                 cid.parse()
                     .map_err(|_| Error::Malformed("a blob that is not a CID"))?,
             );
@@ -298,7 +297,7 @@ impl Actor {
             return Ok(None);
         }
         transaction.commit()?;
-        Ok(Some(cleared))
+        Ok(Some(std::mem::take(&mut leaving.cleared)))
     }
 
     /// The record at a key, if the index holds one there.
