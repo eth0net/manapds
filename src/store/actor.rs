@@ -189,9 +189,9 @@ impl Actor {
         E: From<Error>,
     {
         let transaction = self.db.unchecked_transaction().map_err(Error::from)?;
-        let answer = work(self)?;
+        let answer = work(self);
         transaction.finish().map_err(Error::from)?;
-        Ok(answer)
+        answer
     }
 
     /// The commit the repository is on, or `None` before the first one.

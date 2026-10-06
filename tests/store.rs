@@ -1666,3 +1666,52 @@ fn a_record_that_names_no_collection_is_refused_before_it_can_be_a_node() {
         assert!(refused.is_err(), "took a record naming no collection");
     }
 }
+
+#[test]
+fn a_read_sees_one_revision_even_while_another_lands() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let path = Directory::new(home.path()).actor_store(&account());
+    let key = Keypair::generate(Algorithm::Secp256k1);
+    let mut clock = TidClock::new();
+
+    let (mut repo, blocks) = Repo::create(account(), &key, &mut clock).expect("creates");
+    let mut store = Actor::open(&path, account()).expect("opens");
+    store
+        .commit(None, &at(&repo), genesis(&blocks), &[], &blobs())
+        .expect("commits");
+    let before = at(&repo);
+
+    // A second handle on the same file, which is what a reader and a writer
+    // are: the write lands partway through the read's two queries.
+    let reader = Actor::open(&path, account()).expect("opens again");
+    let held = reader
+        .reading(|reader| {
+            let root = reader.root()?.expect("a root");
+
+            let written = repo
+                .apply(
+                    &store,
+                    &[create("3jqfcqzm4fa2j", "first")],
+                    &key,
+                    &mut clock,
+                )
+                .expect("applies");
+            store
+                .commit(
+                    Some(&before),
+                    &at(&repo),
+                    stored(&written),
+                    &[indexed("3jqfcqzm4fa2j", "first")],
+                    &blobs(),
+                )
+                .expect("commits");
+
+            // Still the revision the read opened on, not the one that landed.
+            Ok::<_, manapds::store::Error>((root, reader.root()?.expect("a root")))
+        })
+        .expect("reads");
+
+    assert_eq!(held.0.cid, held.1.cid);
+    assert_eq!(held.0.cid, before.cid);
+    assert_ne!(at(&repo).cid, before.cid);
+}
