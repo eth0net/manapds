@@ -1573,9 +1573,8 @@ async fn the_blobs_an_account_is_missing_are_asked_for_with_its_own_session() {
 async fn a_record_is_given_the_collection_it_is_written_to_and_may_not_disagree() {
     let (router, manager, _data) = served();
 
-    // Left out, so the server fills it in. The key being there is what keeps a
-    // record from ever encoding as one of the tree's own nodes, which is what
-    // lets a dropped block be taken on the record index alone.
+    // Left out, so the server fills it in; `docs/porting.md` has what the key
+    // being there settles besides the lexicon.
     let (status, written) = post(
         &router,
         "/xrpc/com.atproto.repo.createRecord",

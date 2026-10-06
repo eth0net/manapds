@@ -219,3 +219,51 @@ Both the did:key method and atproto specify the compressed point, and nothing
 in the network emits anything else, so this refuses only what was already
 malformed. The reason to be strict rather than generous is that accepting both
 would give one key two spellings, and therefore one account two DIDs.
+
+### A block two records share outlives the first of them
+
+Both servers collect the blocks a revision drops, and both have to answer what
+happens when two keys hold byte-identical records and one is deleted. Upstream
+filters its removal set against the record table before deleting; here the same
+question is asked inside the delete, which needs no list of touched URIs to
+assemble and no exclusion to get right.
+
+The one case upstream does not cover is a key updated in place: `leafUpdate`
+records the old block as removed without the reconcile its neighbors get, so
+two keys swapping identical values in one commit lose both blocks while both
+are still held. Here an update is a removal and an addition, which cancel.
+
+### A record carries the collection it is written to
+
+Both servers stamp `$type` on a record that arrives without one and refuse a
+record that names a different collection. Upstream does it for the lexicon's
+sake. Here it also keeps a record from ever encoding as one of the tree's own
+nodes, which is what lets a dropped block be taken on the record index alone.
+
+### A blob is written where it is served from only by the commit that takes it
+
+Upstream uploads to a temporary key and renames onto the permanent name when a
+record claims it. Here the claim is a hard link, because a rename would leave
+nothing behind for a second attempt and this server retries a commit that loses
+the compare-and-swap. The upload is dropped once the commit is on disk.
+
+Upstream has nothing that sweeps a blob no record ever claimed, so the window
+one is kept for has no counterpart to inherit; `architecture.md` has the number
+and why.
+
+### A page carries a cursor only when there is another page
+
+Upstream returns one whenever a page has any rows, so a crawl ends with a call
+that comes back empty. Every paged method here omits it on a short page, which
+is the convention `listRecords` already set.
+
+A client that loops until the cursor is absent behaves the same against either.
+One that stores the last cursor to resume later gets nothing to store here, and
+re-enumerates.
+
+### A limit outside its range is clamped rather than refused
+
+The lexicons give every paged method a minimum and a maximum, and upstream
+answers `InvalidRequest` outside them. Here the number is brought into range.
+A client probing for its limits learns something different from each server,
+and one asking for more than it may have is served rather than argued with.
