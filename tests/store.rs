@@ -92,7 +92,10 @@ fn create_in(collection: &str, rkey: &str, text: &str) -> Write {
     Write::Create {
         collection: collection.parse::<Nsid>().expect("an NSID"),
         rkey: rkey.parse::<RecordKey>().expect("a record key"),
-        record: post(text),
+        record: Ipld::Map(BTreeMap::from([
+            ("$type".to_owned(), Ipld::String(collection.to_owned())),
+            ("text".to_owned(), Ipld::String(text.to_owned())),
+        ])),
     }
 }
 
@@ -1621,4 +1624,45 @@ fn a_commit_hands_back_the_uploads_it_took_and_the_blobs_it_let_go() {
         .expect("lands");
 
     assert_eq!(let_go.orphaned, vec![blob.cid]);
+}
+
+#[test]
+fn a_record_that_names_no_collection_is_refused_before_it_can_be_a_node() {
+    let key = Keypair::generate(Algorithm::Secp256k1);
+    let mut clock = TidClock::new();
+    let (mut repo, blocks) = Repo::create(account(), &key, &mut clock).expect("creates");
+    let mut store = Actor::memory(account()).expect("opens");
+    store
+        .commit(None, &at(&repo), genesis(&blocks), &[], &blobs())
+        .expect("commits");
+
+    // A record shaped like a node of the tree holding it. Taking one in would
+    // let a later delete of it take the node, and nothing downstream could
+    // tell the two apart.
+    for shape in [
+        Ipld::Map(BTreeMap::from([
+            ("e".to_owned(), Ipld::List(Vec::new())),
+            ("l".to_owned(), Ipld::Null),
+        ])),
+        Ipld::Map(BTreeMap::from([(
+            "text".to_owned(),
+            Ipld::String("no type at all".to_owned()),
+        )])),
+        Ipld::Map(BTreeMap::from([(
+            "$type".to_owned(),
+            Ipld::String("com.example.other".to_owned()),
+        )])),
+    ] {
+        let refused = repo.apply(
+            &store,
+            &[Write::Create {
+                collection: "com.example.record".parse().expect("an NSID"),
+                rkey: "3jqfcqzm4fa2j".parse().expect("a record key"),
+                record: shape,
+            }],
+            &key,
+            &mut clock,
+        );
+        assert!(refused.is_err(), "took a record naming no collection");
+    }
 }

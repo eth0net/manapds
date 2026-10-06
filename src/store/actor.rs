@@ -269,9 +269,9 @@ impl Actor {
         let kept = Self::index(&transaction, blobs, did, root, records, &stamp, leaving)?;
 
         // Indexed first, because the index is what says whether some other
-        // key still points at a block this one let go of. A tree node is never
-        // anybody's by this reckoning, and never needs to be: a record carries
-        // the collection it is in, so it cannot encode as one.
+        // key still points at a block this one let go of. A node of the tree
+        // is never anybody's by this reckoning, and a record cannot be mistaken
+        // for one: `Repo::apply` refuses a record that names no collection.
         {
             let mut forget = transaction.prepare(
                 r#"delete from "repo_block" where "cid" = ?1

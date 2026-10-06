@@ -222,6 +222,18 @@ impl Repo {
         keypair: &Keypair,
         clock: &mut TidClock,
     ) -> Result<(BlockMap, Vec<Cid>), Error> {
+        // A record names the collection it is in, which is also what keeps one
+        // from encoding as a node of the tree holding it: a block that is both
+        // is let go of as a record and still reached as a node.
+        for write in writes {
+            if let Some(Ipld::Map(fields)) = write.record() {
+                match fields.get("$type") {
+                    Some(Ipld::String(named)) if named == write.target().0.as_str() => {}
+                    _ => return Err(Error::NotRecordData("a record that names no collection")),
+                }
+            }
+        }
+
         // Every record these writes encode, against the key each one ends at:
         // a batch that writes one key twice leaves the first block reachable
         // from nothing, and storing it would be storing rubbish.
