@@ -1568,3 +1568,55 @@ async fn the_blobs_an_account_is_missing_are_asked_for_with_its_own_session() {
     let (status, refused) = get(&router, "/xrpc/com.atproto.repo.listMissingBlobs").await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{refused}");
 }
+
+#[tokio::test]
+async fn a_record_is_given_the_collection_it_is_written_to_and_may_not_disagree() {
+    let (router, manager, _data) = served();
+
+    // Left out, so the server fills it in. The key being there is what keeps a
+    // record from ever encoding as one of the tree's own nodes, which is what
+    // lets a dropped block be taken on the record index alone.
+    let (status, written) = post(
+        &router,
+        "/xrpc/com.atproto.repo.createRecord",
+        serde_json::json!({
+            "repo": account().as_str(),
+            "collection": "com.example.record",
+            "rkey": "3jqfcqzm4fa2j",
+            "record": { "text": "no type of its own" },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{written}");
+
+    let held = manager
+        .record(
+            &account(),
+            &"com.example.record".parse().expect("an NSID"),
+            &"3jqfcqzm4fa2j".parse().expect("a record key"),
+        )
+        .await
+        .expect("reads")
+        .expect("a record");
+    let Ipld::Map(fields) = manapds::repo::decode(&held.value).expect("decodes") else {
+        panic!("a record is a map");
+    };
+    assert_eq!(
+        fields.get("$type"),
+        Some(&Ipld::String("com.example.record".to_owned()))
+    );
+
+    // Named as something else, which is the caller contradicting themselves.
+    let (status, refused) = post(
+        &router,
+        "/xrpc/com.atproto.repo.createRecord",
+        serde_json::json!({
+            "repo": account().as_str(),
+            "collection": "com.example.record",
+            "rkey": "3jqfcqzm4fb2j",
+            "record": { "$type": "com.example.other", "text": "mismatched" },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+}
