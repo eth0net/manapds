@@ -53,7 +53,9 @@ pub struct Root {
 pub struct Blocks<'a> {
     /// Everything that has to be stored before the revision can be read.
     pub written: &'a BlockMap,
-    /// Everything the revision before it reached and this one does not.
+    /// Everything the revision before it reached and this one does not. Only
+    /// meaningful beside the same revision's index, which is what says whether
+    /// a block is still somebody's.
     pub dropped: &'a [Cid],
 }
 
@@ -267,7 +269,9 @@ impl Actor {
         let kept = Self::index(&transaction, blobs, did, root, records, &stamp, leaving)?;
 
         // Indexed first, because the index is what says whether some other
-        // key still points at a block this one let go of.
+        // key still points at a block this one let go of. A tree node is never
+        // anybody's by this reckoning, and never needs to be: a record carries
+        // the collection it is in, so it cannot encode as one.
         {
             let mut forget = transaction.prepare(
                 r#"delete from "repo_block" where "cid" = ?1
@@ -324,8 +328,8 @@ impl Actor {
     /// Every block this repository holds, or only those a revision after
     /// `since` wrote.
     ///
-    /// Blocks no revision reaches any more are in here too, since nothing
-    /// collects them.
+    /// The commit each revision superseded is in here too, which is the one
+    /// kind of block nothing collects.
     ///
     /// # Errors
     ///
