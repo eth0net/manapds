@@ -780,3 +780,41 @@ async fn a_download_of_a_repository_nobody_here_holds_is_refused() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["message"], "Invalid since");
 }
+
+#[tokio::test]
+async fn a_repository_hands_over_the_commit_it_is_on_and_not_the_ones_before() {
+    let (router, manager, _data) = served();
+    let mut superseded = Vec::new();
+    for rkey in ["3jqfcqzm4fa2j", "3jqfcqzm4fb2j", "3jqfcqzm4fc2j"] {
+        superseded.push(
+            manager
+                .root(&alice())
+                .await
+                .expect("a root")
+                .expect("a repository")
+                .cid,
+        );
+        manager
+            .write(&alice(), vec![record(rkey, "a post").into()], None)
+            .await
+            .expect("a commit")
+            .expect("a write");
+    }
+
+    let (_, _, body) = fetch(
+        &router,
+        &format!("/xrpc/com.atproto.sync.getRepo?did={}", alice()),
+    )
+    .await;
+    let (root, blocks) = car::read(&body).expect("a car file");
+
+    // Each revision is reached only by the one that supersedes it, so the file
+    // would otherwise grow by a commit for every write ever made.
+    for old in superseded {
+        assert_ne!(old, root);
+        assert!(
+            !blocks.contains(&old).expect("a lookup"),
+            "{old} is still in"
+        );
+    }
+}
