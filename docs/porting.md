@@ -267,3 +267,15 @@ The lexicons give every paged method a minimum and a maximum, and upstream
 answers `InvalidRequest` outside them. Here the number is brought into range.
 A client probing for its limits learns something different from each server,
 and one asking for more than it may have is served rather than argued with.
+
+### A block nothing reaches stops being answered for
+
+Upstream keeps every block a repository ever held, so asking it for a commit
+three revisions old still works. Here a revision is let go of as the one after
+it is signed, and `getBlocks` refuses what it no longer holds.
+
+A caller that takes a root from `getLatestCommit` and asks for it after the
+account has written again gets `NoBlocks` rather than the block. Nothing in the
+protocol promises an old revision stays fetchable, and the alternative is a
+block store that only grows, but a consumer written against the other server
+may not have had to think about the window before.
