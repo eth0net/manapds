@@ -786,13 +786,15 @@ impl Manager {
     /// If the account holds no repository, or storage will not answer.
     pub async fn export(&self, did: &Did, since: Option<Tid>) -> Result<Vec<u8>, Error> {
         self.opened(did, move |actor| {
-            let root = actor
-                .root()?
-                .ok_or_else(|| Error::NoRepo(actor.did().clone()))?;
-            Ok(repo::car::write(
-                root.cid,
-                &actor.blocks_since(since.as_ref())?,
-            )?)
+            actor.reading(|actor| {
+                let root = actor
+                    .root()?
+                    .ok_or_else(|| Error::NoRepo(actor.did().clone()))?;
+                Ok(repo::car::write(
+                    root.cid,
+                    &actor.blocks_since(since.as_ref())?,
+                )?)
+            })
         })
         .await
     }
@@ -835,17 +837,19 @@ impl Manager {
     ) -> Result<Vec<u8>, Error> {
         let (collection, rkey) = (collection.clone(), rkey.clone());
         self.opened(did, move |actor| {
-            let root = actor
-                .root()?
-                .ok_or_else(|| Error::NoRepo(actor.did().clone()))?;
-            let mut cids = vec![root.cid];
-            cids.extend(Repo::load(actor, root.cid)?.proof(actor, &collection, &rkey)?);
+            actor.reading(|actor| {
+                let root = actor
+                    .root()?
+                    .ok_or_else(|| Error::NoRepo(actor.did().clone()))?;
+                let mut cids = vec![root.cid];
+                cids.extend(Repo::load(actor, root.cid)?.proof(actor, &collection, &rkey)?);
 
-            let (blocks, missing) = actor.blocks(&cids)?;
-            if let Some(cid) = missing.first() {
-                return Err(repo::Error::MissingBlock(*cid).into());
-            }
-            Ok(repo::car::write(root.cid, &blocks)?)
+                let (blocks, missing) = actor.blocks(&cids)?;
+                if let Some(cid) = missing.first() {
+                    return Err(repo::Error::MissingBlock(*cid).into());
+                }
+                Ok(repo::car::write(root.cid, &blocks)?)
+            })
         })
         .await
     }

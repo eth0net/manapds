@@ -176,6 +176,24 @@ impl Actor {
         })
     }
 
+    /// Runs a read against one snapshot of the database.
+    ///
+    /// Two queries outside one are two moments, and a write landing between
+    /// them can leave the second answering for a revision the first never saw.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the read gives back, or a transaction that will not open.
+    pub fn reading<T, E>(&self, work: impl FnOnce(&Self) -> Result<T, E>) -> Result<T, E>
+    where
+        E: From<Error>,
+    {
+        let transaction = self.db.unchecked_transaction().map_err(Error::from)?;
+        let answer = work(self)?;
+        transaction.finish().map_err(Error::from)?;
+        Ok(answer)
+    }
+
     /// The commit the repository is on, or `None` before the first one.
     ///
     /// # Errors
