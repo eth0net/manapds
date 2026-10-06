@@ -265,10 +265,7 @@ impl Repo {
 
         let (root, tree) = data.unstored_blocks(store)?;
         blocks.merge(tree);
-        // The commit this one supersedes goes with them: nothing reaches a
-        // revision once the one after it is signed.
         let mut dropped = data.dropped(store, &self.data)?;
-        dropped.push(self.cid);
         let commit = Commit::sign(
             self.commit.did.clone(),
             clock
@@ -278,7 +275,14 @@ impl Repo {
             keypair,
         )?;
 
+        let superseded = self.cid;
         self.cid = blocks.add(&commit)?;
+        // Nothing reaches a revision once the one after it is signed. Asked
+        // rather than assumed, because a revision that came out the same would
+        // otherwise be written and taken back in one transaction.
+        if self.cid != superseded {
+            dropped.push(superseded);
+        }
         self.commit = commit;
         self.data = data;
         Ok((blocks, dropped))
