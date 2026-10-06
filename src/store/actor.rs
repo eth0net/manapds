@@ -328,9 +328,6 @@ impl Actor {
     /// Every block this repository holds, or only those a revision after
     /// `since` wrote.
     ///
-    /// The commit each revision superseded is in here too, which is the one
-    /// kind of block nothing collects.
-    ///
     /// # Errors
     ///
     /// If the read fails, or a row names a block that is not a CID.
