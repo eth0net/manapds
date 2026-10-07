@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+use crate::crypto::PublicKey;
 use crate::syntax::Did;
 
 /// What went wrong reading or writing storage.
@@ -137,13 +138,17 @@ impl Directory {
         self.0.join("did_cache.sqlite")
     }
 
+    /// Everything belonging to an account rather than to the server.
+    fn actors(&self) -> PathBuf {
+        self.0.join("actors")
+    }
+
     /// One account's directory, under a shard so that no directory holds every
     /// account at once.
     #[must_use]
     pub fn actor(&self, did: &Did) -> PathBuf {
         let hash = Sha256::digest(did.as_str().as_bytes());
-        self.0
-            .join("actors")
+        self.actors()
             .join(format!("{:02x}", hash[0]))
             .join(did.as_str())
     }
@@ -158,6 +163,13 @@ impl Directory {
     #[must_use]
     pub fn actor_key(&self, did: &Did) -> PathBuf {
         self.actor(did).join("key")
+    }
+
+    /// A signing key under its own identifier, held there while no account
+    /// names it yet.
+    #[must_use]
+    pub fn reserved_key(&self, key: &PublicKey) -> PathBuf {
+        self.actors().join("reserved_keys").join(key.to_string())
     }
 
     /// Every account's blobs. Named for the blocks it does not hold, because

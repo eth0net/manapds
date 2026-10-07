@@ -194,6 +194,11 @@ Blobs are files on disk, addressed by CID under a per-account directory. A
 blob is immutable and content-addressed, so there is nothing a database gives
 it but overhead.
 
+`reserved_keys/` sits one level up from the shards and holds a signing key
+under its own `did:key` for the stretch where the key exists and no account
+names it yet. An entry leaves when the account has its own copy, or with the
+rest of a signup that was taken back out.
+
 The data directory needs a POSIX filesystem. An account's files sit under its
 DID, a DID has colons in it, and Windows will not have a colon in a path
 component — so this runs where the reference runs and not on Windows, which

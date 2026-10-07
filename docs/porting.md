@@ -295,3 +295,18 @@ account has written again gets `NoBlocks` rather than the block. Nothing in the
 protocol promises an old revision stays fetchable, and the alternative is a
 block store that only grows, but a consumer written against the other server
 may not have had to think about the window before.
+
+### A reservation is a signup's, not an entryway's
+
+Upstream fills `reserved_keys/` from `reserveSigningKey`, which an entryway
+calls to learn a key's identifier before the DID that will carry it exists, and
+`createAccount` clears the entry once the account is made. Nothing here serves
+that method and no caller brings a DID, so a reservation can only ever be about
+a signup this server is in the middle of: it goes in as the signup starts and
+comes out at whichever end the signup reaches.
+
+That makes the rollback the difference. Upstream leaves a reservation standing
+when a signup fails, because the entryway that asked for it still holds the
+identifier it derived. Here nothing outside the signup knows the key, so a
+discarded signup takes it along with everything else and leaves a directory a
+second attempt finds clean.

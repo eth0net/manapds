@@ -614,6 +614,69 @@ async fn signing_up_writes_an_identity_a_repository_and_a_session() {
     assert!(sent[0].1.contains("alice.pds.test"), "{}", sent[0].1);
 }
 
+/// Every reserved key, by name, which is a `did:key`.
+fn reservations(data: &Path) -> Vec<String> {
+    let at = data.join("actors").join("reserved_keys");
+    match std::fs::read_dir(at) {
+        Ok(entries) => entries
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn a_key_is_reserved_for_as_long_as_no_account_names_it() {
+    let data = tempfile::tempdir().expect("a directory");
+    let midway: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&midway);
+    let path = data.path().to_path_buf();
+    let router = axum::Router::new().fallback(move || {
+        let recorded = Arc::clone(&recorded);
+        let path = path.clone();
+        async move {
+            recorded
+                .lock()
+                .expect("nothing panicked while holding it")
+                .extend(reservations(&path));
+            ""
+        }
+    });
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("a port");
+    let url = format!(
+        "http://127.0.0.1:{}",
+        listener.local_addr().expect("an address").port()
+    );
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+
+    let config = common::config("pds.test", data.path(), &url);
+    let manager = account::Manager::new(
+        Arc::new(config),
+        store::Accounts::memory().expect("a database"),
+        store::Sequencer::memory().expect("a log"),
+        tokens(),
+    );
+    let created = manager
+        .create(&signup("alice.pds.test"))
+        .await
+        .expect("an account");
+
+    // The reservation stands while the identifier is being registered, and
+    // names the key the account ends up holding.
+    let key = store::keys::read(&store::Directory::new(data.path()).actor_key(&created.did))
+        .expect("a signing key");
+    assert_eq!(
+        midway.lock().expect("nothing panicked").clone(),
+        vec![key.public_key().to_string()]
+    );
+    assert_eq!(reservations(data.path()), Vec::<String>::new());
+}
+
 #[tokio::test]
 async fn a_signup_the_directory_will_not_take_leaves_nothing_behind() {
     let data = tempfile::tempdir().expect("a directory");

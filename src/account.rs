@@ -10,7 +10,7 @@ pub mod handle;
 pub mod password;
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
@@ -435,9 +435,11 @@ impl Manager {
 
         // Armed across every await below: a dropped request leaves by a path
         // that returning an error never passes through.
+        let reserved = self.directory.reserved_key(&signing_key.public_key());
         let mut undo = Undo {
             manager: self,
             did: did.clone(),
+            reserved: reserved.clone(),
             rollback: Rollback::Discard,
         };
         let (credentials, blocks, commit, rev) =
@@ -459,6 +461,10 @@ impl Manager {
         // that fails from here is worth a log line and not worth deleting an
         // account the rest of the network can already see.
         undo.done();
+
+        if let Err(error) = release(&reserved).await {
+            tracing::error!(%did, %error, "a signing key was left reserved");
+        }
 
         // todo: nothing tries this again, so a consumer never learns about an
         // account whose entries were refused.
@@ -560,12 +566,14 @@ impl Manager {
         did: &Did,
         signing_key: &Keypair,
     ) -> Result<(store::Root, repo::BlockMap), Error> {
+        let reserved = self.directory.reserved_key(&signing_key.public_key());
         let key = self.directory.actor_key(did);
         let path = self.directory.actor_store(did);
         let blobs = self.directory.blobs();
         let (did, signing_key) = (did.clone(), signing_key.clone());
         let clock = Arc::clone(&self.clock);
         blocking(move || {
+            store::keys::write(&reserved, &signing_key)?;
             store::keys::write(&key, &signing_key)?;
             let mut actor = store::Actor::open(&path, did.clone())?;
             let (repo, blocks) = Repo::create(
@@ -613,9 +621,12 @@ impl Manager {
 
     /// Takes a half-finished signup back out, best effort: what is left behind
     /// is worth a log line and never worth failing a second attempt.
-    fn discard(&self, did: &Did) {
+    fn discard(&self, did: &Did, reserved: &Path) {
         if let Err(error) = self.locked().delete(did) {
             tracing::error!(%did, %error, "could not undo a failed signup");
+        }
+        if let Err(error) = store::keys::remove(reserved) {
+            tracing::error!(%did, %error, "could not unreserve a failed signup's key");
         }
         if let Err(error) = std::fs::remove_dir_all(self.directory.actor(did))
             && error.kind() != std::io::ErrorKind::NotFound
@@ -1909,6 +1920,7 @@ fn remaining(budget: Duration, taken: Duration) -> Duration {
 struct Undo<'a> {
     manager: &'a Manager,
     did: Did,
+    reserved: PathBuf,
     rollback: Rollback,
 }
 
@@ -1944,7 +1956,7 @@ impl Undo<'_> {
 impl Drop for Undo<'_> {
     fn drop(&mut self) {
         match self.rollback {
-            Rollback::Discard => self.manager.discard(&self.did),
+            Rollback::Discard => self.manager.discard(&self.did, &self.reserved),
             // todo: retiring the identifier is an await and this is not, so a
             // caller that hung up leaves a name the network never hears of.
             Rollback::Keep => tracing::error!(
@@ -1954,6 +1966,13 @@ impl Drop for Undo<'_> {
             Rollback::Nothing => {}
         }
     }
+}
+
+/// Takes a signing key out of the reservations, the account's own copy being
+/// the one everything reads from here.
+async fn release(reserved: &Path) -> Result<(), store::Error> {
+    let reserved = reserved.to_path_buf();
+    blocking(move || store::keys::remove(&reserved)).await
 }
 
 /// How many passwords may be hashed at once.

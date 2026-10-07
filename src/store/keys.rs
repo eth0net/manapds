@@ -53,3 +53,15 @@ pub fn write(path: &Path, keypair: &Keypair) -> Result<(), Error> {
     }
     Ok(())
 }
+
+/// Takes a key out, and is content to find none there.
+///
+/// # Errors
+///
+/// If one is there and will not come out.
+pub fn remove(path: &Path) -> Result<(), Error> {
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
+        _ => Ok(()),
+    }
+}
