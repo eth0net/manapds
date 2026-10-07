@@ -1,13 +1,14 @@
 use std::error::Error;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use axum::ServiceExt;
 use clap::{Parser, Subcommand};
 use manapds::{
     config::{Config, Secret},
     crypto::{self, Algorithm, Keypair},
-    server,
+    server, store,
 };
 use tokio::{net::TcpListener, signal};
 use tracing_subscriber::{EnvFilter, fmt};
@@ -88,10 +89,23 @@ async fn serve() -> Result<(), Box<dyn Error>> {
     let config = Config::from_env()?;
     let address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.port));
     let hostname = config.hostname.clone();
+    let directory = store::Directory::new(config.data_directory.clone());
+    let (_running, stopped) = store::Running::take(&directory)?;
     let context = server::Context::open(config)?;
     let listener = TcpListener::bind(address).await?;
 
     tracing::info!(%address, %hostname, "listening");
+    if stopped {
+        // Spawned behind the socket rather than awaited; the architecture doc
+        // has why.
+        let accounts = Arc::clone(&context.accounts);
+        tokio::spawn(async move {
+            match accounts.reconcile().await {
+                Ok(taken) => tracing::info!(taken, "reconciled after an unclean stop"),
+                Err(error) => tracing::error!(%error, "the blobs on disk were not reconciled"),
+            }
+        });
+    }
     // The connecting address is carried into the request so that rate limits
     // have someone to count against.
     let service = ServiceExt::<axum::extract::Request>::into_make_service_with_connect_info::<

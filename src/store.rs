@@ -124,6 +124,13 @@ impl Directory {
         self.0.join("sequencer.sqlite")
     }
 
+    /// The file a running server holds; `docs/architecture.md` has what one
+    /// left behind means.
+    #[must_use]
+    pub fn running(&self) -> PathBuf {
+        self.0.join("running")
+    }
+
     /// Resolved DID documents, held so the directory is not asked twice.
     #[must_use]
     pub fn did_cache(&self) -> PathBuf {
@@ -164,5 +171,33 @@ impl Directory {
 impl AsRef<Path> for Directory {
     fn as_ref(&self) -> &Path {
         &self.0
+    }
+}
+
+/// A server's hold on a data directory, taken at start and given up on the
+/// way out.
+#[derive(Debug)]
+pub struct Running(PathBuf);
+
+impl Running {
+    /// Takes the marker, saying whether one was already there — which is a
+    /// server that never got to let go of it.
+    ///
+    /// # Errors
+    ///
+    /// If the data directory cannot be made or written to.
+    pub fn take(directory: &Directory) -> Result<(Self, bool), Error> {
+        self::directory(&directory.0)?;
+        let path = directory.running();
+        let held = path.try_exists()?;
+        // The pid, for whoever finds one left behind.
+        std::fs::write(&path, std::process::id().to_string())?;
+        Ok((Self(path), held))
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        drop(std::fs::remove_file(&self.0));
     }
 }

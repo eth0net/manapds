@@ -171,6 +171,18 @@ row was dropped before anything unlinked it. `manapds reconcile` is the whole
 of it on demand, for an operator who suspects something and can stop the
 server first.
 
+What runs it otherwise is a marker in the data directory, written at start and
+removed on the way out. One there at start says the last run never got to
+remove it, so the walk goes in the background once the socket is open, where
+nothing waits on it. A leftover `-wal` beside a database would cost nothing to
+look for and would not be an honest signal: whether a clean close removes one
+turns on the journal mode and on who else has the file open.
+
+That marker is what makes one server per data directory load-bearing rather
+than incidental. A second one started against the same directory finds the
+first's marker, walks for no reason, and removes the marker when it stops — so
+the first can be killed afterwards and the next start will see nothing wrong.
+
 An upload sits under a name of its own until a record takes it, and the name
 it is served from is written only by the commit that takes it. That is what
 keeps an upload and a delete of the same bytes from crossing: nothing but a

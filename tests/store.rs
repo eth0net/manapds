@@ -7,7 +7,7 @@ use manapds::crypto::{Algorithm, Keypair};
 use manapds::repo::{self, Ipld, Repo, Store, Write};
 use manapds::store::{
     Account, Accounts, Actor, AppPassword, Blob, Blocks, DidCache, Directory, Error, Event,
-    Indexed, Record, Registration, Root, Sequencer, Session,
+    Indexed, Record, Registration, Root, Running, Sequencer, Session,
 };
 use manapds::store::{blobs, keys};
 use manapds::syntax::{Did, Nsid, RecordKey, Tid, TidClock};
@@ -1625,6 +1625,25 @@ fn an_upload_file_outlives_its_row_only_as_long_as_the_window() {
     );
     assert!(blobs.temp_path(&account(), "heldkey").is_file());
     assert!(!blobs.temp_path(&account(), "strandedkey").exists());
+}
+
+#[test]
+fn the_marker_is_there_afterwards_only_where_the_server_did_not_stop() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let directory = Directory::new(home.path().join("data"));
+
+    let (running, held) = Running::take(&directory).expect("takes the marker");
+    assert!(!held, "nothing has run here");
+    assert!(directory.running().is_file());
+    drop(running);
+    assert!(!directory.running().exists());
+
+    let (running, held) = Running::take(&directory).expect("takes the marker");
+    assert!(!held);
+    // What a process that is killed leaves, since nothing of its runs.
+    std::mem::forget(running);
+    let (_running, held) = Running::take(&directory).expect("takes the marker");
+    assert!(held);
 }
 
 #[test]
