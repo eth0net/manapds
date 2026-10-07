@@ -1057,7 +1057,6 @@ async fn a_record_that_holds_nothing_to_one_is_left_alone() {
     assert_eq!(page["records"].as_array().expect("records").len(), 2);
 }
 
-/// One blob, uploaded, as the answer a record would carry.
 /// How many files a directory holds.
 fn files(directory: &std::path::Path) -> usize {
     std::fs::read_dir(directory)
@@ -1082,6 +1081,7 @@ fn aged(directory: &std::path::Path, hours: i64) {
     }
 }
 
+/// One blob, uploaded, as the answer a record would carry.
 async fn uploaded(router: &NormalizePath<Router>, bytes: Vec<u8>) -> Value {
     let mut request = Request::builder()
         .method("POST")
