@@ -48,12 +48,10 @@ already, the endpoints below and the tool that reads a rewritten directory back,
 and neither is something a running server can be asked for — one of them has to
 open the files while nothing else is holding them.
 
-Two things are owed to steps that have not started. `createAccount` needs
-`reserved_keys/` and the `did-op` file beside an actor's key, since both are
-part of reading a directory the reference left behind. And whatever first
-verifies a service token has to allow a malleable signature on that path alone
-— upstream issues them, account commits stay strict, and conflating the two
-would loosen the wrong one.
+One thing is owed to a step that has not started. Whatever first verifies a
+service token has to allow a malleable signature on that path alone — upstream
+issues them, account commits stay strict, and conflating the two would loosen
+the wrong one.
 
 Records left one of their own standing. A record is stored as it arrives rather
 than checked against the lexicon it names, so `validate` refuses nothing; all
