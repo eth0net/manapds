@@ -442,8 +442,9 @@ impl Manager {
             reserved: reserved.clone(),
             rollback: Rollback::Discard,
         };
-        let (credentials, blocks, commit, rev) =
-            self.settle(&did, &handle, signup, &signing_key).await?;
+        let (credentials, blocks, commit, rev) = self
+            .settle(&did, &handle, signup, &signing_key, &operation)
+            .await?;
 
         undo.sending();
         let registered = self.plc.send(&did, &operation).await;
@@ -502,8 +503,9 @@ impl Manager {
         handle: &Handle,
         signup: &Signup,
         signing_key: &Keypair,
+        operation: &plc::Operation,
     ) -> Result<(Credentials, repo::BlockMap, Cid, Tid), Error> {
-        let (root, blocks) = self.start_repo(did, signing_key).await?;
+        let (root, blocks) = self.start_repo(did, signing_key, operation).await?;
         let (commit, rev) = (root.cid, root.rev.clone());
 
         let password_scrypt = self.hashing(&signup.password, password::hash).await;
@@ -560,14 +562,18 @@ impl Manager {
         Ok(())
     }
 
-    /// Writes the account's key and its first commit.
+    /// Writes the account's key, the operation its identifier comes from, and
+    /// its first commit.
     async fn start_repo(
         &self,
         did: &Did,
         signing_key: &Keypair,
+        operation: &plc::Operation,
     ) -> Result<(store::Root, repo::BlockMap), Error> {
         let reserved = self.directory.reserved_key(&signing_key.public_key());
         let key = self.directory.actor_key(did);
+        let op = self.directory.actor_op(did);
+        let encoded = repo::encode(operation)?;
         let path = self.directory.actor_store(did);
         let blobs = self.directory.blobs();
         let (did, signing_key) = (did.clone(), signing_key.clone());
@@ -575,6 +581,7 @@ impl Manager {
         blocking(move || {
             store::keys::write(&reserved, &signing_key)?;
             store::keys::write(&key, &signing_key)?;
+            std::fs::write(&op, encoded).map_err(store::Error::from)?;
             let mut actor = store::Actor::open(&path, did.clone())?;
             let (repo, blocks) = Repo::create(
                 did,

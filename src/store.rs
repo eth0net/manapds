@@ -165,6 +165,13 @@ impl Directory {
         self.actor(did).join("key")
     }
 
+    /// The operation that minted an account's identifier, in the encoding the
+    /// identifier is the hash of.
+    #[must_use]
+    pub fn actor_op(&self, did: &Did) -> PathBuf {
+        self.actor(did).join("did-op")
+    }
+
     /// A signing key under its own identifier, held there while no account
     /// names it yet.
     #[must_use]

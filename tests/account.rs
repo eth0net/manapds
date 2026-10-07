@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use manapds::account::{self, email, handle, password};
 use manapds::crypto::{Algorithm, Keypair};
+use manapds::plc;
 use manapds::repo::{Ipld, Repo, Write};
 use manapds::store;
 use manapds::syntax::{Did, Nsid, RecordKey, TidClock};
@@ -612,6 +613,22 @@ async fn signing_up_writes_an_identity_a_repository_and_a_session() {
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].0, format!("/{}", created.did));
     assert!(sent[0].1.contains("alice.pds.test"), "{}", sent[0].1);
+}
+
+#[tokio::test]
+async fn a_signup_leaves_the_operation_its_identifier_was_minted_from() {
+    let (manager, data, _seen) = empty(false).await;
+
+    let created = manager
+        .create(&signup("alice.pds.test"))
+        .await
+        .expect("an account");
+
+    let directory = store::Directory::new(data.path());
+    let bytes = std::fs::read(directory.actor_op(&created.did)).expect("the operation");
+    let operation: plc::Operation = serde_ipld_dagcbor::from_slice(&bytes).expect("an operation");
+    assert_eq!(operation.did().expect("an identifier"), created.did);
+    operation.verify().expect("the rotation key signed it");
 }
 
 /// Every reserved key, by name, which is a `did:key`.

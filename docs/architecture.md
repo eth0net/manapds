@@ -199,6 +199,11 @@ under its own `did:key` for the stretch where the key exists and no account
 names it yet. An entry leaves when the account has its own copy, or with the
 rest of a signup that was taken back out.
 
+`did-op` sits in an account's directory beside its database and its key,
+holding the operation that minted the account's identifier, in the encoding
+that identifier is a hash of. It is what matches an account on disk to the name
+the network answers for, with nothing asked of the directory.
+
 The data directory needs a POSIX filesystem. An account's files sit under its
 DID, a DID has colons in it, and Windows will not have a colon in a path
 component — so this runs where the reference runs and not on Windows, which

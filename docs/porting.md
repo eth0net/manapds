@@ -310,3 +310,14 @@ when a signup fails, because the entryway that asked for it still holds the
 identifier it derived. Here nothing outside the signup knows the key, so a
 discarded signup takes it along with everything else and leaves a directory a
 second attempt finds clean.
+
+### The operation behind an identifier is kept on disk
+
+Upstream has the three helpers for `did-op` and no caller for any of them.
+Here a signup writes the file before it tells the directory, that being the
+only point where those bytes exist and the account does not yet.
+
+What it buys is the one failure nothing collects: a registration whose answer
+never came back leaves an account standing, and the operation beside it is
+enough to ask the directory what it holds, or to retire the identifier, long
+after the request that sent it has gone.
