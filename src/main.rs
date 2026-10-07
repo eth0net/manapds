@@ -31,11 +31,17 @@ enum Command {
     /// Every account this server creates is anchored to it, and no copy of it
     /// is kept anywhere else.
     RotationKey,
+    /// Take out the blob files no account's rows hold, and stop.
+    ///
+    /// Run with the server stopped: a blob uploaded while this is walking is
+    /// kept only by being younger than `PDS_BLOB_UNCLAIMED_HOURS`.
+    Reconcile,
 }
 
 fn main() -> ExitCode {
     let outcome = match Cli::parse().command {
         Command::Serve => serve(),
+        Command::Reconcile => reconcile(),
         Command::Secret => {
             println!("{}", Secret::generate().reveal());
             Ok(())
@@ -58,11 +64,26 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-#[tokio::main]
-async fn serve() -> Result<(), Box<dyn Error>> {
+/// Logging, at whatever `RUST_LOG` asks for.
+fn logging() {
     fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
+}
+
+#[tokio::main]
+async fn reconcile() -> Result<(), Box<dyn Error>> {
+    logging();
+
+    let config = Config::from_env()?;
+    let context = server::Context::open(config)?;
+    tracing::info!(taken = context.accounts.reconcile().await?, "reconciled");
+    Ok(())
+}
+
+#[tokio::main]
+async fn serve() -> Result<(), Box<dyn Error>> {
+    logging();
 
     let config = Config::from_env()?;
     let address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.port));

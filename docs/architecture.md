@@ -167,7 +167,9 @@ The files an account is served from are the same question asked of a different
 directory, and the answer is the whole blob table rather than the handful of
 names an upload directory holds. So they are walked across every account at
 once instead of on each upload, and what that pass reclaims is a file whose
-row was dropped before anything unlinked it.
+row was dropped before anything unlinked it. `manapds reconcile` is the whole
+of it on demand, for an operator who suspects something and can stop the
+server first.
 
 An upload sits under a name of its own until a record takes it, and the name
 it is served from is written only by the commit that takes it. That is what
