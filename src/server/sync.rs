@@ -1,16 +1,22 @@
 //! What another server reads to follow a repository here.
 
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use axum::{
     Json,
+    body::Body,
     extract::State,
     http::header,
     response::{IntoResponse, Response},
 };
+use bytes::Bytes;
+use futures_core::Stream;
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
-use crate::account::Manager;
+use crate::account::{self, Manager};
 use crate::store;
 use crate::syntax::{Did, Tid};
 use crate::xrpc::{self, Listed, Params};
@@ -104,7 +110,7 @@ pub(crate) async fn get_repo(
                 .map_err(|_| xrpc::Error::invalid_request("Invalid since"))
         })
         .transpose()?;
-    Ok(file(accounts.export(&did(&query.did)?, since).await?))
+    Ok(streamed(accounts.export(&did(&query.did)?, since).await?))
 }
 
 /// `com.atproto.sync.getRecord`
@@ -254,6 +260,27 @@ fn shown(hosted: store::Hosted) -> Held {
 /// A CAR file, in the answer a method sends it as.
 fn file(car: Vec<u8>) -> Response {
     ([(header::CONTENT_TYPE, CAR)], car).into_response()
+}
+
+/// The same, for a file that is still being read.
+fn streamed(car: mpsc::Receiver<Result<Bytes, account::Error>>) -> Response {
+    (
+        [(header::CONTENT_TYPE, CAR)],
+        Body::from_stream(Pieces(car)),
+    )
+        .into_response()
+}
+
+/// A file as the thread reading it hands it over, piece by piece.
+#[derive(Debug)]
+struct Pieces(mpsc::Receiver<Result<Bytes, account::Error>>);
+
+impl Stream for Pieces {
+    type Item = Result<Bytes, account::Error>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.get_mut().0.poll_recv(cx)
+    }
 }
 
 /// The identifier a caller named. The lexicon asks for a DID, so a handle is

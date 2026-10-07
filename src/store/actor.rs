@@ -59,6 +59,24 @@ pub struct Blocks<'a> {
     pub dropped: &'a [Cid],
 }
 
+/// One page of a repository's blocks, and where the page after it starts.
+#[derive(Clone, Debug)]
+pub struct Page {
+    /// The blocks themselves, newest revision first.
+    pub blocks: Vec<(Cid, Vec<u8>)>,
+    /// Where it ended, or nothing where the repository did.
+    pub next: Option<Mark>,
+}
+
+/// Where a page of blocks ended, which is where the page after it starts.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Mark {
+    /// The revision that wrote the last block of the page.
+    rev: String,
+    /// That block, which settles the blocks one revision wrote.
+    cid: Cid,
+}
+
 /// A record as the index holds it, beside the block it points at.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Record {
@@ -343,33 +361,61 @@ impl Actor {
         Ok(Some(std::mem::take(&mut leaving.cleared)))
     }
 
-    /// Every block this repository holds, or only those a revision after
-    /// `since` wrote.
+    /// One page of the blocks this repository holds, newest revision first, or
+    /// only of those a revision after `since` wrote. `from` is where the page
+    /// before it ended.
+    ///
+    /// The order and the cursor are the pair the revision index is on, so a
+    /// download since a revision seeks instead of scanning.
     ///
     /// # Errors
     ///
     /// If the read fails, or a row names a block that is not a CID.
-    // todo: hand these back a page at a time, so a large repository is not
-    // held in memory twice over on its way out.
-    pub fn blocks_since(&self, since: Option<&Tid>) -> Result<BlockMap, Error> {
-        let mut blocks = BlockMap::new();
+    pub fn blocks_since(
+        &self,
+        since: Option<&Tid>,
+        from: Option<&Mark>,
+        limit: u32,
+    ) -> Result<Page, Error> {
         let rows = self
             .db
             .prepare(
-                r#"select "cid", "content" from "repo_block"
-                   where ?1 is null or "repoRev" > ?1"#,
+                r#"select "cid", "repoRev", "content" from "repo_block"
+                   where (?1 is null or "repoRev" > ?1)
+                     and (?2 is null or ("repoRev", "cid") < (?2, ?3))
+                   order by "repoRev" desc, "cid" desc limit ?4"#,
             )?
-            .query_map(params![since.map(Tid::as_str)], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
-            })?
+            .query_map(
+                params![
+                    since.map(Tid::as_str),
+                    from.map(|mark| mark.rev.as_str()),
+                    from.map(|mark| mark.cid.to_string()),
+                    limit
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                    ))
+                },
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        for (cid, content) in rows {
-            let cid = cid
+
+        let full = u32::try_from(rows.len()).unwrap_or(u32::MAX) == limit;
+        let mut blocks = Vec::with_capacity(rows.len());
+        let mut last = None;
+        for (cid, rev, content) in rows {
+            let cid: Cid = cid
                 .parse()
                 .map_err(|_| Error::Malformed("a stored block that is not a CID"))?;
-            blocks.insert(cid, content);
+            last = Some(Mark { rev, cid });
+            blocks.push((cid, content));
         }
-        Ok(blocks)
+        Ok(Page {
+            blocks,
+            next: last.filter(|_| full),
+        })
     }
 
     /// The blocks a caller named, beside the CIDs this repository has nothing

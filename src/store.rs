@@ -75,7 +75,9 @@ pub mod keys;
 mod sequencer;
 
 pub use accounts::{Account, Accounts, AppPassword, Cursor, Hosted, Registration, Session};
-pub use actor::{Actor, Backlink, Blob, Blocks, Committed, Indexed, MissingBlob, Record, Root};
+pub use actor::{
+    Actor, Backlink, Blob, Blocks, Committed, Indexed, Mark, MissingBlob, Page, Record, Root,
+};
 pub use blobs::Blobs;
 pub use did_cache::{Cached, DidCache};
 pub use sequencer::{Entry, Event, Sequencer};

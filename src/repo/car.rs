@@ -38,16 +38,31 @@ pub fn write_blocks(blocks: &BlockMap) -> Result<Vec<u8>, Error> {
     rooted(Vec::new(), blocks)
 }
 
-fn rooted(roots: Vec<Cid>, blocks: &BlockMap) -> Result<Vec<u8>, Error> {
+/// What a file opens with, naming the roots the blocks after it add up to.
+///
+/// # Errors
+///
+/// If the header will not encode.
+pub fn header(roots: Vec<Cid>) -> Result<Vec<u8>, Error> {
     let header = super::encode(&Header { version: 1, roots })?;
     let mut car = Vec::new();
     push_varint(&mut car, header.len() as u64);
     car.extend_from_slice(&header);
+    Ok(car)
+}
+
+/// Writes one block onto the end of a file.
+pub fn push(car: &mut Vec<u8>, cid: &Cid, bytes: &[u8]) {
+    let cid = cid.to_bytes();
+    push_varint(car, (cid.len() + bytes.len()) as u64);
+    car.extend_from_slice(&cid);
+    car.extend_from_slice(bytes);
+}
+
+fn rooted(roots: Vec<Cid>, blocks: &BlockMap) -> Result<Vec<u8>, Error> {
+    let mut car = header(roots)?;
     for (cid, bytes) in blocks {
-        let cid = cid.to_bytes();
-        push_varint(&mut car, (cid.len() + bytes.len()) as u64);
-        car.extend_from_slice(&cid);
-        car.extend_from_slice(bytes);
+        push(&mut car, cid, bytes);
     }
     Ok(car)
 }

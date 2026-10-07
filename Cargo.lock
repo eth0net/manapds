@@ -811,6 +811,7 @@ dependencies = [
  "bs58",
  "bytes",
  "clap",
+ "futures-core",
  "futures-util",
  "hex",
  "hmac",

@@ -10,7 +10,7 @@ use manapds::store::{
     Indexed, Record, Registration, Root, Sequencer, Session,
 };
 use manapds::store::{blobs, keys};
-use manapds::syntax::{Did, Nsid, RecordKey, TidClock};
+use manapds::syntax::{Did, Nsid, RecordKey, Tid, TidClock};
 use rusqlite::Connection;
 
 /// A blob store for a commit that writes no blobs, which touches no file. A
@@ -600,6 +600,68 @@ fn a_collection_pages_newest_first_unless_asked_the_other_way() {
             .expect("reads"),
         None
     );
+}
+
+/// A revision of `count` blocks nothing else points at, rooted at the first
+/// of them.
+fn revision(store: &mut Actor, from: Option<&Root>, rev: &str, count: usize) -> Root {
+    let mut blocks = repo::BlockMap::new();
+    let mut first = None;
+    for n in 0..count {
+        let cid = blocks.add(&post(&format!("{rev}-{n}"))).expect("encodes");
+        first.get_or_insert(cid);
+    }
+    let root = Root {
+        cid: first.expect("a block"),
+        rev: rev.parse::<Tid>().expect("a TID"),
+    };
+    store
+        .commit(from, &root, genesis(&blocks), &[], &blobs())
+        .expect("commits");
+    root
+}
+
+/// Every block a download would carry, read a page at a time.
+fn walked(store: &Actor, since: Option<&Tid>, limit: u32) -> Vec<(repo::Cid, Vec<u8>)> {
+    let mut carried = Vec::new();
+    let mut from = None;
+    loop {
+        let page = store
+            .blocks_since(since, from.as_ref(), limit)
+            .expect("reads");
+        carried.extend(page.blocks);
+        match page.next {
+            Some(mark) => from = Some(mark),
+            None => return carried,
+        }
+    }
+}
+
+#[test]
+fn a_download_pages_through_every_block_once() {
+    let mut store = Actor::memory(account()).expect("opens");
+    let first = revision(&mut store, None, "3jqfcqzm4fa2j", 7);
+    let second = revision(&mut store, Some(&first), "3jqfcqzm4fb2j", 5);
+    revision(&mut store, Some(&second), "3jqfcqzm4fc2j", 9);
+
+    let whole = walked(&store, None, 1000);
+    assert_eq!(whole.len(), 21);
+
+    // A page is where the read stops, not what it answers: the same blocks
+    // come out in the same order whatever it holds, including the page that
+    // ends on the last block.
+    for limit in [1, 2, 4, 7, 20, 21] {
+        assert_eq!(walked(&store, None, limit), whole, "{limit} to a page");
+    }
+
+    // A download since a revision leaves out what that revision wrote, across
+    // pages as much as in one.
+    let after = walked(&store, Some(&first.rev), 1000);
+    assert_eq!(after.len(), 14);
+    for limit in [1, 3, 14] {
+        assert_eq!(walked(&store, Some(&first.rev), limit), after, "{limit}");
+    }
+    assert_eq!(walked(&store, Some(&second.rev), 4).len(), 9);
 }
 
 #[test]

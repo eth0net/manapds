@@ -15,7 +15,9 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD as BASE64};
+use bytes::Bytes;
 use jiff::{SignedDuration, Timestamp};
+use tokio::sync::{mpsc, oneshot};
 
 use crate::config::Config;
 use crate::crypto::{self, Algorithm, Keypair, PublicKey};
@@ -56,6 +58,12 @@ const HASHES: usize = 4;
 /// moved first. One server takes an account's writes one at a time, so this is
 /// only reached where something else is writing to the same files.
 const ATTEMPTS: usize = 8;
+
+/// How many blocks a download reads at a time.
+const PAGE: u32 = 500;
+
+/// How many pieces of a download may be read ahead of whoever takes them.
+const READ_AHEAD: usize = 2;
 
 /// The most invite codes one call writes, across every account it names.
 ///
@@ -779,24 +787,78 @@ impl Manager {
     }
 
     /// An account's repository as a CAR file, holding every block or only
-    /// what a revision after `since` wrote.
+    /// what a revision after `since` wrote, in the pieces it is read in.
+    ///
+    /// The thread doing the reading is held until the last piece is taken, so
+    /// a caller that stops taking them stops the read.
     ///
     /// # Errors
     ///
-    /// If the account holds no repository, or storage will not answer.
-    pub async fn export(&self, did: &Did, since: Option<Tid>) -> Result<Vec<u8>, Error> {
-        self.opened(did, move |actor| {
-            actor.reading(|actor| {
-                let root = actor
-                    .root()?
-                    .ok_or_else(|| Error::NoRepo(actor.did().clone()))?;
-                Ok(repo::car::write(
-                    root.cid,
-                    &actor.blocks_since(since.as_ref())?,
-                )?)
-            })
-        })
-        .await
+    /// If the account holds no repository, or storage will not answer. What
+    /// fails once the file is under way arrives in place of a piece of it.
+    ///
+    /// # Panics
+    ///
+    /// If the thread reading the repository panicked.
+    pub async fn export(
+        &self,
+        did: &Did,
+        since: Option<Tid>,
+    ) -> Result<mpsc::Receiver<Result<Bytes, Error>>, Error> {
+        let path = self.directory.actor_store(did);
+        let account = did.clone();
+        let (started, opening) = oneshot::channel();
+        let (sender, file) = mpsc::channel(READ_AHEAD);
+        tokio::task::spawn_blocking(move || {
+            let actor = match open(&path, account) {
+                Ok(actor) => actor,
+                Err(error) => {
+                    drop(started.send(Err(error)));
+                    return;
+                }
+            };
+            let read = actor.reading(|actor| {
+                let rooted = || {
+                    let root = actor
+                        .root()?
+                        .ok_or_else(|| Error::NoRepo(actor.did().clone()))?;
+                    Ok::<_, Error>(repo::car::header(vec![root.cid])?)
+                };
+                let mut piece = match rooted() {
+                    Ok(header) => header,
+                    Err(error) => {
+                        drop(started.send(Err(error)));
+                        return Ok(());
+                    }
+                };
+                if started.send(Ok(())).is_err() {
+                    return Ok(());
+                }
+
+                let mut from = None;
+                loop {
+                    let page = actor.blocks_since(since.as_ref(), from.as_ref(), PAGE)?;
+                    for (cid, bytes) in &page.blocks {
+                        repo::car::push(&mut piece, cid, bytes);
+                    }
+                    if sender
+                        .blocking_send(Ok(std::mem::take(&mut piece).into()))
+                        .is_err()
+                    {
+                        return Ok(());
+                    }
+                    from = page.next;
+                    if from.is_none() {
+                        return Ok(());
+                    }
+                }
+            });
+            if let Err(error) = read {
+                drop(sender.blocking_send(Err(error)));
+            }
+        });
+        opening.await.expect("the storage thread")?;
+        Ok(file)
     }
 
     /// The blocks a caller named, as a CAR file naming no root.
@@ -1082,13 +1144,7 @@ impl Manager {
     ) -> Result<T, Error> {
         let path = self.directory.actor_store(did);
         let account = did.clone();
-        blocking(move || {
-            if !path.exists() {
-                return Err(Error::NoRepo(account));
-            }
-            work(&store::Actor::open(&path, account)?)
-        })
-        .await
+        blocking(move || work(&open(&path, account)?)).await
     }
 
     /// Writes fresh invite codes for every account named, and says what each
@@ -1695,6 +1751,14 @@ pub fn kept_until(hours: u64) -> Option<jiff::Timestamp> {
     jiff::Timestamp::now()
         .checked_sub(SignedDuration::from_secs(seconds))
         .ok()
+}
+
+/// Opens an account's own database, where a signup that finished left one.
+fn open(path: &Path, did: Did) -> Result<store::Actor, Error> {
+    if !path.exists() {
+        return Err(Error::NoRepo(did));
+    }
+    Ok(store::Actor::open(path, did)?)
 }
 
 /// Runs work that has no way not to block on a thread that is allowed to,

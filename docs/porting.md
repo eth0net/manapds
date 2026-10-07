@@ -205,10 +205,13 @@ puts the root commit last in a file describing a commit. Here the map is sorted
 by CID, so the same repository produces the same bytes whatever order the
 blocks were added in.
 
-No consumer depends on either: the header names the roots, and a reader loads
-the whole file into a map. The one thing insertion order would buy is comparing
-this server's output byte for byte against the reference's for the same
-repository, which is worth revisiting if that test is ever wanted.
+A download is the exception, and there both servers agree: it is read off the
+revision index a page at a time, so it carries the newest revision first.
+
+No consumer depends on any of them: the header names the roots, and a reader
+loads the whole file into a map. The one thing insertion order would buy is
+comparing this server's output byte for byte against the reference's for the
+same repository, which is worth revisiting if that test is ever wanted.
 
 ### A did:key holds a compressed point or it is not read
 

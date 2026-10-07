@@ -95,6 +95,11 @@ operation inside one blocking task rather than holding a store across an await.
 That is why the store trait needs no `Sync` bound: an account's connection is
 moved into the task that uses it and moved back, never shared.
 
+A download is the long one: the task sending it keeps its snapshot open for as
+long as whoever asked for it keeps taking pieces, and a page of blocks is all
+either end holds. Reading the repository into memory first would cost the whole
+of it twice, once in the task and once in the answer waiting to be written.
+
 The account database is a single connection the whole server shares, so every
 call to it runs in a task of that kind too, and the lock is taken and given up
 inside one. The rollback behind a dropped signup is the exception: it takes the

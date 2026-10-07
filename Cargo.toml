@@ -19,6 +19,7 @@ base64 = { version = "0.23", default-features = false, features = ["std"] }
 bs58 = "0.5.1"
 bytes = "1.12.1"
 clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
+futures-core = { version = "0.3.34", default-features = false }
 hmac = "0.13"
 http-body-util = "0.1.5"
 hyper = { version = "1.11.1", default-features = false, features = ["client", "http1"] }
