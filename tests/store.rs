@@ -665,6 +665,36 @@ fn a_download_pages_through_every_block_once() {
 }
 
 #[test]
+fn the_blocks_a_caller_names_come_back_across_as_many_reads_as_it_takes() {
+    let mut store = Actor::memory(account()).expect("opens");
+    // Past the batch a read asks about at once, and not a multiple of it.
+    revision(&mut store, None, "3jqfcqzm4fa2j", 1200);
+    let held: Vec<repo::Cid> = walked(&store, None, 2000)
+        .into_iter()
+        .map(|(cid, _)| cid)
+        .collect();
+    assert_eq!(held.len(), 1200);
+
+    let absent = [
+        repo::cid_for(b"nothing is stored under this"),
+        repo::cid_for(b"nor under this"),
+    ];
+    let mut asked = held[..600].to_vec();
+    asked.push(absent[0]);
+    asked.extend_from_slice(&held[600..]);
+    asked.push(absent[1]);
+    // A caller naming one twice is answered for it twice.
+    asked.push(held[0]);
+
+    let (blocks, missing) = store.blocks(&asked).expect("reads");
+    assert_eq!(missing, absent);
+    assert_eq!(blocks.len(), held.len());
+    for cid in &held {
+        assert_eq!(repo::cid_for(&blocks.get(cid).expect("stored")), *cid);
+    }
+}
+
+#[test]
 fn the_log_numbers_events_in_order() {
     let log = Sequencer::memory().expect("opens");
     assert_eq!(log.latest().expect("reads"), None);

@@ -1,6 +1,7 @@
 //! One account's database: its repository blocks, record index, blobs and
 //! preferences, in a file of its own.
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use ipld_core::cid::Cid;
@@ -35,6 +36,9 @@ create index "backlink_link_to_idx" on "backlink" ("path", "linkTo");
 
 create table "account_pref" ("id" integer primary key autoincrement, "name" varchar not null, "valueJson" text not null);
 "#;
+
+/// How many CIDs one read names at once, which is the reference's number.
+const BATCH: usize = 500;
 
 /// Every migration this server knows, in the order they are applied.
 const MIGRATIONS: [db::Migration; 1] = [("001", |tx| Ok(tx.execute_batch(SCHEMA)?))];
@@ -425,19 +429,31 @@ impl Actor {
     ///
     /// If the read fails.
     pub fn blocks(&self, cids: &[Cid]) -> Result<(BlockMap, Vec<Cid>), Error> {
-        let mut statement = self
-            .db
-            .prepare(r#"select "content" from "repo_block" where "cid" = ?1"#)?;
         let mut blocks = BlockMap::new();
         let mut missing = Vec::new();
-        for cid in cids {
-            match statement
-                .query_row(params![cid.to_string()], |row| row.get::<_, Vec<u8>>(0))
-                .optional()?
-            {
-                Some(content) => blocks.insert(*cid, content),
-                None => missing.push(*cid),
+        for batch in cids.chunks(BATCH) {
+            let keys: Vec<String> = batch.iter().map(ToString::to_string).collect();
+            let wanted: HashMap<&str, &Cid> = keys.iter().map(String::as_str).zip(batch).collect();
+            let mut statement = self.db.prepare(&format!(
+                r#"select "cid", "content" from "repo_block" where "cid" in ({})"#,
+                ["?"].repeat(batch.len()).join(",")
+            ))?;
+            let mut rows = statement.query(rusqlite::params_from_iter(&keys))?;
+            let mut found = HashSet::with_capacity(batch.len());
+            while let Some(row) = rows.next()? {
+                let key: String = row.get(0)?;
+                if let Some(cid) = wanted.get(key.as_str()) {
+                    blocks.insert(**cid, row.get(1)?);
+                }
+                found.insert(key);
             }
+            missing.extend(
+                batch
+                    .iter()
+                    .zip(&keys)
+                    .filter(|(_, key)| !found.contains(*key))
+                    .map(|(cid, _)| *cid),
+            );
         }
         Ok((blocks, missing))
     }
