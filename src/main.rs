@@ -90,9 +90,12 @@ async fn serve() -> Result<(), Box<dyn Error>> {
     let address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.port));
     let hostname = config.hostname.clone();
     let directory = store::Directory::new(config.data_directory.clone());
-    let (_running, stopped) = store::Running::take(&directory)?;
     let context = server::Context::open(config)?;
     let listener = TcpListener::bind(address).await?;
+    // Taken once nothing else can turn this start back: a start that gives up
+    // after taking it would carry off the only record that the one before it
+    // never stopped.
+    let (_running, stopped) = store::Running::take(&directory)?;
 
     tracing::info!(%address, %hostname, "listening");
     if stopped {
