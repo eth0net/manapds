@@ -278,7 +278,12 @@ fn sweep(
         if held.contains(&name) {
             continue;
         }
-        let about = entry.metadata()?;
+        // Gone already, which another request unlinking its own upload does
+        // as a matter of course.
+        let about = match entry.metadata() {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            about => about?,
+        };
         if !about.is_file() || about.modified()? >= cutoff {
             continue;
         }
