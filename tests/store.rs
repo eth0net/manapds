@@ -1962,3 +1962,44 @@ fn a_download_seeks_to_its_page_rather_than_walking_to_it() {
         assert!(!plan.contains("SCAN"), "{what}: {plan}");
     }
 }
+
+#[test]
+fn a_blob_held_again_is_as_new_as_the_record_that_held_it() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let blobs = Directory::new(home.path()).blobs();
+    let bytes = b"not really a picture";
+    let cid = manapds::store::blobs::cid_for(bytes);
+
+    blobs.put(&account(), "first", &cid, bytes).expect("stores");
+    assert!(blobs.claim(&account(), "first", &cid).expect("claims"));
+
+    // A revision that never landed leaves the file linked and nothing holding
+    // it, so it ages where it lies.
+    let served = blobs.path(&account(), &cid);
+    let long_ago = std::time::SystemTime::now() - std::time::Duration::from_hours(48);
+    std::fs::File::options()
+        .write(true)
+        .open(&served)
+        .expect("opens")
+        .set_modified(long_ago)
+        .expect("ages it");
+
+    // Claimed again, it is a blob in use, and a reconcile that reads age must
+    // not take it for one nothing came back for.
+    blobs
+        .put(&account(), "second", &cid, bytes)
+        .expect("stores");
+    assert!(
+        !blobs
+            .claim(&account(), "second", &cid)
+            .expect("claims again")
+    );
+
+    let since = std::fs::metadata(&served)
+        .expect("reads")
+        .modified()
+        .expect("a time")
+        .elapsed()
+        .expect("not ahead");
+    assert!(since < std::time::Duration::from_secs(60), "{since:?}");
+}

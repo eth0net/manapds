@@ -151,7 +151,17 @@ impl Blobs {
             super::directory(parent)?;
         }
         match std::fs::hard_link(self.temp_path(did, key), &path) {
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Held again, so as new as the row taking it: a reconcile reads
+                // age to tell a blob in use from one nothing came back for, and
+                // this file may have been lying there since a revision that
+                // never landed.
+                std::fs::File::options()
+                    .write(true)
+                    .open(&path)?
+                    .set_modified(std::time::SystemTime::now())?;
+                Ok(false)
+            }
             result => {
                 result?;
                 Ok(true)
