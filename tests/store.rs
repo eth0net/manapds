@@ -1807,3 +1807,39 @@ fn a_read_sees_one_revision_even_while_another_lands() {
     assert_eq!(held.0.cid, before.cid);
     assert_ne!(at(&repo).cid, before.cid);
 }
+
+#[test]
+fn a_download_seeks_to_its_page_rather_than_walking_to_it() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let path = Directory::new(home.path()).actor_store(&account());
+    Actor::open(&path, account()).expect("opens");
+
+    // The planner is what this is about, so ask it. A predicate handed in on
+    // every call is a filter over the whole index; one that is only there when
+    // it has a value is a range the index can start at.
+    let db = Connection::open(&path).expect("opens");
+    for (what, query) in [
+        (
+            "a page after the first",
+            r#"select "cid" from "repo_block" where ("repoRev", "cid") < (?1, ?2)
+               order by "repoRev" desc, "cid" desc limit 500"#,
+        ),
+        (
+            "a page of a download since a revision",
+            r#"select "cid" from "repo_block" where "repoRev" > ?1
+               and ("repoRev", "cid") < (?2, ?3)
+               order by "repoRev" desc, "cid" desc limit 500"#,
+        ),
+    ] {
+        let mut statement = db
+            .prepare(&format!("explain query plan {query}"))
+            .expect("prepares");
+        let count = statement.parameter_count();
+        let binds: Vec<String> = (0..count).map(|_| String::new()).collect();
+        let plan: String = statement
+            .query_row(rusqlite::params_from_iter(&binds), |row| row.get(3))
+            .expect("a plan");
+        assert!(plan.contains("SEARCH"), "{what}: {plan}");
+        assert!(!plan.contains("SCAN"), "{what}: {plan}");
+    }
+}

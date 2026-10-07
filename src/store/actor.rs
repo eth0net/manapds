@@ -369,8 +369,8 @@ impl Actor {
     /// only of those a revision after `since` wrote. `from` is where the page
     /// before it ended.
     ///
-    /// The order and the cursor are the pair the revision index is on, so a
-    /// download since a revision seeks instead of scanning.
+    /// The order and the cursor are the pair the revision index is on, so each
+    /// page starts where the one before it stopped.
     ///
     /// # Errors
     ///
@@ -381,21 +381,37 @@ impl Actor {
         from: Option<&Mark>,
         limit: u32,
     ) -> Result<Page, Error> {
+        // Written out rather than guarded with `?n is null or`: the planner
+        // reads a predicate it is always handed as a filter over every row, so
+        // the page after the first walks the whole index to reach its cursor.
+        let mut narrowing = Vec::new();
+        let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        if let Some(since) = since {
+            binds.push(Box::new(since.as_str().to_owned()));
+            narrowing.push(format!(r#""repoRev" > ?{}"#, binds.len()));
+        }
+        if let Some(mark) = from {
+            binds.push(Box::new(mark.rev.clone()));
+            binds.push(Box::new(mark.cid.to_string()));
+            narrowing.push(format!(
+                r#"("repoRev", "cid") < (?{}, ?{})"#,
+                binds.len() - 1,
+                binds.len()
+            ));
+        }
+        binds.push(Box::new(limit));
+        let query = format!(
+            r#"select "cid", "repoRev", "content" from "repo_block"{}{}
+               order by "repoRev" desc, "cid" desc limit ?{}"#,
+            if narrowing.is_empty() { "" } else { " where " },
+            narrowing.join(" and "),
+            binds.len(),
+        );
         let rows = self
             .db
-            .prepare(
-                r#"select "cid", "repoRev", "content" from "repo_block"
-                   where (?1 is null or "repoRev" > ?1)
-                     and (?2 is null or ("repoRev", "cid") < (?2, ?3))
-                   order by "repoRev" desc, "cid" desc limit ?4"#,
-            )?
+            .prepare(&query)?
             .query_map(
-                params![
-                    since.map(Tid::as_str),
-                    from.map(|mark| mark.rev.as_str()),
-                    from.map(|mark| mark.cid.to_string()),
-                    limit
-                ],
+                rusqlite::params_from_iter(binds.iter().map(AsRef::as_ref)),
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
