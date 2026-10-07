@@ -824,6 +824,20 @@ impl Actor {
         Ok(swept)
     }
 
+    /// Every key an upload is still held under, which is what says whose a
+    /// file in that directory is.
+    ///
+    /// # Errors
+    ///
+    /// If the read fails.
+    pub fn upload_keys(&self) -> Result<std::collections::HashSet<String>, Error> {
+        Ok(self
+            .db
+            .prepare(r#"select "tempKey" from "blob" where "tempKey" is not null"#)?
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<_, _>>()?)
+    }
+
     /// What is known about a blob, if this account uploaded one.
     ///
     /// # Errors

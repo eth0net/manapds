@@ -155,6 +155,14 @@ timer, since an account uploading is the account with blobs to clear. The
 other server never sweeps and its own lexicon says it will, which is the one
 place here worth reading the lexicon instead.
 
+The rows and the files are two stores, and the sweep reads both: it takes the
+files under an account's upload directory that its rows have stopped naming as
+well as the rows themselves. Uploading a blob a second time is what leaves one
+of those, by moving the row onto the newer name, and it needs nothing to have
+gone wrong. Age is the only protection an upload in flight has, since its file
+is on disk before any row names it, so nothing written inside the window is
+ever taken whatever the rows say.
+
 An upload sits under a name of its own until a record takes it, and the name
 it is served from is written only by the commit that takes it. That is what
 keeps an upload and a delete of the same bytes from crossing: nothing but a

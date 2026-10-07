@@ -1583,6 +1583,90 @@ fn a_blob_that_cannot_be_put_in_place_leaves_nothing_behind() {
 }
 
 #[test]
+fn an_upload_file_outlives_its_row_only_as_long_as_the_window() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let blobs = Directory::new(home.path()).blobs();
+    blobs
+        .put(&account(), "heldkey", &blobs::cid_for(b"held"), b"held")
+        .expect("stores");
+    blobs
+        .put(
+            &account(),
+            "strandedkey",
+            &blobs::cid_for(b"loose"),
+            b"loose",
+        )
+        .expect("stores");
+    let held = std::collections::HashSet::from(["heldkey".to_owned()]);
+
+    // An upload arrives before the row naming it, so one written since the
+    // cutoff is not the sweep's to take.
+    assert_eq!(
+        blobs
+            .sweep_uploads(
+                &account(),
+                &held,
+                jiff::Timestamp::now() - jiff::SignedDuration::from_hours(1)
+            )
+            .expect("sweeps"),
+        Vec::<String>::new()
+    );
+    assert!(blobs.temp_path(&account(), "strandedkey").is_file());
+
+    assert_eq!(
+        blobs
+            .sweep_uploads(
+                &account(),
+                &held,
+                jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1)
+            )
+            .expect("sweeps"),
+        vec!["strandedkey".to_owned()]
+    );
+    assert!(blobs.temp_path(&account(), "heldkey").is_file());
+    assert!(!blobs.temp_path(&account(), "strandedkey").exists());
+}
+
+#[test]
+fn a_sweep_of_an_account_that_has_uploaded_nothing_finds_nothing() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let blobs = Directory::new(home.path()).blobs();
+    assert_eq!(
+        blobs
+            .sweep_uploads(
+                &account(),
+                &std::collections::HashSet::new(),
+                jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1)
+            )
+            .expect("sweeps"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn every_key_an_upload_is_held_under_is_named() {
+    let store = Actor::memory(account()).expect("opens");
+    let blob = Blob {
+        cid: blobs::cid_for(b"held"),
+        mime: "image/png".to_owned(),
+        size: 4,
+    };
+    store.add_blob(&blob, "firstkey").expect("writes");
+    assert_eq!(
+        store.upload_keys().expect("reads"),
+        std::collections::HashSet::from(["firstkey".to_owned()])
+    );
+
+    // A second upload of the same bytes moves the row, and the key it moved
+    // off is what nothing names any more.
+    store.add_blob(&blob, "secondkey").expect("writes again");
+    assert_eq!(
+        store.upload_keys().expect("reads"),
+        std::collections::HashSet::from(["secondkey".to_owned()])
+    );
+}
+
+#[test]
 fn a_blob_nothing_ever_named_is_swept_and_one_a_record_holds_is_not() {
     let store = Actor::memory(account()).expect("opens");
     let held = Blob {

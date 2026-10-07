@@ -995,7 +995,8 @@ impl Manager {
         Ok(blob)
     }
 
-    /// Takes out the blobs an account uploaded and never named in a record.
+    /// Takes out the blobs an account uploaded and never named in a record,
+    /// and the upload files its rows have stopped naming.
     ///
     /// # Errors
     ///
@@ -1007,6 +1008,9 @@ impl Manager {
         let Some(cutoff) = kept_until(self.config.blob_unclaimed_hours) else {
             return Ok(0);
         };
+        // Ahead of the rows the sweep is about to drop, so the files it leaves
+        // for `cleared` are not counted here as well.
+        let stranded = self.stranded(did, cutoff).await?;
         let swept = self
             .actor(did, move |actor| actor.sweep_unclaimed(cutoff))
             .await?;
@@ -1019,7 +1023,19 @@ impl Manager {
             },
         )
         .await;
-        Ok(count)
+        Ok(count + stranded)
+    }
+
+    /// Takes the upload files under an account that no row names.
+    async fn stranded(&self, did: &Did, cutoff: jiff::Timestamp) -> Result<usize, Error> {
+        let held = self.actor(did, store::Actor::upload_keys).await?;
+        let blobs = self.directory.blobs();
+        let account = did.clone();
+        Ok(
+            blocking(move || blobs.sweep_uploads(&account, &held, cutoff))
+                .await?
+                .len(),
+        )
     }
 
     /// Clears up the disk behind a commit: the files of blobs nothing holds,

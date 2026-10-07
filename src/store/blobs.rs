@@ -1,6 +1,7 @@
 //! Blobs: the images and files records point at, kept as files rather than
 //! rows because a blob is immutable and already addressed by its contents.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use ipld_core::cid::{Cid, multihash::Multihash};
@@ -38,7 +39,18 @@ impl Blobs {
     /// Where a stored blob is.
     #[must_use]
     pub fn path(&self, did: &Did, cid: &Cid) -> PathBuf {
-        self.0.join(did.as_str()).join(cid.to_string())
+        self.stored(did).join(cid.to_string())
+    }
+
+    /// Where an account's blobs are served from.
+    fn stored(&self, did: &Did) -> PathBuf {
+        self.0.join(did.as_str())
+    }
+
+    /// Where its uploads wait. Spelled as upstream spells it, which is a typo
+    /// that has outlived every chance to fix it.
+    fn uploads(&self, did: &Did) -> PathBuf {
+        self.0.join("tempt").join(did.as_str())
     }
 
     /// Where a blob sits while it is being taken down. A file here is not
@@ -51,11 +63,25 @@ impl Blobs {
             .join(cid.to_string())
     }
 
-    /// Where a blob sits before its CID is known. Spelled as upstream spells
-    /// it, which is a typo that has outlived every chance to fix it.
+    /// Where a blob sits before its CID is known.
     #[must_use]
     pub fn temp_path(&self, did: &Did, key: &str) -> PathBuf {
-        self.0.join("tempt").join(did.as_str()).join(key)
+        self.uploads(did).join(key)
+    }
+
+    /// Takes the uploads under an account that no key in `held` names and
+    /// that nothing has written since `cutoff`, and says which went.
+    ///
+    /// # Errors
+    ///
+    /// If the directory cannot be read, or a file will not delete.
+    pub fn sweep_uploads(
+        &self,
+        did: &Did,
+        held: &HashSet<String>,
+        cutoff: jiff::Timestamp,
+    ) -> Result<Vec<String>, Error> {
+        sweep(&self.uploads(did), held, cutoff)
     }
 
     /// Stores a blob nothing has claimed yet, under a key of its own rather
@@ -177,4 +203,41 @@ fn rename(from: &Path, to: &Path) -> Result<(), Error> {
         super::directory(parent)?;
     }
     Ok(std::fs::rename(from, to)?)
+}
+
+/// Takes the files under a directory that nothing in `held` names and that
+/// were last written before `cutoff`.
+///
+/// Age is what keeps an upload in flight: its row is written after its file,
+/// so a name nothing holds yet is one nothing holds yet.
+fn sweep(
+    directory: &Path,
+    held: &HashSet<String>,
+    cutoff: jiff::Timestamp,
+) -> Result<Vec<String>, Error> {
+    let entries = match std::fs::read_dir(directory) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        entries => entries?,
+    };
+    let cutoff = std::time::SystemTime::from(cutoff);
+    let mut swept = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
+            continue;
+        };
+        if held.contains(&name) {
+            continue;
+        }
+        let about = entry.metadata()?;
+        if !about.is_file() || about.modified()? >= cutoff {
+            continue;
+        }
+        match std::fs::remove_file(entry.path()) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            result => result?,
+        }
+        swept.push(name);
+    }
+    Ok(swept)
 }

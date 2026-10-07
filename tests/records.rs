@@ -1058,6 +1058,30 @@ async fn a_record_that_holds_nothing_to_one_is_left_alone() {
 }
 
 /// One blob, uploaded, as the answer a record would carry.
+/// How many files a directory holds.
+fn files(directory: &std::path::Path) -> usize {
+    std::fs::read_dir(directory)
+        .expect("a directory")
+        .filter(|entry| entry.as_ref().expect("an entry").path().is_file())
+        .count()
+}
+
+/// Puts every file in a directory this many hours into the past, which is the
+/// only way a test reaches a window measured in them.
+fn aged(directory: &std::path::Path, hours: i64) {
+    let when = std::time::SystemTime::from(
+        jiff::Timestamp::now() - jiff::SignedDuration::from_hours(hours),
+    );
+    for entry in std::fs::read_dir(directory).expect("a directory") {
+        std::fs::File::options()
+            .write(true)
+            .open(entry.expect("an entry").path())
+            .expect("a file")
+            .set_times(std::fs::FileTimes::new().set_modified(when))
+            .expect("the time is set");
+    }
+}
+
 async fn uploaded(router: &NormalizePath<Router>, bytes: Vec<u8>) -> Value {
     let mut request = Request::builder()
         .method("POST")
@@ -1242,6 +1266,29 @@ async fn a_batch_that_writes_one_key_twice_leaves_no_blob_behind() {
         0,
         "the sweep cannot reach a claimed blob, so it must not be left one"
     );
+}
+
+#[tokio::test]
+async fn uploading_a_blob_twice_leaves_one_file_the_sweep_takes() {
+    let (router, manager, data) = served();
+    uploaded(&router, vec![1u8, 2, 3, 4]).await;
+    uploaded(&router, vec![1u8, 2, 3, 4]).await;
+
+    let uploads = data
+        .path()
+        .join("blocks")
+        .join("tempt")
+        .join(account().as_str());
+    assert_eq!(files(&uploads), 2, "each upload writes a file of its own");
+
+    // Both are young, and a sweep that took the one the row let go of would
+    // be one upload away from taking a blob somebody is still writing around.
+    assert_eq!(manager.sweep_blobs(&account()).await.expect("sweeps"), 0);
+    assert_eq!(files(&uploads), 2);
+
+    aged(&uploads, 48);
+    assert_eq!(manager.sweep_blobs(&account()).await.expect("sweeps"), 1);
+    assert_eq!(files(&uploads), 1, "the row still names one of them");
 }
 
 #[tokio::test]
