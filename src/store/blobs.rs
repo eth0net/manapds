@@ -84,6 +84,45 @@ impl Blobs {
         sweep(&self.uploads(did), held, cutoff)
     }
 
+    /// The same for the files blobs are served from, against the CIDs the
+    /// index holds.
+    ///
+    /// # Errors
+    ///
+    /// If the directory cannot be read, or a file will not delete.
+    pub fn sweep_stored(
+        &self,
+        did: &Did,
+        held: &HashSet<String>,
+        cutoff: jiff::Timestamp,
+    ) -> Result<Vec<String>, Error> {
+        sweep(&self.stored(did), held, cutoff)
+    }
+
+    /// Every account with files under here, in DID order.
+    ///
+    /// # Errors
+    ///
+    /// If a directory cannot be read.
+    pub fn accounts(&self) -> Result<Vec<Did>, Error> {
+        let mut found = std::collections::BTreeSet::new();
+        for root in [self.0.clone(), self.0.join("tempt")] {
+            let entries = match std::fs::read_dir(&root) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                entries => entries?,
+            };
+            for entry in entries {
+                // Quarantine and the uploads sit beside the accounts, and
+                // neither is a name a DID could take.
+                let name = entry?.file_name();
+                if let Some(did) = name.to_str().and_then(|name| name.parse::<Did>().ok()) {
+                    found.insert(did);
+                }
+            }
+        }
+        Ok(found.into_iter().collect())
+    }
+
     /// Stores a blob nothing has claimed yet, under a key of its own rather
     /// than under its CID; `docs/architecture.md` has why.
     ///

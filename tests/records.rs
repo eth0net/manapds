@@ -1292,6 +1292,28 @@ async fn uploading_a_blob_twice_leaves_one_file_the_sweep_takes() {
 }
 
 #[tokio::test]
+async fn a_served_file_no_row_holds_is_reconciled_once_the_window_is_past() {
+    let (router, manager, data) = served();
+    let blob = uploaded(&router, vec![1u8, 2, 3, 4]).await;
+    let (status, written) = holding(&router, "3jqfcqzm4fa2j", &blob).await;
+    assert_eq!(status, StatusCode::OK, "{written}");
+
+    // What a process that died between dropping a row and unlinking the file
+    // behind it leaves.
+    let stored = data.path().join("blocks").join(account().as_str());
+    let orphan = stored.join(store::blobs::cid_for(b"orphan").to_string());
+    std::fs::write(&orphan, b"orphan").expect("a file");
+
+    assert_eq!(manager.reconcile().await.expect("reconciles"), 0);
+    assert!(orphan.is_file(), "nothing inside the window is reclaimed");
+
+    aged(&stored, 48);
+    assert_eq!(manager.reconcile().await.expect("reconciles"), 1);
+    assert!(!orphan.exists());
+    assert_eq!(files(&stored), 1, "the blob a record names is still served");
+}
+
+#[tokio::test]
 async fn a_second_record_naming_a_blob_is_taken_at_what_the_first_settled() {
     let (router, _manager, _data) = served();
     let blob = uploaded(&router, vec![1u8, 2, 3, 4]).await;

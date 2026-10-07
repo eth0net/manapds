@@ -838,6 +838,19 @@ impl Actor {
             .collect::<Result<_, _>>()?)
     }
 
+    /// Every blob this account has a row for, as the files are named.
+    ///
+    /// # Errors
+    ///
+    /// If the read fails.
+    pub fn blob_cids(&self) -> Result<std::collections::HashSet<String>, Error> {
+        Ok(self
+            .db
+            .prepare(r#"select "cid" from "blob""#)?
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<_, _>>()?)
+    }
+
     /// What is known about a blob, if this account uploaded one.
     ///
     /// # Errors

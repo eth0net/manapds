@@ -254,6 +254,19 @@ Upstream has nothing that sweeps a blob no record ever claimed, so the window
 one is kept for has no counterpart to inherit; `architecture.md` has the number
 and why.
 
+### The files and the rows naming them are reconciled
+
+Upstream's disk store writes, links and deletes, and nothing afterwards ever
+compares the two: a file whose row moved to another name and a file whose row
+was dropped before the unlink are both lost to the process that left them.
+Here the sweep an upload already triggers takes the first, and the second costs
+a walk of every account, which is what `reconcile` is.
+
+Both are held to the window an unclaimed blob is kept for, measured against
+when the file was last written rather than against any row. That is the whole
+of what keeps an upload in flight safe, and it is why neither pass has to know
+which process wrote a file or whether that process is still running.
+
 ### A page carries a cursor only when there is another page
 
 Upstream returns one whenever a page has any rows, so a crawl ends with a call

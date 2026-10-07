@@ -1628,6 +1628,22 @@ fn an_upload_file_outlives_its_row_only_as_long_as_the_window() {
 }
 
 #[test]
+fn the_accounts_with_blobs_on_disk_are_the_ones_named() {
+    let other: Did = "did:plc:mav423b24thku7ezkx7yaray".parse().expect("a DID");
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let blobs = Directory::new(home.path()).blobs();
+    let cid = blobs::cid_for(b"blob");
+    blobs
+        .put(&account(), "akey", &cid, b"blob")
+        .expect("stores");
+    blobs.put(&other, "bkey", &cid, b"blob").expect("stores");
+    blobs.claim(&other, "bkey", &cid).expect("claims");
+    blobs.quarantine(&other, &cid).expect("quarantines");
+
+    assert_eq!(blobs.accounts().expect("reads"), vec![account(), other]);
+}
+
+#[test]
 fn a_sweep_of_an_account_that_has_uploaded_nothing_finds_nothing() {
     let home = tempfile::tempdir().expect("a temporary directory");
     let blobs = Directory::new(home.path()).blobs();

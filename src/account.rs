@@ -1038,6 +1038,47 @@ impl Manager {
         )
     }
 
+    /// Takes the served files under an account that no row holds.
+    async fn unheld_files(&self, did: &Did, cutoff: jiff::Timestamp) -> Result<usize, Error> {
+        let held = self.actor(did, store::Actor::blob_cids).await?;
+        let blobs = self.directory.blobs();
+        let account = did.clone();
+        Ok(
+            blocking(move || blobs.sweep_stored(&account, &held, cutoff))
+                .await?
+                .len(),
+        )
+    }
+
+    /// Walks every account with blobs on disk, taking the files its rows do
+    /// not hold, and says how many went.
+    ///
+    /// # Errors
+    ///
+    /// If the directory the blobs sit under cannot be read. One account that
+    /// will not answer is logged and the walk goes on.
+    pub async fn reconcile(&self) -> Result<usize, Error> {
+        let Some(cutoff) = kept_until(self.config.blob_unclaimed_hours) else {
+            return Ok(0);
+        };
+        let blobs = self.directory.blobs();
+        let accounts = blocking(move || blobs.accounts()).await?;
+        let mut taken = 0;
+        for did in accounts {
+            match self.sweep_blobs(&did).await {
+                Ok(count) => taken += count,
+                Err(error) => tracing::error!(%did, %error, "an account's uploads were not swept"),
+            }
+            match self.unheld_files(&did, cutoff).await {
+                Ok(count) => taken += count,
+                Err(error) => {
+                    tracing::error!(%did, %error, "an account's blobs were not reconciled");
+                }
+            }
+        }
+        Ok(taken)
+    }
+
     /// Clears up the disk behind a commit: the files of blobs nothing holds,
     /// and the uploads of blobs a record has taken.
     ///

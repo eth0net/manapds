@@ -163,6 +163,12 @@ gone wrong. Age is the only protection an upload in flight has, since its file
 is on disk before any row names it, so nothing written inside the window is
 ever taken whatever the rows say.
 
+The files an account is served from are the same question asked of a different
+directory, and the answer is the whole blob table rather than the handful of
+names an upload directory holds. So they are walked across every account at
+once instead of on each upload, and what that pass reclaims is a file whose
+row was dropped before anything unlinked it.
+
 An upload sits under a name of its own until a record takes it, and the name
 it is served from is written only by the commit that takes it. That is what
 keeps an upload and a delete of the same bytes from crossing: nothing but a
