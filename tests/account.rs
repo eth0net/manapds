@@ -769,6 +769,10 @@ async fn a_signup_the_directory_would_not_speak_for_is_left_standing() {
             .expect("reads")
             .is_some()
     );
+
+    // The account keeping its key is what spends the reservation, so a copy of
+    // one a live account signs with is left nowhere.
+    assert_eq!(reservations(data.path()), Vec::<String>::new());
 }
 
 /// A directory that says nothing while the registration is in flight and then

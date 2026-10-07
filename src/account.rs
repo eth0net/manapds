@@ -456,16 +456,18 @@ impl Manager {
         if settled {
             undo.answered();
         }
+        // Whatever the directory said, the account has its own copy of this key
+        // by now, so the reservation is spent on every way out of here —
+        // including the one that keeps an account nobody got an answer for.
+        if let Err(error) = release(&reserved).await {
+            tracing::error!(%did, %error, "a signing key was left reserved");
+        }
         registered?;
 
         // Past undoing: the directory has taken the identifier, so anything
         // that fails from here is worth a log line and not worth deleting an
         // account the rest of the network can already see.
         undo.done();
-
-        if let Err(error) = release(&reserved).await {
-            tracing::error!(%did, %error, "a signing key was left reserved");
-        }
 
         // todo: nothing tries this again, so a consumer never learns about an
         // account whose entries were refused.
