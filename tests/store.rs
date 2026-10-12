@@ -24,11 +24,12 @@ fn account() -> Did {
 }
 
 fn post(text: &str) -> Ipld {
+    post_in("com.example.record", text)
+}
+
+fn post_in(collection: &str, text: &str) -> Ipld {
     Ipld::Map(BTreeMap::from([
-        (
-            "$type".to_owned(),
-            Ipld::String("com.example.record".to_owned()),
-        ),
+        ("$type".to_owned(), Ipld::String(collection.to_owned())),
         ("text".to_owned(), Ipld::String(text.to_owned())),
     ]))
 }
@@ -41,7 +42,7 @@ fn indexed_in(collection: &str, rkey: &str, text: &str) -> Indexed {
     Indexed::Put {
         collection: collection.parse::<Nsid>().expect("an NSID"),
         rkey: rkey.parse::<RecordKey>().expect("a record key"),
-        cid: repo::cid_for(&repo::encode(&post(text)).expect("encodes")),
+        cid: repo::cid_for(&repo::encode(&post_in(collection, text)).expect("encodes")),
         links: Vec::new(),
         blobs: Vec::new(),
     }
