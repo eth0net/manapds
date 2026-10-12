@@ -505,17 +505,27 @@ impl Actor {
         cursor: Option<&str>,
         reverse: bool,
     ) -> Result<Vec<Record>, Error> {
+        // A URI ends with the key, so a collection is a range of the index the
+        // records are already in; DEL sorts above every byte a key may hold.
+        let prefix = prefix(&self.did, collection);
+        let top = format!("{prefix}\u{7f}");
+        // One bound a side. A second upper bound is one the index cannot seek
+        // on, so the page walks the range from the top to apply it.
+        let (low, high, from) = match (cursor.map(|cursor| format!("{prefix}{cursor}")), reverse) {
+            (Some(at), true) => (at, top, ">"),
+            (Some(at), false) => (prefix, at, ">="),
+            (None, _) => (prefix, top, ">="),
+        };
         let query = format!(
             r#"select "record"."uri", "record"."cid", "repo_block"."content"
                from "record" join "repo_block" on "repo_block"."cid" = "record"."cid"
-               where "record"."collection" = ?1 and (?2 is null or "record"."rkey" {} ?2)
-               order by "record"."rkey" {} limit ?3"#,
-            if reverse { ">" } else { "<" },
+               where "record"."uri" {from} ?1 and "record"."uri" < ?2
+               order by "record"."uri" {} limit ?3"#,
             if reverse { "asc" } else { "desc" },
         );
         self.db
             .prepare(&query)?
-            .query_map(params![collection.as_str(), cursor, limit], read)?
+            .query_map(params![low, high, limit], read)?
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .collect()
@@ -999,7 +1009,12 @@ fn read(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Record, Error>> {
 /// What the index keys a record under, which is what a client is handed back
 /// and what a backlink points at.
 fn uri(did: &Did, collection: &Nsid, rkey: &RecordKey) -> String {
-    format!("at://{did}/{collection}/{rkey}")
+    format!("{}{rkey}", prefix(did, collection))
+}
+
+/// What every key in a collection is indexed under.
+fn prefix(did: &Did, collection: &Nsid) -> String {
+    format!("at://{did}/{collection}/")
 }
 
 /// A database that would not answer. Whether waiting would help is the one

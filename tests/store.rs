@@ -539,6 +539,7 @@ fn a_collection_pages_newest_first_unless_asked_the_other_way() {
                 create("3jqfcqzm4fb2j", "second"),
                 create("3jqfcqzm4fc2j", "third"),
                 create_in("com.example.other", "3jqfcqzm4fd2j", "elsewhere"),
+                create_in("com.example.recordx", "3jqfcqzm4fe2j", "next door"),
             ],
             &key,
             &mut clock,
@@ -554,6 +555,7 @@ fn a_collection_pages_newest_first_unless_asked_the_other_way() {
                 indexed("3jqfcqzm4fb2j", "second"),
                 indexed("3jqfcqzm4fc2j", "third"),
                 indexed_in("com.example.other", "3jqfcqzm4fd2j", "elsewhere"),
+                indexed_in("com.example.recordx", "3jqfcqzm4fe2j", "next door"),
             ],
             &blobs(),
         )
@@ -561,8 +563,12 @@ fn a_collection_pages_newest_first_unless_asked_the_other_way() {
 
     assert_eq!(
         store.collections().expect("reads"),
-        ["com.example.other", "com.example.record"]
-            .map(|nsid| nsid.parse::<Nsid>().expect("an NSID"))
+        [
+            "com.example.other",
+            "com.example.record",
+            "com.example.recordx"
+        ]
+        .map(|nsid| nsid.parse::<Nsid>().expect("an NSID"))
     );
 
     // A TID sorts as time, so the default page is the most recent first and a
@@ -589,6 +595,17 @@ fn a_collection_pages_newest_first_unless_asked_the_other_way() {
         .records(&collection, 10, Some("3jqfcqzm4fb2j"), true)
         .expect("reads");
     assert_eq!(keys(&next), ["3jqfcqzm4fc2j"]);
+
+    // A collection is a range of the key index, so one whose name this one is
+    // the start of is the boundary that range has to hold.
+    for (neighbor, rkey) in [
+        ("com.example.other", "3jqfcqzm4fd2j"),
+        ("com.example.recordx", "3jqfcqzm4fe2j"),
+    ] {
+        let nsid = neighbor.parse::<Nsid>().expect("an NSID");
+        let page = store.records(&nsid, 10, None, false).expect("reads");
+        assert_eq!(keys(&page), [rkey], "{neighbor}");
+    }
 
     let held = store
         .record(&collection, &"3jqfcqzm4fb2j".parse().expect("a record key"))
@@ -2003,4 +2020,54 @@ fn a_blob_held_again_is_as_new_as_the_record_that_held_it() {
         .elapsed()
         .expect("not ahead");
     assert!(since < std::time::Duration::from_secs(60), "{since:?}");
+}
+
+/// Every row of the planner's answer, which is where a sort it had to put in
+/// for itself is named.
+fn plan(db: &Connection, query: &str) -> String {
+    let mut statement = db
+        .prepare(&format!("explain query plan {query}"))
+        .expect("prepares");
+    let count = statement.parameter_count();
+    let binds: Vec<String> = (0..count).map(|_| String::new()).collect();
+    statement
+        .query_map(rusqlite::params_from_iter(&binds), |row| {
+            row.get::<_, String>(3)
+        })
+        .expect("a plan")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("rows of a plan")
+        .join("; ")
+}
+
+#[test]
+fn a_collection_seeks_to_its_page_rather_than_sorting_it() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let path = Directory::new(home.path()).actor_store(&account());
+    Actor::open(&path, account()).expect("opens");
+    let db = Connection::open(&path).expect("opens");
+
+    // The planner is what this is about, so ask it. Ordering a collection by a
+    // column its index does not carry buys each page by sorting the whole of it.
+    for (what, query) in [
+        (
+            "the first page",
+            r#"select "record"."uri", "record"."cid", "repo_block"."content"
+               from "record" join "repo_block" on "repo_block"."cid" = "record"."cid"
+               where "record"."uri" >= ?1 and "record"."uri" < ?2
+               order by "record"."uri" desc limit ?3"#,
+        ),
+        (
+            "a page the other way up",
+            r#"select "record"."uri", "record"."cid", "repo_block"."content"
+               from "record" join "repo_block" on "repo_block"."cid" = "record"."cid"
+               where "record"."uri" > ?1 and "record"."uri" < ?2
+               order by "record"."uri" asc limit ?3"#,
+        ),
+    ] {
+        let plan = plan(&db, query);
+        assert!(plan.contains("SEARCH record"), "{what}: {plan}");
+        assert!(!plan.contains("SCAN"), "{what}: {plan}");
+        assert!(!plan.contains("TEMP B-TREE"), "{what}: {plan}");
+    }
 }
