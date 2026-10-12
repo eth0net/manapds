@@ -364,25 +364,38 @@ impl Accounts {
     ///
     /// If a row holds a DID, a commit or a timestamp nothing here writes.
     pub fn hosted(&self, limit: u32, from: Option<&Cursor>) -> Result<Vec<Hosted>, Error> {
-        let (created_at, did) = match from {
-            Some(cursor) => (Some(stamp(cursor.created_at)), Some(cursor.did.as_str())),
-            None => (None, None),
-        };
+        let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        let mut narrowing = String::new();
+        if let Some(cursor) = from {
+            binds.push(Box::new(stamp(cursor.created_at)));
+            binds.push(Box::new(cursor.did.clone()));
+            narrowing = format!(
+                r#"where ("actor"."createdAt", "actor"."did") > (?{}, ?{})"#,
+                binds.len() - 1,
+                binds.len(),
+            );
+        }
+        binds.push(Box::new(limit));
+        let query = format!(
+            r#"select "actor"."did", "repo_root"."cid", "repo_root"."rev", "actor"."createdAt"
+               from "actor" join "repo_root" on "repo_root"."did" = "actor"."did"
+               {narrowing}
+               order by "actor"."createdAt", "actor"."did" limit ?{}"#,
+            binds.len(),
+        );
         self.db
-            .prepare(
-                r#"select "actor"."did", "repo_root"."cid", "repo_root"."rev", "actor"."createdAt"
-                   from "actor" join "repo_root" on "repo_root"."did" = "actor"."did"
-                   where ?1 is null or ("actor"."createdAt", "actor"."did") > (?1, ?2)
-                   order by "actor"."createdAt", "actor"."did" limit ?3"#,
+            .prepare(&query)?
+            .query_map(
+                rusqlite::params_from_iter(binds.iter().map(AsRef::as_ref)),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
             )?
-            .query_map(params![created_at, did, limit], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                ))
-            })?
             .map(|row| {
                 let (did, cid, rev, created_at) = row?;
                 Ok(Hosted {

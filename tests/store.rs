@@ -2108,3 +2108,22 @@ fn a_listing_seeks_to_its_page_rather_than_walking_to_it() {
         assert!(!plan.contains("TEMP B-TREE"), "{what}: {plan}");
     }
 }
+
+#[test]
+fn a_page_of_repositories_seeks_to_where_it_starts() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let path = home.path().join("account.sqlite");
+    Accounts::open(&path).expect("opens");
+    let db = Connection::open(&path).expect("opens");
+
+    let plan = plan(
+        &db,
+        r#"select "actor"."did", "repo_root"."cid", "repo_root"."rev", "actor"."createdAt"
+           from "actor" join "repo_root" on "repo_root"."did" = "actor"."did"
+           where ("actor"."createdAt", "actor"."did") > (?1, ?2)
+           order by "actor"."createdAt", "actor"."did" limit ?3"#,
+    );
+    assert!(plan.contains("SEARCH actor"), "{plan}");
+    assert!(!plan.contains("SCAN"), "{plan}");
+    assert!(!plan.contains("TEMP B-TREE"), "{plan}");
+}
