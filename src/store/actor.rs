@@ -907,21 +907,36 @@ impl Actor {
         limit: u32,
         cursor: Option<&str>,
     ) -> Result<Vec<Cid>, Error> {
-        let query = format!(
-            r#"select "blobCid" from "record_blob" {}
-               where (?2 is null or "blobCid" > ?2)
-               group by "blobCid" order by "blobCid" asc limit ?3"#,
-            match since {
-                Some(_) => {
+        let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        let join = match since {
+            Some(since) => {
+                binds.push(Box::new(since.to_owned()));
+                format!(
                     r#"join "record" on "record"."uri" = "record_blob"."recordUri"
-                       and "record"."repoRev" > ?1"#
-                }
-                None => "",
-            },
+                       and "record"."repoRev" > ?{}"#,
+                    binds.len(),
+                )
+            }
+            None => String::new(),
+        };
+        let mut narrowing = String::new();
+        if let Some(cursor) = cursor {
+            binds.push(Box::new(cursor.to_owned()));
+            narrowing = format!(r#"where "blobCid" > ?{}"#, binds.len());
+        }
+        binds.push(Box::new(limit));
+        let query = format!(
+            r#"select "blobCid" from "record_blob" {join}
+               {narrowing}
+               group by "blobCid" order by "blobCid" asc limit ?{}"#,
+            binds.len(),
         );
         self.db
             .prepare(&query)?
-            .query_map(params![since, cursor, limit], |row| row.get::<_, String>(0))?
+            .query_map(
+                rusqlite::params_from_iter(binds.iter().map(AsRef::as_ref)),
+                |row| row.get::<_, String>(0),
+            )?
             .map(|cid| {
                 cid?.parse()
                     .map_err(|_| Error::Malformed("a blob that is not a CID"))
@@ -941,16 +956,26 @@ impl Actor {
         cursor: Option<&str>,
     ) -> Result<Vec<MissingBlob>, Error> {
         // The record named is chosen, not whichever row the group yields.
+        let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        let mut narrowing = String::new();
+        if let Some(cursor) = cursor {
+            binds.push(Box::new(cursor.to_owned()));
+            narrowing = format!(r#"and "blobCid" > ?{}"#, binds.len());
+        }
+        binds.push(Box::new(limit));
+        let query = format!(
+            r#"select "blobCid", min("recordUri") from "record_blob"
+               where not exists (select 1 from "blob" where "blob"."cid" = "record_blob"."blobCid")
+                 {narrowing}
+               group by "blobCid" order by "blobCid" asc limit ?{}"#,
+            binds.len(),
+        );
         self.db
-            .prepare(
-                r#"select "blobCid", min("recordUri") from "record_blob"
-                   where not exists (select 1 from "blob" where "blob"."cid" = "record_blob"."blobCid")
-                     and (?1 is null or "blobCid" > ?1)
-                   group by "blobCid" order by "blobCid" asc limit ?2"#,
+            .prepare(&query)?
+            .query_map(
+                rusqlite::params_from_iter(binds.iter().map(AsRef::as_ref)),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )?
-            .query_map(params![cursor, limit], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
             .map(|row| {
                 let (cid, uri) = row?;
                 Ok(MissingBlob {

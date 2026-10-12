@@ -2071,3 +2071,40 @@ fn a_collection_seeks_to_its_page_rather_than_sorting_it() {
         assert!(!plan.contains("TEMP B-TREE"), "{what}: {plan}");
     }
 }
+
+#[test]
+fn a_listing_seeks_to_its_page_rather_than_walking_to_it() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let path = Directory::new(home.path()).actor_store(&account());
+    Actor::open(&path, account()).expect("opens");
+    let db = Connection::open(&path).expect("opens");
+
+    for (what, query) in [
+        (
+            "a page of the blobs records name",
+            r#"select "blobCid" from "record_blob"
+               where "blobCid" > ?1
+               group by "blobCid" order by "blobCid" asc limit ?2"#,
+        ),
+        (
+            "a page of the blobs a revision since named",
+            r#"select "blobCid" from "record_blob"
+               join "record" on "record"."uri" = "record_blob"."recordUri"
+                 and "record"."repoRev" > ?1
+               where "blobCid" > ?2
+               group by "blobCid" order by "blobCid" asc limit ?3"#,
+        ),
+        (
+            "a page of the blobs nothing uploaded",
+            r#"select "blobCid", min("recordUri") from "record_blob"
+               where not exists (select 1 from "blob" where "blob"."cid" = "record_blob"."blobCid")
+                 and "blobCid" > ?1
+               group by "blobCid" order by "blobCid" asc limit ?2"#,
+        ),
+    ] {
+        let plan = plan(&db, query);
+        assert!(plan.contains("SEARCH record_blob"), "{what}: {plan}");
+        assert!(!plan.contains("SCAN record_blob"), "{what}: {plan}");
+        assert!(!plan.contains("TEMP B-TREE"), "{what}: {plan}");
+    }
+}
