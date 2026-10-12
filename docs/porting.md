@@ -33,6 +33,28 @@ What is already built is deliberately not tracked here. [`roadmap.md`](roadmap.m
 holds the plan and the test suite holds the truth; a third list would be the
 one that goes quietly wrong.
 
+## Bugs upstream
+
+Divergences where the other server is wrong rather than different. Each entry
+carries what it would take to file: where the code is, what goes wrong, and how
+it was shown. None of them has been reported.
+
+### listRecords reads a collection down to its cursor
+
+`packages/pds/src/actor-store/record/reader.ts`, as
+[#5527](https://github.com/bluesky-social/atproto/pull/5527) left it in 0.5.35.
+The query fences a collection with `record.uri >= <prefix>` and
+`record.uri < <prefix>\x7f`, then adds the cursor as a third comparison. SQLite
+takes one fence per end into its index seek and tests the rest a row at a time,
+so a page opens at the far end of the collection and reads to the cursor before
+yielding anything. Enumerating a collection costs the square of its length.
+
+Shown on fifty thousand records in one collection: a page ten per cent in took
+0.40 ms and one ninety per cent in took 2.54 ms, against 0.12 ms either way for
+the same page with the cursor standing in for the fence it duplicates.
+`explain query plan` names the same search over the same index for both, so
+nothing short of timing it will show this.
+
 ## Divergences
 
 Places where both servers do the thing and do it differently on purpose. This
@@ -321,3 +343,11 @@ What it buys is the one failure nothing collects: a registration whose answer
 never came back leaves an account standing, and the operation beside it is
 enough to ask the directory what it holds, or to retire the identifier, long
 after the request that sent it has gone.
+
+### A page is bounded on one side at a time
+
+A collection is read in a range of the record URI, and the cursor replaces the
+end of that range rather than being added to it, so the planner has one
+comparison per end to seek on and every page costs the same. Upstream adds it,
+which is written up under
+[bugs upstream](#listrecords-reads-a-collection-down-to-its-cursor).
