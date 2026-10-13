@@ -2104,7 +2104,7 @@ fn a_listing_seeks_to_its_page_rather_than_walking_to_it() {
     ] {
         let plan = plan(&db, query);
         assert!(plan.contains("SEARCH record_blob"), "{what}: {plan}");
-        assert!(!plan.contains("SCAN record_blob"), "{what}: {plan}");
+        assert!(!plan.contains("SCAN"), "{what}: {plan}");
         assert!(!plan.contains("TEMP B-TREE"), "{what}: {plan}");
     }
 }
