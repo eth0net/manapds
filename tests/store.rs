@@ -1755,7 +1755,8 @@ fn a_blob_nothing_ever_named_is_swept_and_one_a_record_holds_is_not() {
     // One of them is claimed by a record, the way a write claims it.
     let key = Keypair::generate(Algorithm::Secp256k1);
     let mut clock = TidClock::new();
-    let (repo, blocks) = Repo::create(account(), &key, &mut clock).expect("creates");
+    let (repo, mut blocks) = Repo::create(account(), &key, &mut clock).expect("creates");
+    let record = blocks.add(&post("first")).expect("encodes");
     let mut store = store;
     store
         .commit(
@@ -1765,7 +1766,7 @@ fn a_blob_nothing_ever_named_is_swept_and_one_a_record_holds_is_not() {
             &[Indexed::Put {
                 collection: "com.example.record".parse().expect("an NSID"),
                 rkey: "3jqfcqzm4fc2j".parse().expect("a record key"),
-                cid: repo::cid_for(&repo::encode(&post("first")).expect("encodes")),
+                cid: record,
                 links: Vec::new(),
                 blobs: vec![held.clone()],
             }],
@@ -1813,7 +1814,8 @@ fn a_commit_hands_back_the_uploads_it_took_and_the_blobs_it_let_go() {
 
     let key = Keypair::generate(Algorithm::Secp256k1);
     let mut clock = TidClock::new();
-    let (repo, blocks) = Repo::create(account(), &key, &mut clock).expect("creates");
+    let (repo, mut blocks) = Repo::create(account(), &key, &mut clock).expect("creates");
+    let record = blocks.add(&post("first")).expect("encodes");
     let rkey = "3jqfcqzm4fc2j".parse().expect("a record key");
     let collection = "com.example.record".parse().expect("an NSID");
     let taken = store
@@ -1824,7 +1826,7 @@ fn a_commit_hands_back_the_uploads_it_took_and_the_blobs_it_let_go() {
             &[Indexed::Put {
                 collection,
                 rkey,
-                cid: repo::cid_for(&repo::encode(&post("first")).expect("encodes")),
+                cid: record,
                 links: Vec::new(),
                 blobs: vec![blob.clone()],
             }],
