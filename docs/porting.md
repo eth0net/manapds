@@ -55,6 +55,22 @@ the same page with the cursor standing in for the fence it duplicates.
 `explain query plan` names the same search over the same index for both, so
 nothing short of timing it will show this.
 
+### leafUpdate forgets the block the other key still holds
+
+`packages/repo/src/data-diff.ts:49`. `leafAdd` and `leafDelete` each test the
+opposite set and cancel, so a block leaving one key and arriving at another in
+the same commit is neither added nor removed. `leafUpdate` tests nothing: it
+records the old CID as gone and the new one as arrived, every time.
+
+The guard in `packages/pds/src/actor-store/repo/transactor.ts` cannot reach the
+case. `getDuplicateRecordCids` keeps a block only where a record outside the
+commit's own URIs still names it, and two keys swapping values touch both, so
+it keeps neither. `applyCommit` writes the new blocks and then deletes the
+removed ones, so the delete is what the repository is left with.
+
+Read rather than run: no swap has been put through a working server, and that
+is what a report would want first.
+
 ## Divergences
 
 Places where both servers do the thing and do it differently on purpose. This
@@ -253,10 +269,9 @@ filters its removal set against the record table before deleting; here the same
 question is asked inside the delete, which needs no list of touched URIs to
 assemble and no exclusion to get right.
 
-The one case upstream does not cover is a key updated in place: `leafUpdate`
-records the old block as removed without the reconcile its neighbors get, so
-two keys swapping identical values in one commit lose both blocks while both
-are still held. Here an update is a removal and an addition, which cancel.
+Here an update is a removal and an addition, which cancel. Upstream leaves that
+case open; it is written up under
+[bugs upstream](#leafupdate-forgets-the-block-the-other-key-still-holds).
 
 ### A record carries the collection it is written to
 
