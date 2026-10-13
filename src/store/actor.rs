@@ -507,6 +507,8 @@ impl Actor {
     ) -> Result<Vec<Record>, Error> {
         // A URI ends with the key, so a collection is a range of the index the
         // records are already in; DEL sorts above every byte a key may hold.
+        // todo(record takedowns): the reference also leaves out a row holding a
+        // takedownRef, which nothing here writes yet.
         let prefix = prefix(&self.did, collection);
         let top = format!("{prefix}\u{7f}");
         // One bound a side. A second upper bound is one the index cannot seek
