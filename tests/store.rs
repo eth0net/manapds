@@ -596,8 +596,8 @@ fn a_collection_pages_newest_first_unless_asked_the_other_way() {
         .expect("reads");
     assert_eq!(keys(&next), ["3jqfcqzm4fc2j"]);
 
-    // A collection is a range of the key index, so one whose name this one is
-    // the start of is the boundary that range has to hold.
+    // The pages above are what keep the neighbors out, by naming a collection
+    // entire. This is the other side of that: each neighbor still answers.
     for (neighbor, rkey) in [
         ("com.example.other", "3jqfcqzm4fd2j"),
         ("com.example.recordx", "3jqfcqzm4fe2j"),
