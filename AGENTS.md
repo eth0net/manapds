@@ -40,6 +40,16 @@ something that doesn't exist yet, `todo(eth0net)` names a person, and a bare
 
 Spelling is American, enforced by `typos`.
 
+## Tests
+
+Unit tests lead. Anything that can be a function of its inputs is tested as
+one, in a `#[cfg(test)] mod tests` beside it; `tests/` is for where the layers
+meet, a handler against a store or a store against its files. A test that
+asserts on a copy of what the code does is not a test of the code, and needing
+to reach inside the crate to avoid that is a reason to, not a reason to settle.
+
+Another kind of test is welcome wherever it earns its place.
+
 ## Conventions
 
 Conventional commits, DCO sign-off (`git commit -s`), one logical change per
