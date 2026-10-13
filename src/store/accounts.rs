@@ -364,38 +364,17 @@ impl Accounts {
     ///
     /// If a row holds a DID, a commit or a timestamp nothing here writes.
     pub fn hosted(&self, limit: u32, from: Option<&Cursor>) -> Result<Vec<Hosted>, Error> {
-        let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-        let mut narrowing = String::new();
-        if let Some(cursor) = from {
-            binds.push(Box::new(stamp(cursor.created_at)));
-            binds.push(Box::new(cursor.did.clone()));
-            narrowing = format!(
-                r#"where ("actor"."createdAt", "actor"."did") > (?{}, ?{})"#,
-                binds.len() - 1,
-                binds.len(),
-            );
-        }
-        binds.push(Box::new(limit));
-        let query = format!(
-            r#"select "actor"."did", "repo_root"."cid", "repo_root"."rev", "actor"."createdAt"
-               from "actor" join "repo_root" on "repo_root"."did" = "actor"."did"
-               {narrowing}
-               order by "actor"."createdAt", "actor"."did" limit ?{}"#,
-            binds.len(),
-        );
+        let (query, binds) = hosted_query(limit, from);
         self.db
             .prepare(&query)?
-            .query_map(
-                rusqlite::params_from_iter(binds.iter().map(AsRef::as_ref)),
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
-                    ))
-                },
-            )?
+            .query_map(rusqlite::params_from_iter(binds), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?
             .map(|row| {
                 let (did, cid, rev, created_at) = row?;
                 Ok(Hosted {
@@ -847,4 +826,30 @@ struct SessionRow {
     next_id: Option<String>,
     name: Option<String>,
     privileged: Option<i64>,
+}
+
+/// One page of the repositories this server holds, built as its text and the
+/// values that fill it. A cursor is written in only where there is one, so the
+/// index can start the page rather than filter every row to find it.
+fn hosted_query(limit: u32, from: Option<&Cursor>) -> (String, Vec<rusqlite::types::Value>) {
+    let mut binds = Vec::new();
+    let mut narrowing = String::new();
+    if let Some(cursor) = from {
+        binds.push(stamp(cursor.created_at).into());
+        binds.push(cursor.did.clone().into());
+        narrowing = format!(
+            r#"where ("actor"."createdAt", "actor"."did") > (?{}, ?{})"#,
+            binds.len() - 1,
+            binds.len(),
+        );
+    }
+    binds.push(i64::from(limit).into());
+    let query = format!(
+        r#"select "actor"."did", "repo_root"."cid", "repo_root"."rev", "actor"."createdAt"
+           from "actor" join "repo_root" on "repo_root"."did" = "actor"."did"
+           {narrowing}
+           order by "actor"."createdAt", "actor"."did" limit ?{}"#,
+        binds.len(),
+    );
+    (query, binds)
 }

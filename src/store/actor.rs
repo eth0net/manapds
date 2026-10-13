@@ -381,45 +381,17 @@ impl Actor {
         from: Option<&Mark>,
         limit: u32,
     ) -> Result<Page, Error> {
-        // Written out rather than guarded with `?n is null or`: the planner
-        // reads a predicate it is always handed as a filter over every row, so
-        // the page after the first walks the whole index to reach its cursor.
-        let mut narrowing = Vec::new();
-        let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-        if let Some(since) = since {
-            binds.push(Box::new(since.as_str().to_owned()));
-            narrowing.push(format!(r#""repoRev" > ?{}"#, binds.len()));
-        }
-        if let Some(mark) = from {
-            binds.push(Box::new(mark.rev.clone()));
-            binds.push(Box::new(mark.cid.to_string()));
-            narrowing.push(format!(
-                r#"("repoRev", "cid") < (?{}, ?{})"#,
-                binds.len() - 1,
-                binds.len()
-            ));
-        }
-        binds.push(Box::new(limit));
-        let query = format!(
-            r#"select "cid", "repoRev", "content" from "repo_block"{}{}
-               order by "repoRev" desc, "cid" desc limit ?{}"#,
-            if narrowing.is_empty() { "" } else { " where " },
-            narrowing.join(" and "),
-            binds.len(),
-        );
+        let (query, binds) = blocks_query(since, from, limit);
         let rows = self
             .db
             .prepare(&query)?
-            .query_map(
-                rusqlite::params_from_iter(binds.iter().map(AsRef::as_ref)),
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Vec<u8>>(2)?,
-                    ))
-                },
-            )?
+            .query_map(rusqlite::params_from_iter(binds), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         let full = u32::try_from(rows.len()).unwrap_or(u32::MAX) == limit;
@@ -505,29 +477,10 @@ impl Actor {
         cursor: Option<&str>,
         reverse: bool,
     ) -> Result<Vec<Record>, Error> {
-        // A URI ends with the key, so a collection is a range of the index the
-        // records are already in; DEL sorts above every byte a key may hold.
-        // todo(record takedowns): the reference also leaves out a row holding a
-        // takedownRef, which nothing here writes yet.
-        let prefix = prefix(&self.did, collection);
-        let top = format!("{prefix}\u{7f}");
-        // One bound a side. A second upper bound is one the index cannot seek
-        // on, so the page walks the range from the top to apply it.
-        let (low, high, from) = match (cursor.map(|cursor| format!("{prefix}{cursor}")), reverse) {
-            (Some(at), true) => (at, top, ">"),
-            (Some(at), false) => (prefix, at, ">="),
-            (None, _) => (prefix, top, ">="),
-        };
-        let query = format!(
-            r#"select "record"."uri", "record"."cid", "repo_block"."content"
-               from "record" join "repo_block" on "repo_block"."cid" = "record"."cid"
-               where "record"."uri" {from} ?1 and "record"."uri" < ?2
-               order by "record"."uri" {} limit ?3"#,
-            if reverse { "asc" } else { "desc" },
-        );
+        let (query, binds) = records_query(&prefix(&self.did, collection), limit, cursor, reverse);
         self.db
             .prepare(&query)?
-            .query_map(params![low, high, limit], read)?
+            .query_map(rusqlite::params_from_iter(binds), read)?
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .collect()
@@ -909,36 +862,12 @@ impl Actor {
         limit: u32,
         cursor: Option<&str>,
     ) -> Result<Vec<Cid>, Error> {
-        let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-        let join = match since {
-            Some(since) => {
-                binds.push(Box::new(since.to_owned()));
-                format!(
-                    r#"join "record" on "record"."uri" = "record_blob"."recordUri"
-                       and "record"."repoRev" > ?{}"#,
-                    binds.len(),
-                )
-            }
-            None => String::new(),
-        };
-        let mut narrowing = String::new();
-        if let Some(cursor) = cursor {
-            binds.push(Box::new(cursor.to_owned()));
-            narrowing = format!(r#"where "blobCid" > ?{}"#, binds.len());
-        }
-        binds.push(Box::new(limit));
-        let query = format!(
-            r#"select "blobCid" from "record_blob" {join}
-               {narrowing}
-               group by "blobCid" order by "blobCid" asc limit ?{}"#,
-            binds.len(),
-        );
+        let (query, binds) = blobs_query(since, limit, cursor);
         self.db
             .prepare(&query)?
-            .query_map(
-                rusqlite::params_from_iter(binds.iter().map(AsRef::as_ref)),
-                |row| row.get::<_, String>(0),
-            )?
+            .query_map(rusqlite::params_from_iter(binds), |row| {
+                row.get::<_, String>(0)
+            })?
             .map(|cid| {
                 cid?.parse()
                     .map_err(|_| Error::Malformed("a blob that is not a CID"))
@@ -957,27 +886,12 @@ impl Actor {
         limit: u32,
         cursor: Option<&str>,
     ) -> Result<Vec<MissingBlob>, Error> {
-        // The record named is chosen, not whichever row the group yields.
-        let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-        let mut narrowing = String::new();
-        if let Some(cursor) = cursor {
-            binds.push(Box::new(cursor.to_owned()));
-            narrowing = format!(r#"and "blobCid" > ?{}"#, binds.len());
-        }
-        binds.push(Box::new(limit));
-        let query = format!(
-            r#"select "blobCid", min("recordUri") from "record_blob"
-               where not exists (select 1 from "blob" where "blob"."cid" = "record_blob"."blobCid")
-                 {narrowing}
-               group by "blobCid" order by "blobCid" asc limit ?{}"#,
-            binds.len(),
-        );
+        let (query, binds) = missing_blobs_query(limit, cursor);
         self.db
             .prepare(&query)?
-            .query_map(
-                rusqlite::params_from_iter(binds.iter().map(AsRef::as_ref)),
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-            )?
+            .query_map(rusqlite::params_from_iter(binds), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
             .map(|row| {
                 let (cid, uri) = row?;
                 Ok(MissingBlob {
@@ -1022,6 +936,135 @@ impl Store for Actor {
             .map(|found| found.unwrap_or(false))
             .map_err(|error| unreachable(&error))
     }
+}
+
+// Each paged read below builds its text and the values that fill it together,
+// so the numbering cannot drift from what it numbers and a test can plan what
+// the code runs. A cursor is written in only where there is one: a predicate
+// the planner is always handed filters every row, and the page then walks the
+// index to reach its own start.
+
+/// One page of the blocks a repository holds.
+fn blocks_query(
+    since: Option<&Tid>,
+    from: Option<&Mark>,
+    limit: u32,
+) -> (String, Vec<rusqlite::types::Value>) {
+    let mut narrowing = Vec::new();
+    let mut binds = Vec::new();
+    if let Some(since) = since {
+        binds.push(since.as_str().to_owned().into());
+        narrowing.push(format!(r#""repoRev" > ?{}"#, binds.len()));
+    }
+    if let Some(mark) = from {
+        binds.push(mark.rev.clone().into());
+        binds.push(mark.cid.to_string().into());
+        narrowing.push(format!(
+            r#"("repoRev", "cid") < (?{}, ?{})"#,
+            binds.len() - 1,
+            binds.len()
+        ));
+    }
+    binds.push(i64::from(limit).into());
+    let query = format!(
+        r#"select "cid", "repoRev", "content" from "repo_block"{}{}
+           order by "repoRev" desc, "cid" desc limit ?{}"#,
+        if narrowing.is_empty() { "" } else { " where " },
+        narrowing.join(" and "),
+        binds.len(),
+    );
+    (query, binds)
+}
+
+/// One page of a collection, read as a range of the key index.
+///
+/// A URI ends with the key, so a collection is a range of the index the records
+/// are already in; DEL sorts above every byte a key may hold. One bound a side:
+/// a second upper bound is one the index cannot seek on, so the page would walk
+/// the range from the top to apply it.
+// todo(record takedowns): the reference also leaves out a row holding a
+// takedownRef, which nothing here writes yet.
+fn records_query(
+    prefix: &str,
+    limit: u32,
+    cursor: Option<&str>,
+    reverse: bool,
+) -> (String, Vec<rusqlite::types::Value>) {
+    let top = format!("{prefix}\u{7f}");
+    let (low, high) = match (cursor.map(|cursor| format!("{prefix}{cursor}")), reverse) {
+        (Some(at), true) => (at, top),
+        (Some(at), false) => (prefix.to_owned(), at),
+        (None, _) => (prefix.to_owned(), top),
+    };
+    let query = format!(
+        r#"select "record"."uri", "record"."cid", "repo_block"."content"
+           from "record" join "repo_block" on "repo_block"."cid" = "record"."cid"
+           where "record"."uri" {} ?1 and "record"."uri" < ?2
+           order by "record"."uri" {} limit ?3"#,
+        if cursor.is_some() && reverse {
+            ">"
+        } else {
+            ">="
+        },
+        if reverse { "asc" } else { "desc" },
+    );
+    (
+        query,
+        vec![low.into(), high.into(), i64::from(limit).into()],
+    )
+}
+
+/// One page of the blobs an account's records name.
+fn blobs_query(
+    since: Option<&str>,
+    limit: u32,
+    cursor: Option<&str>,
+) -> (String, Vec<rusqlite::types::Value>) {
+    let mut binds = Vec::new();
+    let join = match since {
+        Some(since) => {
+            binds.push(since.to_owned().into());
+            format!(
+                r#"join "record" on "record"."uri" = "record_blob"."recordUri"
+                   and "record"."repoRev" > ?{}"#,
+                binds.len(),
+            )
+        }
+        None => String::new(),
+    };
+    let mut narrowing = String::new();
+    if let Some(cursor) = cursor {
+        binds.push(cursor.to_owned().into());
+        narrowing = format!(r#"where "blobCid" > ?{}"#, binds.len());
+    }
+    binds.push(i64::from(limit).into());
+    let query = format!(
+        r#"select "blobCid" from "record_blob" {join}
+           {narrowing}
+           group by "blobCid" order by "blobCid" asc limit ?{}"#,
+        binds.len(),
+    );
+    (query, binds)
+}
+
+/// One page of the blobs an account's records name and it never uploaded. The
+/// record named is chosen, not whichever row the group yields.
+fn missing_blobs_query(limit: u32, cursor: Option<&str>) -> (String, Vec<rusqlite::types::Value>) {
+    let mut binds = Vec::new();
+    let mut narrowing = String::new();
+    if let Some(cursor) = cursor {
+        binds.push(cursor.to_owned().into());
+        narrowing = format!(r#"and "blobCid" > ?{}"#, binds.len());
+    }
+    binds.push(i64::from(limit).into());
+    let query = format!(
+        r#"select "blobCid", min("recordUri") from "record_blob"
+           where not exists (select 1 from "blob" where "blob"."cid" = "record_blob"."blobCid")
+             {narrowing}
+           group by "blobCid" order by "blobCid" asc limit ?{}"#,
+        binds.len(),
+    );
+    (query, binds)
 }
 
 /// One indexed row, left for the caller to fault on the CID it holds.
