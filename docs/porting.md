@@ -39,6 +39,10 @@ Divergences where the other server is wrong rather than different. Each entry
 carries what it would take to file: where the code is, what goes wrong, and how
 it was shown. None of them has been reported.
 
+These were read at `@atproto/pds@0.5.38`, ahead of [the pin](#the-pin), because
+a bug is worth filing against what the other server holds now rather than
+against what this one was written to match.
+
 ### listRecords reads a collection down to its cursor
 
 `packages/pds/src/actor-store/record/reader.ts`, as
