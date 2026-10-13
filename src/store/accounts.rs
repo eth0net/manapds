@@ -853,3 +853,24 @@ fn hosted_query(limit: u32, from: Option<&Cursor>) -> (String, Vec<rusqlite::typ
     );
     (query, binds)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_page_of_repositories_seeks_to_where_it_starts() {
+        let accounts = Accounts::memory().expect("opens");
+        let (query, _) = hosted_query(
+            500,
+            Some(&Cursor {
+                created_at: jiff::Timestamp::UNIX_EPOCH,
+                did: "did:plc:4cjoyc3cgpal7gnrpzyjhnv3".to_owned(),
+            }),
+        );
+        let plan = super::super::plan(&accounts.db, &query);
+        assert!(plan.contains("SEARCH actor"), "{plan}");
+        assert!(!plan.contains("SCAN"), "{plan}");
+        assert!(!plan.contains("TEMP B-TREE"), "{plan}");
+    }
+}

@@ -1099,3 +1099,80 @@ fn unreachable(error: &rusqlite::Error) -> crate::repo::Error {
     }
     crate::repo::Error::Store(error.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn store() -> Actor {
+        let did = "did:plc:4cjoyc3cgpal7gnrpzyjhnv3".parse().expect("a DID");
+        Actor::memory(did).expect("opens")
+    }
+
+    fn mark() -> Mark {
+        Mark {
+            rev: "3jqfcqzm4fb2j".to_owned(),
+            cid: crate::repo::cid_for(b"a block"),
+        }
+    }
+
+    #[track_caller]
+    fn seeks(store: &Actor, what: &str, query: &str) {
+        let plan = super::super::plan(&store.db, query);
+        assert!(plan.contains("SEARCH"), "{what}: {plan}");
+        assert!(!plan.contains("SCAN"), "{what}: {plan}");
+        assert!(!plan.contains("TEMP B-TREE"), "{what}: {plan}");
+    }
+
+    #[test]
+    fn a_collection_page_seeks_along_the_index_its_keys_are_in() {
+        let store = store();
+        for cursor in [None, Some("3jqfcqzm4fb2j")] {
+            for reverse in [false, true] {
+                let (query, _) = records_query(
+                    "at://did:plc:4cjoyc3cgpal7gnrpzyjhnv3/com.example.record/",
+                    10,
+                    cursor,
+                    reverse,
+                );
+                let what = format!("cursor {}, reverse {reverse}", cursor.is_some());
+                seeks(&store, &what, &query);
+            }
+        }
+    }
+
+    #[test]
+    fn a_block_page_seeks_to_where_the_one_before_it_stopped() {
+        let store = store();
+        let since = "3jqfcqzm4fa2j".parse::<Tid>().expect("a TID");
+        for (what, since, from) in [
+            ("a page after the first", None, Some(mark())),
+            ("a page since a revision", Some(&since), None),
+            ("both at once", Some(&since), Some(mark())),
+        ] {
+            let (query, _) = blocks_query(since, from.as_ref(), 500);
+            seeks(&store, what, &query);
+        }
+    }
+
+    #[test]
+    fn a_blob_page_seeks_to_where_it_starts() {
+        let store = store();
+        // Only a page with a cursor has somewhere to seek to; the first page
+        // of a listing starts where the index does, and reads on from there.
+        for (what, since, cursor) in [
+            ("a page after the first", None, Some("bafkqaaa")),
+            (
+                "one since a revision too",
+                Some("3jqfcqzm4fa2j"),
+                Some("bafkqaaa"),
+            ),
+        ] {
+            let (query, _) = blobs_query(since, 500, cursor);
+            seeks(&store, what, &query);
+        }
+
+        let (query, _) = missing_blobs_query(500, Some("bafkqaaa"));
+        seeks(&store, "a page of the blobs nothing uploaded", &query);
+    }
+}

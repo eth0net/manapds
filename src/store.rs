@@ -220,3 +220,23 @@ impl Drop for Running {
         drop(std::fs::remove_file(&self.0));
     }
 }
+
+/// Every row the planner answers with for a query, which is where a sort it
+/// had to put in for itself is named.
+#[cfg(test)]
+pub(crate) fn plan(db: &rusqlite::Connection, query: &str) -> String {
+    let mut statement = db
+        .prepare(&format!("explain query plan {query}"))
+        .expect("prepares");
+    let binds: Vec<String> = (0..statement.parameter_count())
+        .map(|_| String::new())
+        .collect();
+    statement
+        .query_map(rusqlite::params_from_iter(&binds), |row| {
+            row.get::<_, String>(3)
+        })
+        .expect("a plan")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("rows of a plan")
+        .join("; ")
+}
