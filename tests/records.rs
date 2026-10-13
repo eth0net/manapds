@@ -1514,6 +1514,32 @@ async fn blobs_are_listed_in_cid_order_once_a_record_names_them() {
     .await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert_eq!(page["cids"], serde_json::json!([link(&second)]));
+
+    // Both bounds at once, which is the only shape where their order matters:
+    // a page that bound them the other way round would answer for neither.
+    let early = "2222222222222";
+    let (status, page) = get(
+        &router,
+        &format!(
+            "/xrpc/com.atproto.sync.listBlobs?did={}&since={early}&limit=1",
+            account()
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["cids"], serde_json::json!([named[0]]));
+
+    let (status, page) = get(
+        &router,
+        &format!(
+            "/xrpc/com.atproto.sync.listBlobs?did={}&since={early}&cursor={}",
+            account(),
+            named[0]
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["cids"], serde_json::json!([named[1]]));
 }
 
 #[tokio::test]
