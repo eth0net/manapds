@@ -1,6 +1,6 @@
 [package]
 name = "manapds"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2024"
 # Pinned rather than tracking stable so a contributor on an older toolchain
 # gets a clear error instead of a confusing one. Raise it deliberately.
