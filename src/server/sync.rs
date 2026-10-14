@@ -17,8 +17,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::account::{self, Manager};
+use crate::server::parse;
 use crate::store;
-use crate::syntax::{Did, Tid};
+use crate::syntax::Did;
 use crate::xrpc::{self, Listed, Params};
 
 /// How many repositories a page holds when the caller does not say.
@@ -102,15 +103,10 @@ pub(crate) async fn get_repo(
     State(accounts): State<Arc<Manager>>,
     Params(query): Params<Export>,
 ) -> xrpc::Result<Response> {
-    let since = query
-        .since
-        .map(|since| {
-            since
-                .parse::<Tid>()
-                .map_err(|_| xrpc::Error::invalid_request("Invalid since"))
-        })
-        .transpose()?;
-    Ok(streamed(accounts.export(&did(&query.did)?, since).await?))
+    let since = query.since.as_deref().map(parse::since).transpose()?;
+    Ok(streamed(
+        accounts.export(&parse::did(&query.did)?, since).await?,
+    ))
 }
 
 /// `com.atproto.sync.getRecord`
@@ -124,17 +120,11 @@ pub(crate) async fn get_record(
     State(accounts): State<Arc<Manager>>,
     Params(query): Params<Keyed>,
 ) -> xrpc::Result<Response> {
-    let collection = query
-        .collection
-        .parse()
-        .map_err(|_| xrpc::Error::invalid_request("Invalid collection"))?;
-    let rkey = query
-        .rkey
-        .parse()
-        .map_err(|_| xrpc::Error::invalid_request("Invalid record key"))?;
+    let collection = parse::collection(&query.collection)?;
+    let rkey = parse::record_key(&query.rkey)?;
     Ok(file(
         accounts
-            .proof(&did(&query.did)?, &collection, &rkey)
+            .proof(&parse::did(&query.did)?, &collection, &rkey)
             .await?,
     ))
 }
@@ -159,12 +149,9 @@ pub(crate) async fn get_blocks(
     }
     let cids = wanted
         .into_iter()
-        .map(|cid| {
-            cid.parse()
-                .map_err(|_| xrpc::Error::invalid_request("Invalid cid"))
-        })
+        .map(parse::cid)
         .collect::<xrpc::Result<Vec<_>>>()?;
-    Ok(file(accounts.blocks(&did(&query.did)?, cids).await?))
+    Ok(file(accounts.blocks(&parse::did(&query.did)?, cids).await?))
 }
 
 /// `com.atproto.sync.getLatestCommit`
@@ -177,7 +164,7 @@ pub(crate) async fn get_latest_commit(
     State(accounts): State<Arc<Manager>>,
     Params(query): Params<Wanted>,
 ) -> xrpc::Result<Json<Latest>> {
-    let root = root(&accounts, &did(&query.did)?).await?;
+    let root = root(&accounts, &parse::did(&query.did)?).await?;
     Ok(Json(Latest {
         cid: root.cid.to_string(),
         rev: root.rev.into_string(),
@@ -194,7 +181,7 @@ pub(crate) async fn get_repo_status(
     State(accounts): State<Arc<Manager>>,
     Params(query): Params<Wanted>,
 ) -> xrpc::Result<Json<Status>> {
-    let did = did(&query.did)?;
+    let did = parse::did(&query.did)?;
     let root = root(&accounts, &did).await?;
     Ok(Json(Status {
         did: did.into_string(),
@@ -281,13 +268,6 @@ impl Stream for Pieces {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.get_mut().0.poll_recv(cx)
     }
-}
-
-/// The identifier a caller named. The lexicon asks for a DID, so a handle is
-/// not resolved here.
-fn did(did: &str) -> xrpc::Result<Did> {
-    did.parse()
-        .map_err(|_| xrpc::Error::invalid_request("Invalid did"))
 }
 
 /// The root a method answers from, or the refusal owed for a repository this

@@ -20,6 +20,7 @@ mod admin;
 mod app_password;
 mod blob;
 mod identity;
+mod parse;
 mod repo;
 mod session;
 mod signup;

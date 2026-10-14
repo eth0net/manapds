@@ -12,8 +12,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::account::Manager;
+use crate::server::parse;
 use crate::store;
-use crate::syntax::{Did, Tid};
 use crate::xrpc::{self, Params, auth::Access};
 
 /// What an upload is taken as when the caller says nothing.
@@ -140,14 +140,8 @@ pub(crate) async fn get(
 ) -> xrpc::Result<Response> {
     // The lexicon asks for a DID here rather than a handle, so nothing is
     // resolved: a blob is served by whoever holds it or by nobody.
-    let did: Did = query
-        .did
-        .parse()
-        .map_err(|_| xrpc::Error::invalid_request("Invalid did"))?;
-    let cid = query
-        .cid
-        .parse()
-        .map_err(|_| xrpc::Error::invalid_request("Invalid cid"))?;
+    let did = parse::did(&query.did)?;
+    let cid = parse::cid(&query.cid)?;
     let (blob, bytes) = accounts
         .blob(&did, &cid)
         .await?
@@ -186,18 +180,8 @@ pub(crate) async fn list(
     State(accounts): State<Arc<Manager>>,
     Params(query): Params<Listing>,
 ) -> xrpc::Result<Json<Page>> {
-    let did: Did = query
-        .did
-        .parse()
-        .map_err(|_| xrpc::Error::invalid_request("Invalid did"))?;
-    let since = query
-        .since
-        .map(|since| {
-            since
-                .parse::<Tid>()
-                .map_err(|_| xrpc::Error::invalid_request("Invalid since"))
-        })
-        .transpose()?;
+    let did = parse::did(&query.did)?;
+    let since = query.since.as_deref().map(parse::since).transpose()?;
     let limit = query.limit.unwrap_or(PAGE).clamp(1, LONGEST_PAGE);
     let cids: Vec<String> = accounts
         .blobs(&did, since, limit, query.cursor)

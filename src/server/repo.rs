@@ -9,8 +9,9 @@ use serde_json::Value;
 use crate::account::{self, Conflicts, Expect, Manager, Missing, Requested};
 use crate::repo;
 use crate::repo::Write;
+use crate::server::parse;
 use crate::store;
-use crate::syntax::{AtIdentifier, Did, Handle, Nsid, RecordKey};
+use crate::syntax::{AtIdentifier, Did, Handle, Nsid};
 use crate::xrpc::limit::{self, Limits};
 use crate::xrpc::{self, Input, Params, auth::Access};
 
@@ -222,10 +223,10 @@ pub(crate) async fn create_record(
 ) -> xrpc::Result<Json<Landed>> {
     let did = owned(&accounts, &access, &input.repo).await?;
     spend(limits.as_deref(), &did, limit::CREATE)?;
-    let named = collection(&input.collection)?;
+    let named = parse::collection(&input.collection)?;
     let write = Write::Create {
         rkey: match &input.rkey {
-            Some(rkey) => record_key(rkey)?,
+            Some(rkey) => parse::record_key(rkey)?,
             None => accounts.record_key(),
         },
         record: record(&named, input.record)?,
@@ -262,9 +263,9 @@ pub(crate) async fn put_record(
     spend(limits.as_deref(), &did, limit::PUT)?;
     let asked = Requested {
         write: {
-            let named = collection(&input.collection)?;
+            let named = parse::collection(&input.collection)?;
             Write::Put {
-                rkey: record_key(&input.rkey)?,
+                rkey: parse::record_key(&input.rkey)?,
                 record: record(&named, input.record)?,
                 collection: named,
             }
@@ -296,8 +297,8 @@ pub(crate) async fn delete_record(
     spend(limits.as_deref(), &did, limit::DELETE)?;
     let asked = Requested {
         write: Write::Delete {
-            collection: collection(&input.collection)?,
-            rkey: record_key(&input.rkey)?,
+            collection: parse::collection(&input.collection)?,
+            rkey: parse::record_key(&input.rkey)?,
         },
         // An explicit null is no check here rather than a demand for an empty
         // key, which is how the reference reads it on this method alone.
@@ -359,10 +360,10 @@ pub(crate) async fn apply_writes(
                 rkey,
                 value,
             } => {
-                let named = collection(&nsid)?;
+                let named = parse::collection(&nsid)?;
                 Write::Create {
                     rkey: match &rkey {
-                        Some(rkey) => record_key(rkey)?,
+                        Some(rkey) => parse::record_key(rkey)?,
                         None => accounts.record_key(),
                     },
                     record: record(&named, value)?,
@@ -374,9 +375,9 @@ pub(crate) async fn apply_writes(
                 rkey,
                 value,
             } => {
-                let named = collection(&nsid)?;
+                let named = parse::collection(&nsid)?;
                 Write::Update {
-                    rkey: record_key(&rkey)?,
+                    rkey: parse::record_key(&rkey)?,
                     record: record(&named, value)?,
                     collection: named,
                 }
@@ -385,8 +386,8 @@ pub(crate) async fn apply_writes(
                 collection: nsid,
                 rkey,
             } => Write::Delete {
-                collection: collection(&nsid)?,
-                rkey: record_key(&rkey)?,
+                collection: parse::collection(&nsid)?,
+                rkey: parse::record_key(&rkey)?,
             },
         }));
     }
@@ -448,7 +449,10 @@ pub(crate) async fn get_record(
     Params(query): Params<Wanted>,
 ) -> xrpc::Result<Json<Held>> {
     let did = repository(&accounts, &query.repo).await?;
-    let (collection, rkey) = (collection(&query.collection)?, record_key(&query.rkey)?);
+    let (collection, rkey) = (
+        parse::collection(&query.collection)?,
+        parse::record_key(&query.rkey)?,
+    );
     let held = accounts
         .record(&did, &collection, &rkey)
         .await?
@@ -474,7 +478,7 @@ pub(crate) async fn list_records(
     Params(query): Params<Listing>,
 ) -> xrpc::Result<Json<Page>> {
     let did = repository(&accounts, &query.repo).await?;
-    let collection = collection(&query.collection)?;
+    let collection = parse::collection(&query.collection)?;
     let limit = query.limit.unwrap_or(PAGE).clamp(1, LONGEST_PAGE);
     let held = accounts
         .records(&did, &collection, limit, query.cursor, query.reverse)
@@ -614,16 +618,6 @@ async fn found(accounts: &Manager, repo: &str) -> xrpc::Result<store::Account> {
 /// The same, where only the identifier behind it is wanted.
 async fn repository(accounts: &Manager, repo: &str) -> xrpc::Result<Did> {
     Ok(found(accounts, repo).await?.did)
-}
-
-fn collection(nsid: &str) -> xrpc::Result<Nsid> {
-    nsid.parse()
-        .map_err(|_| xrpc::Error::invalid_request("Invalid collection"))
-}
-
-fn record_key(rkey: &str) -> xrpc::Result<RecordKey> {
-    rkey.parse()
-        .map_err(|_| xrpc::Error::invalid_request("Invalid record key"))
 }
 
 /// One stored record, turned back into what a client sent.
