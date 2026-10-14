@@ -7,7 +7,7 @@ no Redis, no Postgres, no object store, no mail service.
 
 Everything atproto is XRPC: `GET /xrpc/<nsid>` for a lexicon query, `POST` for
 a procedure, errors as `{"error": "...", "message": "..."}`. The OAuth
-endpoints and the two well-known documents are ordinary HTTP, because the
+endpoints and the two well-known documents will be ordinary HTTP, because the
 OAuth spec says where they live and it is not under `/xrpc/`.
 
 A lexicon declares whether a method is a query or a procedure, so the router

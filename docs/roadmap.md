@@ -29,10 +29,11 @@ not by what is interesting.
    `listRepos`, `getRepoStatus`, `listBlobs` — what a relay or another server
    fetches, without yet holding a socket open.
 
-The first tag waits for step 6. That is the earliest point another person can
-start this and have a client sign in and read something back, and a version
-number before then would be marking a library nobody can run. The README has to
-say how to start it by the same commit, or the tag claims more than it delivers.
+A tag marks a point another person can start this and get something back,
+which is why the first went at step 6 rather than at the first commit that
+built: a version number before then marks a library nobody can run. The README
+has to say how to start it by the same commit, or the tag claims more than it
+delivers.
 
 ## The image
 
@@ -40,8 +41,7 @@ An operator runs this as a container, so the image is part of the work rather
 than packaging bolted on at the end, and `serve` and `secret` are both shaped
 around an entrypoint that takes a command. Both architectures are built on
 their own runner and published to ghcr, `edge` from main and the three release
-names from a `v` tag — the second half of which nothing has exercised, since
-the first tag waits for step 6.
+names from a `v` tag.
 
 Moving an account belongs on that command line too. Both halves are promised
 already, the endpoints below and the tool that reads a rewritten directory back,
