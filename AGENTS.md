@@ -8,7 +8,8 @@ Minimal by intent: the reference server does a great deal this one will not.
 `docs/` carries the reasoning, one file per subject — `roadmap.md` for the
 order of work and what v0 leaves out, `architecture.md` for the process and
 storage shape, `repo.md` for the MST and the crypto, `oauth.md` for the
-authorization server, `porting.md` for the reference version behind all of it.
+authorization server, `testing.md` for where a test goes, `porting.md` for the
+reference version behind all of it.
 This file is the orientation for picking the project back up; read the doc
 before changing anything it covers.
 
@@ -49,6 +50,7 @@ asserts on a copy of what the code does is not a test of the code, and needing
 to reach inside the crate to avoid that is a reason to, not a reason to settle.
 
 Another kind of test is welcome wherever it earns its place.
+[`testing.md`](docs/testing.md) has the reasoning and what the suite owes.
 
 ## Conventions
 
