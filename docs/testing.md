@@ -36,10 +36,11 @@ it will look exactly like a real test while it does.
 
 ## What is out of place
 
-`tests/syntax.rs`, `tests/crypto.rs`, `tests/car.rs` and `tests/config.rs` are
-all parsing and encoding, pure in both directions, and all sit outside the
-crate. They belong beside what they check, where they can also name the private
-helpers that hold the actual rules.
+`tests/config.rs` reads as a pure suite and is not one. It sets and clears
+process environment variables, which no mutex inside one file can hold back
+from the other tests in its binary, and doing that unsafely is only sound
+because nothing else shares the process. A binary to itself is what keeps that
+true, so it stays one.
 
 `tests/xrpc.rs` is two suites in one file. The budget arithmetic and the scope
 and authorization logic are pure; the router tests are not. Separating them is
@@ -76,9 +77,8 @@ seeing it.
 
 ## Order
 
-1. Move the four pure suites in. Smallest, and it demonstrates the shape.
-2. Split `xrpc.rs` by what its halves actually test.
-3. Split the three oversized files by subject.
-4. Measure paging cost, once there is appetite for a fourth kind of test.
+1. Split `xrpc.rs` by what its halves actually test.
+2. Split the three oversized files by subject.
+3. Measure paging cost, once there is appetite for a fourth kind of test.
 
-One and three are independent of each other and of everything else.
+The first two are independent of each other and of everything else.
