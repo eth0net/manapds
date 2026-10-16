@@ -596,3 +596,248 @@ fn unverifiable() -> Error {
 fn malformed() -> Error {
     Error::invalid_request("Malformed token").named("InvalidToken")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The secret every token in these tests is signed under.
+    const SECRET: &str = "a secret long enough to not be guessed";
+
+    fn account() -> Did {
+        "did:plc:4cjoyc3cgpal7gnrpzyjhnv3".parse().expect("a DID")
+    }
+
+    fn tokens() -> Tokens {
+        Tokens::new(SECRET, "did:web:pds.example.com")
+    }
+
+    /// Mints a token this server would not, so the checks on the way back in can
+    /// be reached from inside it.
+    fn forge(typ: &str, claims: &serde_json::Value) -> String {
+        let header = BASE64.encode(serde_json::json!({"alg": "HS256", "typ": typ}).to_string());
+        let signed = format!("{header}.{}", BASE64.encode(claims.to_string()));
+
+        let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(SECRET.as_bytes())
+            .expect("a key of any length");
+        mac.update(signed.as_bytes());
+        format!("{signed}.{}", BASE64.encode(mac.finalize().into_bytes()))
+    }
+
+    /// The claims of a session this server would have issued.
+    fn session() -> serde_json::Value {
+        serde_json::json!({
+            "scope": "com.atproto.access",
+            "sub": account().as_str(),
+            "aud": "did:web:pds.example.com",
+            "iat": 1_700_000_000,
+            "exp": 4_100_000_000i64,
+        })
+    }
+
+    #[test]
+    fn an_access_token_comes_back_as_the_session_that_minted_it() {
+        let tokens = tokens();
+        let token = tokens.access(&account(), Scope::Access);
+        let access = tokens
+            .verify_access(&token, &Scope::STANDARD)
+            .expect("the token verifies");
+        assert_eq!(access.did, account());
+        assert_eq!(access.scope, Scope::Access);
+    }
+
+    #[test]
+    fn a_refresh_token_carries_the_id_the_session_is_stored_under() {
+        let tokens = tokens();
+        let token = tokens.refresh(&account(), "a-stored-session");
+        let refresh = tokens
+            .verify_refresh(&token, Expired::Refuse)
+            .expect("the token verifies");
+        assert_eq!(refresh.did, account());
+        assert_eq!(refresh.id, "a-stored-session");
+    }
+
+    #[test]
+    fn neither_kind_of_token_can_be_spent_as_the_other() {
+        let tokens = tokens();
+        let access = tokens.access(&account(), Scope::Access);
+        let refresh = tokens.refresh(&account(), "a-stored-session");
+        assert!(tokens.verify_refresh(&access, Expired::Refuse).is_err());
+        assert!(tokens.verify_access(&refresh, &Scope::STANDARD).is_err());
+    }
+
+    #[test]
+    fn a_token_another_secret_signed_is_not_one_of_ours() {
+        let token = Tokens::new("another secret", "did:web:pds.example.com")
+            .access(&account(), Scope::Access);
+        let error = tokens()
+            .verify_access(&token, &Scope::STANDARD)
+            .expect_err("the signature is not ours");
+        assert_eq!(error.name(), "InvalidToken");
+    }
+
+    #[test]
+    fn a_token_minted_for_another_service_is_not_accepted_here() {
+        let token = Tokens::new("a secret", "did:web:elsewhere.example.com")
+            .access(&account(), Scope::Access);
+        let error = tokens()
+            .verify_access(&token, &Scope::STANDARD)
+            .expect_err("the audience is not us");
+        assert_eq!(error.name(), "InvalidToken");
+    }
+
+    #[test]
+    fn an_app_password_does_not_reach_what_a_full_session_does() {
+        let tokens = tokens();
+        let token = tokens.access(&account(), Scope::AppPassword);
+        assert!(tokens.verify_access(&token, &Scope::STANDARD).is_ok());
+        let error = tokens
+            .verify_access(&token, &Scope::PRIVILEGED)
+            .expect_err("an app password is not privileged");
+        assert_eq!(error.message(), "Bad token scope");
+    }
+
+    #[test]
+    fn a_refresh_token_past_its_expiry_can_still_end_its_session() {
+        let tokens = tokens();
+        let token = tokens.refresh(&account(), "a-stored-session");
+
+        // Nothing here mints an expired refresh token, so this pins the choice
+        // rather than the clock: refusing is what exchanging one does.
+        assert!(tokens.verify_refresh(&token, Expired::Refuse).is_ok());
+        assert!(tokens.verify_refresh(&token, Expired::Allow).is_ok());
+
+        let stale = forge(
+            "refresh+jwt",
+            &serde_json::json!({
+                "scope": "com.atproto.refresh",
+                "sub": account().as_str(),
+                "aud": "did:web:pds.example.com",
+                "jti": "a-stored-session",
+                "iat": 1_600_000_000,
+                "exp": 1_600_000_001,
+            }),
+        );
+        assert_eq!(
+            tokens
+                .verify_refresh(&stale, Expired::Refuse)
+                .expect_err("too late to exchange")
+                .name(),
+            "ExpiredToken"
+        );
+        assert_eq!(
+            tokens
+                .verify_refresh(&stale, Expired::Allow)
+                .expect("late is still this session")
+                .id,
+            "a-stored-session"
+        );
+    }
+
+    #[test]
+    fn a_tampered_token_does_not_verify() {
+        let tokens = tokens();
+        let token = tokens.access(&account(), Scope::Access);
+        let (body, signature) = token.rsplit_once('.').expect("three parts");
+        let forged = format!("{body}x.{signature}");
+        assert!(tokens.verify_access(&forged, &Scope::STANDARD).is_err());
+    }
+
+    #[test]
+    fn the_authorization_header_is_read_as_the_scheme_it_names() {
+        assert_eq!(
+            Authorization::parse(None).expect("nothing"),
+            Authorization(None)
+        );
+        assert_eq!(
+            Authorization::parse(Some("bearer a-token"))
+                .expect("a bearer token")
+                .bearer(),
+            Some("a-token")
+        );
+        assert_eq!(
+            Authorization::parse(Some("Basic YWRtaW46aHVudGVyOjI=")).expect("a password"),
+            Authorization(Some(Credential::Basic {
+                username: "admin".to_owned(),
+                password: "hunter:2".to_owned(),
+            }))
+        );
+        assert_eq!(
+            Authorization::parse(Some("Digest nope"))
+                .expect_err("nothing here speaks digest")
+                .message(),
+            "Unsupported authorization type: Digest"
+        );
+        assert!(Authorization::parse(Some("Bearer")).is_err());
+    }
+
+    #[test]
+    fn a_token_past_its_expiry_says_which_of_the_two_it_is() {
+        let tokens = tokens();
+        let token = tokens.access_for(
+            &account(),
+            Scope::Access,
+            jiff::SignedDuration::from_secs(-1),
+        );
+        let error = tokens
+            .verify_access(&token, &Scope::STANDARD)
+            .expect_err("an hour too late");
+        assert_eq!(error.name(), "ExpiredToken");
+        assert_eq!(error.message(), "Token has expired");
+    }
+
+    #[test]
+    fn a_token_proving_something_else_is_not_a_session() {
+        let tokens = tokens();
+        for claim in ["lxm", "cnf"] {
+            let mut claims = session();
+            claims[claim] = serde_json::json!("com.atproto.repo.createRecord");
+            let error = tokens
+                .verify_access(&forge("at+jwt", &claims), &Scope::STANDARD)
+                .expect_err("service auth is not a session");
+            assert_eq!(error.message(), "Malformed token", "{claim}");
+        }
+
+        // The same claims without either are a session, so the refusal above is
+        // the claim and not the forging.
+        assert!(
+            tokens
+                .verify_access(&forge("at+jwt", &session()), &Scope::STANDARD)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_scope_this_server_never_issued_is_a_scope_problem() {
+        let mut claims = session();
+        claims["scope"] = serde_json::json!("com.atproto.somethingElse");
+        let error = tokens()
+            .verify_access(&forge("at+jwt", &claims), &Scope::STANDARD)
+            .expect_err("no such scope");
+        assert_eq!(error.message(), "Bad token scope");
+    }
+
+    #[test]
+    fn a_token_for_another_service_reads_as_one_we_cannot_verify() {
+        let mut claims = session();
+        claims["aud"] = serde_json::json!("did:web:elsewhere.example.com");
+        let error = tokens()
+            .verify_access(&forge("at+jwt", &claims), &Scope::STANDARD)
+            .expect_err("not our audience");
+        assert_eq!(error.message(), "Token could not be verified");
+    }
+
+    #[test]
+    fn a_basic_header_that_will_not_decode_is_no_credential_at_all() {
+        // Upstream falls through to "nothing was offered" rather than answering a
+        // different status, so an admin endpoint gives one answer either way.
+        assert_eq!(
+            Authorization::parse(Some("Basic not-base64!!")).expect("no credential"),
+            Authorization(None)
+        );
+        assert_eq!(
+            Authorization::parse(Some("Basic bm9jb2xvbg==")).expect("no credential"),
+            Authorization(None)
+        );
+    }
+}

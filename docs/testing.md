@@ -42,10 +42,6 @@ from the other tests in its binary, and doing that unsafely is only sound
 because nothing else shares the process. A binary to itself is what keeps that
 true, so it stays one.
 
-`tests/xrpc.rs` is two suites in one file. The budget arithmetic and the scope
-and authorization logic are pure; the router tests are not. Separating them is
-worth more than moving either.
-
 `tests/repo.rs` is the judgment call. The MST is pure logic, but its tests
 need a store to hand, so they are unit tests with a fixture rather than
 integration tests. Leave it until the clear cases are done.
@@ -77,8 +73,7 @@ seeing it.
 
 ## Order
 
-1. Split `xrpc.rs` by what its halves actually test.
-2. Split the three oversized files by subject.
-3. Measure paging cost, once there is appetite for a fourth kind of test.
+1. Split the three oversized files by subject.
+2. Measure paging cost, once there is appetite for a fourth kind of test.
 
-The first two are independent of each other and of everything else.
+The two are independent of each other and of everything else.

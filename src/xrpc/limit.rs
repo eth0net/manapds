@@ -509,3 +509,168 @@ fn unique_local(address: Ipv6Addr) -> bool {
 fn link_local(address: Ipv6Addr) -> bool {
     address.octets()[0] == 0xfe && address.octets()[1] & 0xc0 == 0x80
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn account() -> Did {
+        "did:plc:4cjoyc3cgpal7gnrpzyjhnv3".parse().expect("a DID")
+    }
+
+    /// A server told nothing, which is every budget off and no key past them.
+    fn config() -> Config {
+        Config {
+            service_did: "did:web:pds.example.com".to_owned(),
+            handle_domains: vec![".pds.example.com".to_owned()],
+            reserved_handles: Vec::new(),
+            hostname: "pds.example.com".to_owned(),
+            port: 443,
+            data_directory: std::path::PathBuf::from("data"),
+            jwt_secret: Secret::new("a secret long enough to not be guessed"),
+            admin_password: Secret::new("admin"),
+            plc_rotation_key: crate::crypto::Keypair::generate(crate::crypto::Algorithm::Secp256k1),
+            plc_url: "http://127.0.0.1:1".to_owned(),
+            recovery_key: None,
+            invite_required: false,
+            blob_upload_limit: 5 * 1024 * 1024,
+            blob_unclaimed_hours: 24,
+            privacy_policy_url: None,
+            terms_of_service_url: None,
+            contact_email: None,
+            rate_limits: false,
+            rate_limit_bypass_key: None,
+            rate_limit_bypass_ips: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_budget_runs_out_and_says_when_it_is_back() {
+        let limiter = Limiter::new(2, std::time::Duration::from_mins(5));
+        assert!(!limiter.consume("1.2.3.4", 1).exceeded);
+        let reading = limiter.consume("1.2.3.4", 1);
+        assert!(!reading.exceeded);
+        assert_eq!(reading.remaining, 0);
+        let reading = limiter.consume("1.2.3.4", 1);
+        assert!(reading.exceeded);
+        assert!(reading.resets_in <= std::time::Duration::from_mins(5));
+        // Another caller has its own.
+        assert!(!limiter.consume("5.6.7.8", 1).exceeded);
+    }
+
+    #[test]
+    fn a_caller_cannot_name_someone_else_to_spend_the_budget() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-forwarded-for", "9.9.9.9".parse().expect("a header"));
+
+        let behind_a_proxy: SocketAddr = "127.0.0.1:9".parse().expect("an address");
+        assert_eq!(caller(behind_a_proxy.ip(), &headers).to_string(), "9.9.9.9");
+
+        let straight_off_the_internet: SocketAddr = "8.8.8.8:9".parse().expect("an address");
+        assert_eq!(
+            caller(straight_off_the_internet.ip(), &headers).to_string(),
+            "8.8.8.8"
+        );
+    }
+
+    #[test]
+    fn a_proxy_is_believed_however_its_address_is_spelled() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-forwarded-for", "9.9.9.9".parse().expect("a header"));
+
+        // The same loopback, written the way a dual-stack socket reports it.
+        let mapped: SocketAddr = "[::ffff:127.0.0.1]:9".parse().expect("an address");
+        assert_eq!(caller(mapped.ip(), &headers).to_string(), "9.9.9.9");
+
+        // Carrier-grade NAT, which is what a hosting front-end arrives from.
+        let cgnat: SocketAddr = "100.64.0.1:9".parse().expect("an address");
+        assert_eq!(caller(cgnat.ip(), &headers).to_string(), "9.9.9.9");
+
+        // And one caller reaching us both ways is still one caller.
+        let straight: SocketAddr = "[::ffff:8.8.8.8]:9".parse().expect("an address");
+        assert_eq!(
+            caller(straight.ip(), &axum::http::HeaderMap::new()).to_string(),
+            "8.8.8.8"
+        );
+    }
+
+    #[test]
+    fn a_chain_of_proxies_is_walked_back_to_the_first_one_outside() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            "1.1.1.1, 9.9.9.9, 10.0.0.7".parse().expect("a header"),
+        );
+        let peer: SocketAddr = "127.0.0.1:9".parse().expect("an address");
+        assert_eq!(caller(peer.ip(), &headers).to_string(), "9.9.9.9");
+    }
+
+    #[test]
+    fn a_budget_comes_back_when_its_window_has_passed() {
+        let limiter = Limiter::new(1, std::time::Duration::from_millis(40));
+        assert!(!limiter.consume("1.2.3.4", 1).exceeded);
+        assert!(limiter.consume("1.2.3.4", 1).exceeded);
+
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        let reading = limiter.consume("1.2.3.4", 1);
+        assert!(!reading.exceeded, "the window refilled");
+        assert_eq!(reading.spent, 1, "and it started again from nothing");
+    }
+
+    #[test]
+    fn one_line_spends_one_budget_however_many_addresses_it_holds() {
+        let rotated = |address: &str| budget(address.parse().expect("an address"));
+
+        // A residential line or a VPS is given a /64, so an address it has not
+        // used yet is not a caller we have not seen.
+        assert_eq!(
+            rotated("2001:db8:1:2::1"),
+            rotated("2001:db8:1:2:dead:beef::")
+        );
+        assert_ne!(rotated("2001:db8:1:2::1"), rotated("2001:db8:1:3::1"));
+
+        // IPv4 is scarce enough that neighbors are not the same customer.
+        assert_ne!(rotated("9.9.9.9"), rotated("9.9.9.10"));
+        assert_eq!(rotated("9.9.9.9"), "9.9.9.9");
+    }
+
+    #[test]
+    fn a_budget_holding_every_key_it_will_counts_nobody_new() {
+        let limiter = Limiter::new(1, std::time::Duration::from_mins(5));
+        for key in 0..100_000 {
+            assert!(!limiter.consume(&key.to_string(), 1).exceeded);
+        }
+
+        // The table is full, so an arrival nothing has seen goes uncounted rather
+        // than costing memory the process cannot get back.
+        let reading = limiter.consume("one too many", 1);
+        assert_eq!(reading.spent, 0);
+        assert!(!reading.exceeded);
+
+        // A key already in there is still held to its budget.
+        assert!(limiter.consume("0", 1).exceeded);
+    }
+
+    #[test]
+    fn a_repository_write_spends_a_budget_the_account_holds() {
+        let mut config = config();
+        config.rate_limits = true;
+        let limits = Limits::new(&config).expect("budgets");
+
+        // The hourly budget is spent in the currency the three methods cost in,
+        // so what it allows is what it says it allows.
+        assert_eq!(limits.writing(&account(), 4998), None);
+        assert_eq!(limits.writing(&account(), DELETE), None);
+        assert_eq!(limits.writing(&account(), DELETE), None);
+        let past = limits
+            .writing(&account(), CREATE)
+            .expect("one write too many");
+        assert_eq!(past.limit, 5000);
+        assert!(past.exceeded);
+        assert_eq!(past.remaining, 0);
+
+        // And it is the account's, not the caller's: another one is untouched.
+        let other: Did = "did:plc:mav423b24thku7ezkx7yaray".parse().expect("a DID");
+        assert_eq!(limits.writing(&other, CREATE), None);
+    }
+}

@@ -237,3 +237,137 @@ impl IntoResponse for Error {
         response
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_error_falls_back_to_the_name_of_its_status() {
+        let error = Error::new(Status::MethodNotImplemented);
+        assert_eq!(error.name(), "MethodNotImplemented");
+        assert_eq!(error.message(), "Method Not Implemented");
+    }
+
+    #[test]
+    fn a_lexicon_name_is_what_the_client_branches_on() {
+        let error = Error::invalid_request("Token has expired").named("ExpiredToken");
+        assert_eq!(error.status(), Status::InvalidRequest);
+        assert_eq!(error.name(), "ExpiredToken");
+        assert_eq!(error.message(), "Token has expired");
+    }
+
+    #[test]
+    fn a_fault_on_this_side_is_never_described() {
+        let error = Error::internal("the database is on fire");
+        assert_eq!(error.name(), "InternalServerError");
+        assert_eq!(error.message(), "Internal Server Error");
+    }
+
+    #[test]
+    fn every_status_is_named_the_way_the_lexicons_name_it() {
+        // Transcribed from ResponseType and ResponseTypeStrings in
+        // packages/xrpc/src/types.ts. Clients branch on the middle column.
+        let table = [
+            (
+                Status::InvalidRequest,
+                400,
+                "InvalidRequest",
+                "Invalid Request",
+            ),
+            (
+                Status::AuthenticationRequired,
+                401,
+                "AuthenticationRequired",
+                "Authentication Required",
+            ),
+            (Status::Forbidden, 403, "Forbidden", "Forbidden"),
+            (
+                Status::XrpcNotSupported,
+                404,
+                "XRPCNotSupported",
+                "XRPC Not Supported",
+            ),
+            (
+                Status::NotAcceptable,
+                406,
+                "NotAcceptable",
+                "Not Acceptable",
+            ),
+            (
+                Status::PayloadTooLarge,
+                413,
+                "PayloadTooLarge",
+                "Payload Too Large",
+            ),
+            (
+                Status::UnsupportedMediaType,
+                415,
+                "UnsupportedMediaType",
+                "Unsupported Media Type",
+            ),
+            (
+                Status::RateLimitExceeded,
+                429,
+                "RateLimitExceeded",
+                "Rate Limit Exceeded",
+            ),
+            (
+                Status::InternalServerError,
+                500,
+                "InternalServerError",
+                "Internal Server Error",
+            ),
+            (
+                Status::MethodNotImplemented,
+                501,
+                "MethodNotImplemented",
+                "Method Not Implemented",
+            ),
+            (
+                Status::UpstreamFailure,
+                502,
+                "UpstreamFailure",
+                "Upstream Failure",
+            ),
+            (
+                Status::NotEnoughResources,
+                503,
+                "NotEnoughResources",
+                "Not Enough Resources",
+            ),
+            (
+                Status::UpstreamTimeout,
+                504,
+                "UpstreamTimeout",
+                "Upstream Timeout",
+            ),
+        ];
+
+        for (status, code, name, description) in table {
+            assert_eq!(status.code().as_u16(), code, "{name}");
+            assert_eq!(status.name(), name);
+            assert_eq!(status.description(), description, "{name}");
+        }
+    }
+
+    #[test]
+    fn storage_that_would_not_answer_this_time_says_come_back() {
+        // A caller can act on a busy database and cannot act on a fault, so the
+        // two do not come back as the same answer.
+        let busy = crate::store::Error::Sqlite(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(5),
+            Some("database is locked".to_owned()),
+        ));
+        assert!(busy.busy());
+        let refused = Error::from(crate::account::Error::Storage(busy));
+        assert_eq!(refused.status(), Status::NotEnoughResources);
+        assert_eq!(refused.name(), "NotEnoughResources");
+        assert_eq!(refused.status().code(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let broken = crate::store::Error::Malformed("a row nothing here writes");
+        assert!(!broken.busy());
+        let refused = Error::from(crate::account::Error::Storage(broken));
+        assert_eq!(refused.status(), Status::InternalServerError);
+    }
+}
