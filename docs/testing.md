@@ -46,10 +46,16 @@ true, so it stays one.
 need a store to hand, so they are unit tests with a fixture rather than
 integration tests. Leave it until the clear cases are done.
 
-`tests/store.rs`, `tests/records.rs` and `tests/account.rs` have each grown to
-cover several subjects at once, which makes a failure name a file rather than a
-place. Cargo builds `tests/<name>/main.rs` as one binary, so a directory with a
-module per subject splits the reading without splitting the link.
+`tests/account.rs` covers several subjects at once, which makes a failure name
+a file rather than a place. Cargo builds `tests/<name>/main.rs` as one binary,
+so a directory with a module per subject splits the reading without splitting
+the link, as `store/` and `records/` now do.
+
+Splitting one is a move, not an edit, and what makes that worth saying is how
+quietly it goes wrong: an attribute left behind turns a test into an unused
+function, which is a warning rather than a failure. Counting the tests that run
+catches it; comparing the names does not, because the names are all still
+there.
 
 ## What nothing tests
 
