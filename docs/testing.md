@@ -42,10 +42,11 @@ from the other tests in its binary, and doing that unsafely is only sound
 because nothing else shares the process. A binary to itself is what keeps that
 true, so it stays one.
 
-`tests/repo.rs` is the judgment call left. The MST is pure logic, but its
-tests need a store to hand, so they are unit tests with a fixture rather than
-integration tests. Whether a fixture that small is worth reaching into the
-crate for is a call nobody has had to make yet.
+`tests/repo.rs` is thirty unit tests outside the crate. What looks like a
+store in them is a `BlockMap` and a wrapper that counts reads of one, both of
+which are the repository layer rather than anything under it; the suite names
+nothing but `repo`, `crypto` and `syntax`. It belongs next to the tree, the
+commit and the record it is about, which is five files rather than one.
 
 ## Moving one
 
@@ -78,4 +79,7 @@ seeing it.
 
 ## Order
 
-1. Measure paging cost, once there is appetite for a fourth kind of test.
+1. Move `repo.rs` in, a destination at a time: the block map to `block.rs`,
+   the tree to `mst.rs`, the commits to `commit.rs`, the record JSON to
+   `json.rs`, and what is left of `Repo` to `repo.rs` itself.
+2. Measure paging cost, which is a kind of test nothing here does yet.
