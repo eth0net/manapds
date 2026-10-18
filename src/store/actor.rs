@@ -1175,4 +1175,131 @@ mod tests {
         let (query, _) = missing_blobs_query(500, Some("bafkqaaa"));
         seeks(&store, "a page of the blobs nothing uploaded", &query);
     }
+
+    /// Rows enough that a page deep in the index costs many times the first
+    /// one if anything but a seek reaches it.
+    const FILLED: usize = 20_000;
+
+    /// How far in the deep page is, in rows.
+    const PAGES_IN: usize = 16_000;
+
+    /// The row a listing's first page starts at. Which end that is depends on
+    /// the order, so both ends are named by row rather than by direction.
+    fn head(descending: bool) -> usize {
+        if descending { FILLED - 1 } else { 0 }
+    }
+
+    /// The row a page far enough in to be worth walking to starts at.
+    fn deep(descending: bool) -> usize {
+        if descending {
+            FILLED - 1 - PAGES_IN
+        } else {
+            PAGES_IN
+        }
+    }
+
+    fn key(row: usize) -> String {
+        format!("{row:013}")
+    }
+
+    fn blob(row: usize) -> String {
+        format!("bafyreia{row:051}")
+    }
+
+    /// A store holding [`FILLED`] records, each with its block and a blob it
+    /// names. Nothing uploaded any of the blobs, so every one is missing.
+    fn filled() -> Actor {
+        let store = store();
+        let prefix = format!("at://{}/com.example.record/", store.did);
+        store.db.execute_batch("begin").expect("begins");
+        {
+            let prepare = |query| store.db.prepare(query).expect("prepares");
+            let mut block = prepare(
+                r#"insert into "repo_block" ("cid", "repoRev", "size", "content")
+                   values (?1, ?2, 0, x'a0')"#,
+            );
+            let mut record = prepare(
+                r#"insert into "record"
+                   ("uri", "cid", "collection", "rkey", "repoRev", "indexedAt")
+                   values (?1, ?2, 'com.example.record', ?3, ?4, '')"#,
+            );
+            let mut named =
+                prepare(r#"insert into "record_blob" ("blobCid", "recordUri") values (?1, ?2)"#);
+            for row in 0..FILLED {
+                let (uri, cid) = (format!("{prefix}{}", key(row)), blob(row));
+                block.execute((&cid, key(row))).expect("a block");
+                record
+                    .execute((&uri, &cid, key(row), key(row)))
+                    .expect("a record");
+                named.execute((&cid, &uri)).expect("a blob");
+            }
+        }
+        store.db.execute_batch("commit").expect("commits");
+        store
+    }
+
+    /// Asserts a page deep in a listing costs about what its first page does.
+    ///
+    /// Both carry a cursor, so the only difference between them is how far in
+    /// the page starts; a page that walked to its own start instead of seeking
+    /// costs the rows it walked past, which here is hundreds of pages of them.
+    #[track_caller]
+    fn flat(
+        store: &Actor,
+        what: &str,
+        first: &(String, Vec<rusqlite::types::Value>),
+        far: &(String, Vec<rusqlite::types::Value>),
+    ) {
+        let near = super::super::work(&store.db, &first.0, &first.1);
+        let deep = super::super::work(&store.db, &far.0, &far.1);
+        assert!(deep < near * 2, "{what}: {deep} steps against {near}");
+    }
+
+    #[test]
+    fn a_collection_page_costs_the_same_wherever_it_starts() {
+        let store = filled();
+        let prefix = format!("at://{}/com.example.record/", store.did);
+        for reverse in [false, true] {
+            flat(
+                &store,
+                &format!("reverse {reverse}"),
+                &records_query(&prefix, 50, Some(&key(head(!reverse))), reverse),
+                &records_query(&prefix, 50, Some(&key(deep(!reverse))), reverse),
+            );
+        }
+    }
+
+    #[test]
+    fn a_block_page_costs_the_same_wherever_it_starts() {
+        let store = filled();
+        // Revisions are unique, so which CID the cursor carries only decides
+        // ties and any one of them will do.
+        let at = |row| Mark {
+            rev: key(row),
+            ..mark()
+        };
+        flat(
+            &store,
+            "a page of blocks",
+            &blocks_query(None, Some(&at(head(true))), 500),
+            &blocks_query(None, Some(&at(deep(true))), 500),
+        );
+    }
+
+    #[test]
+    fn a_blob_page_costs_the_same_wherever_it_starts() {
+        let store = filled();
+        flat(
+            &store,
+            "a page of blobs",
+            &blobs_query(None, 500, Some(&blob(head(false)))),
+            &blobs_query(None, 500, Some(&blob(deep(false)))),
+        );
+        flat(
+            &store,
+            "a page of the blobs nothing uploaded",
+            &missing_blobs_query(500, Some(&blob(head(false)))),
+            &missing_blobs_query(500, Some(&blob(deep(false)))),
+        );
+    }
 }

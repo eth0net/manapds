@@ -221,6 +221,43 @@ impl Drop for Running {
     }
 }
 
+/// How often SQLite is asked to say it is still running, in instructions.
+#[cfg(test)]
+const STEP: std::ffi::c_int = 16;
+
+/// What a query costs, counted in the instructions SQLite runs rather than the
+/// time it takes, so a page measured here means the same on any machine.
+#[cfg(test)]
+pub(crate) fn work(
+    db: &rusqlite::Connection,
+    query: &str,
+    binds: &[rusqlite::types::Value],
+) -> u64 {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    let steps = Arc::new(AtomicU64::new(0));
+    let counted = Arc::clone(&steps);
+    db.progress_handler(
+        STEP,
+        Some(move || {
+            counted.fetch_add(1, Ordering::Relaxed);
+            false
+        }),
+    )
+    .expect("counts");
+
+    let mut statement = db.prepare(query).expect("prepares");
+    let mut rows = statement
+        .query(rusqlite::params_from_iter(binds))
+        .expect("runs");
+    while rows.next().expect("a row").is_some() {}
+
+    db.progress_handler(STEP, None::<fn() -> bool>)
+        .expect("stops counting");
+    steps.load(Ordering::Relaxed)
+}
+
 /// Every row the planner answers with for a query, which is where a sort it
 /// had to put in for itself is named.
 #[cfg(test)]

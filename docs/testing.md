@@ -57,26 +57,23 @@ recognize, a type alias between two functions, goes missing entirely. Counting
 the tests that run catches the first and compiling catches the second. Comparing
 the names catches neither, because the names are all still there.
 
+## What a measurement is worth
+
+Two queries can share a plan and read a thousand times the rows. A cursor
+added as an extra comparison, rather than put in place of a bound, searches the
+same index either way; only how far it walks before the page starts differs,
+and nothing a plan prints shows it.
+
+So the paged reads are measured as well as planned, and both measurements here
+count rather than time and assert a relationship rather than a number, because
+a number is one machine's and rots. `tests/export.rs` installs a counting
+allocator and takes a binary to itself so nothing else allocates into what it
+is measuring; the paged reads install SQLite's progress handler, which belongs
+to one connection and needs no such room.
+
 ## What nothing tests
 
-A cursor added to a query as an extra comparison, rather than put in place of a
-bound, produces a plan identical to the correct one. The index is searched
-either way; only the number of rows read differs. Nothing in a plan shows it
-and nothing in the suite catches it — what prevents it today is the shape of
-the builder, which has one bound per end and no room for a third.
-
-The technique that would catch it is already here. `tests/export.rs` installs a
-counting allocator, takes a binary to itself so the measurement is undisturbed,
-and asserts a relationship rather than a number: what a download holds does not
-grow with the repository. A number would be a machine's number and would rot.
-
-The same shape fits paging, and need not be timed. SQLite will call a progress
-handler every so many instructions it runs, which counts work done rather than
-time taken, so a deep page and a shallow one can be compared without asking how
-fast the machine is. `rusqlite` exposes it behind a feature carrying no
-dependencies, which a dev-dependency can turn on without the release build ever
-seeing it.
-
-## Order
-
-1. Measure paging cost, which is a kind of test nothing here does yet.
+How long a read holds what it runs on. `getRepo` streams a repository out of
+one transaction on one blocking thread, and a caller that stops reading leaves
+both of them held for as long as it cares to. Neither measurement above says
+anything about that, so it wants a third.

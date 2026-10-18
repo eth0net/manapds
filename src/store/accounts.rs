@@ -873,4 +873,61 @@ mod tests {
         assert!(!plan.contains("SCAN"), "{plan}");
         assert!(!plan.contains("TEMP B-TREE"), "{plan}");
     }
+
+    /// Rows enough that a page deep in the index costs many times the first
+    /// one if anything but a seek reaches it.
+    const FILLED: i64 = 20_000;
+
+    /// How far in the deep page is, in rows.
+    const PAGES_IN: i64 = 16_000;
+
+    fn at(row: i64) -> Cursor {
+        Cursor {
+            created_at: Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(row),
+            did: format!("did:plc:{row:024}"),
+        }
+    }
+
+    /// Accounts enough to page through, one a second so the index orders them
+    /// by the moment alone.
+    fn filled() -> Accounts {
+        let accounts = Accounts::memory().expect("opens");
+        accounts.db.execute_batch("begin").expect("begins");
+        {
+            let prepare = |query| accounts.db.prepare(query).expect("prepares");
+            let mut actor = prepare(
+                r#"insert into "actor" ("did", "handle", "createdAt") values (?1, ?2, ?3)"#,
+            );
+            let mut root = prepare(
+                r#"insert into "repo_root" ("did", "cid", "rev", "indexedAt")
+                   values (?1, '', '', '')"#,
+            );
+            for row in 0..FILLED {
+                let cursor = at(row);
+                actor
+                    .execute((
+                        &cursor.did,
+                        format!("{row}.example.com"),
+                        stamp(cursor.created_at),
+                    ))
+                    .expect("an account");
+                root.execute((&cursor.did,)).expect("a root");
+            }
+        }
+        accounts.db.execute_batch("commit").expect("commits");
+        accounts
+    }
+
+    #[test]
+    fn a_page_of_repositories_costs_the_same_wherever_it_starts() {
+        let accounts = filled();
+        // Against another cursored page rather than the uncursored first one,
+        // which has no comparison to pay for and would read as cheaper.
+        let (first, binds) = hosted_query(500, Some(&at(0)));
+        let near = super::super::work(&accounts.db, &first, &binds);
+        let (far, binds) = hosted_query(500, Some(&at(PAGES_IN)));
+        let deep = super::super::work(&accounts.db, &far, &binds);
+
+        assert!(deep < near * 2, "{deep} steps against {near}");
+    }
 }
