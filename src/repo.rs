@@ -372,3 +372,164 @@ impl Repo {
         self.commit.verify(key)
     }
 }
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+    use crate::crypto::{Algorithm, Keypair};
+    use crate::repo::cid_for;
+
+    /// The record every tree below points its leaves at; only the keys matter to
+    /// the shape, so one CID does for all of them.
+    const RECORD: &str = "bafyreie5cvv4h45feadgeuwhbcutmh6t2ceseocckahdoe6uat64zmz454";
+
+    pub(super) fn record() -> Cid {
+        RECORD.parse().expect("a CID")
+    }
+
+    pub(super) fn account() -> Did {
+        "did:plc:4cjoyc3cgpal7gnrpzyjhnv3".parse().expect("a DID")
+    }
+
+    pub(super) fn collection() -> Nsid {
+        "com.example.record".parse().expect("an NSID")
+    }
+
+    pub(super) fn rkey(key: &str) -> RecordKey {
+        key.parse().expect("a record key")
+    }
+
+    pub(super) fn post(text: &str) -> Ipld {
+        Ipld::Map(BTreeMap::from([
+            (
+                "$type".to_owned(),
+                Ipld::String("com.example.record".to_owned()),
+            ),
+            ("text".to_owned(), Ipld::String(text.to_owned())),
+        ]))
+    }
+
+    #[test]
+    fn a_write_that_fails_leaves_the_revision_where_it_was() {
+        let key = Keypair::generate(Algorithm::Secp256k1);
+        let mut clock = TidClock::new();
+        let (mut repo, mut store) = Repo::create(account(), &key, &mut clock).expect("creates");
+
+        let create = |text| Write::Create {
+            collection: collection(),
+            rkey: rkey("3jqfcqzm4fc2j"),
+            record: post(text),
+        };
+        let (written, _) = repo
+            .apply(&store, &[create("first")], &key, &mut clock)
+            .expect("applies");
+        store.merge(written);
+        let settled = repo.cid();
+        let rev = repo.rev().clone();
+
+        // The second write in the batch is the one that cannot land.
+        let clash = repo.apply(
+            &store,
+            &[
+                Write::Delete {
+                    collection: collection(),
+                    rkey: rkey("3jqfcqzm4fc2j"),
+                },
+                create("again"),
+                create("and again"),
+            ],
+            &key,
+            &mut clock,
+        );
+
+        assert_eq!(
+            clash.err(),
+            Some(Error::KeyExists(
+                "com.example.record/3jqfcqzm4fc2j".to_owned()
+            ))
+        );
+        assert_eq!(repo.cid(), settled);
+        assert_eq!(repo.rev(), &rev);
+        assert_eq!(repo.records(&store).expect("reads").len(), 1);
+    }
+
+    #[test]
+    fn updates_and_deletes_move_the_root() {
+        let key = Keypair::generate(Algorithm::Secp256k1);
+        let mut clock = TidClock::new();
+        let (mut repo, mut store) = Repo::create(account(), &key, &mut clock).expect("creates");
+        let empty = repo.commit().data;
+
+        let created = Write::Create {
+            collection: collection(),
+            rkey: rkey("3jqfcqzm4fc2j"),
+            record: post("first"),
+        };
+        let edited = Write::Update {
+            collection: collection(),
+            rkey: rkey("3jqfcqzm4fc2j"),
+            record: post("edited"),
+        };
+        let deleted = Write::Delete {
+            collection: collection(),
+            rkey: rkey("3jqfcqzm4fc2j"),
+        };
+
+        let (written, _) = repo
+            .apply(&store, &[created], &key, &mut clock)
+            .expect("applies");
+        store.merge(written);
+        let after_create = repo.commit().data;
+
+        let (written, _) = repo
+            .apply(&store, &[edited], &key, &mut clock)
+            .expect("applies");
+        store.merge(written);
+        assert_ne!(repo.commit().data, after_create);
+
+        let (written, _) = repo
+            .apply(&store, &[deleted], &key, &mut clock)
+            .expect("applies");
+        store.merge(written);
+        assert_eq!(
+            repo.commit().data,
+            empty,
+            "an emptied tree is the empty one"
+        );
+        assert_eq!(repo.verify(&key.public_key()), Ok(()));
+    }
+
+    #[test]
+    fn a_batch_writing_one_key_twice_stores_only_what_the_tree_reaches() {
+        let key = Keypair::generate(Algorithm::Secp256k1);
+        let mut clock = TidClock::new();
+        let (mut repo, store) = Repo::create(account(), &key, &mut clock).expect("creates");
+        let (written, _) = repo
+            .apply(
+                &store,
+                &[
+                    Write::Create {
+                        collection: collection(),
+                        rkey: rkey("3jqfcqzm4fc2j"),
+                        record: post("first"),
+                    },
+                    Write::Update {
+                        collection: collection(),
+                        rkey: rkey("3jqfcqzm4fc2j"),
+                        record: post("second"),
+                    },
+                ],
+                &key,
+                &mut clock,
+            )
+            .expect("applies");
+
+        // The first record is under no key by the time the commit is signed, so
+        // storing it would be storing something nothing can reach.
+        let first = cid_for(&encode(&post("first")).expect("encodes"));
+        let second = cid_for(&encode(&post("second")).expect("encodes"));
+        assert!(!written.iter().any(|(cid, _)| *cid == first));
+        assert!(written.iter().any(|(cid, _)| *cid == second));
+    }
+}

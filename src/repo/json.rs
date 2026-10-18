@@ -108,3 +108,76 @@ fn reserved(object: &Map<String, Value>) -> Option<(&'static str, &Value)> {
 fn tagged(key: &str, held: String) -> Value {
     Value::Object(Map::from_iter([(key.to_owned(), Value::String(held))]))
 }
+#[cfg(test)]
+mod tests {
+    use ipld_core::cid::Cid;
+
+    use super::*;
+    use crate::repo::{decode, encode};
+
+    #[test]
+    fn a_record_carries_its_links_and_its_bytes_through_json() {
+        let cid: Cid = "bafyreidfcltdzyzp4dmvoeohhrhi6z2lhsbhgorpuoqqzvpxrbfuspqsoq"
+            .parse()
+            .expect("a CID");
+        let written = serde_json::json!({
+            "$type": "com.example.record",
+            "text": "hello",
+            "count": 3,
+            "subject": { "$link": cid.to_string() },
+            "sig": { "$bytes": "AQID" },
+            "tags": ["one", "two"],
+            "nested": { "deep": { "$link": cid.to_string() } },
+        });
+
+        let record = from_json(written.clone()).expect("a record");
+        // The two reserved keys come back as the things JSON has no syntax for,
+        // rather than as objects holding a string.
+        let Ipld::Map(fields) = &record else {
+            panic!("a map, not {record:?}")
+        };
+        assert_eq!(fields["subject"], Ipld::Link(cid));
+        assert_eq!(fields["sig"], Ipld::Bytes(vec![1, 2, 3]));
+        assert_eq!(fields["count"], Ipld::Integer(3));
+
+        assert_eq!(to_json(&record).expect("json"), written);
+        // And it survives the encoding it is actually stored in.
+        let stored: Ipld = decode(&encode(&record).expect("encodes")).expect("decodes");
+        assert_eq!(stored, record);
+    }
+
+    #[test]
+    fn a_record_holding_what_the_data_model_has_no_room_for_is_refused() {
+        assert_eq!(
+            from_json(serde_json::json!({ "ratio": 1.5 })),
+            Err(Error::NotRecordData("a number that is not an integer"))
+        );
+        assert_eq!(
+            from_json(serde_json::json!({ "subject": { "$link": "not a cid" } })),
+            Err(Error::NotRecordData("a $link that is not a CID"))
+        );
+        assert_eq!(
+            from_json(serde_json::json!({ "sig": { "$bytes": "not base64!" } })),
+            Err(Error::NotRecordData("a $bytes that is not base64"))
+        );
+
+        let padded = from_json(serde_json::json!({ "$bytes": "SGVsbG8sIHdvcmxkIQ==" }));
+        assert_eq!(padded, Ok(Ipld::Bytes(b"Hello, world!".to_vec())));
+        assert_eq!(
+            from_json(serde_json::json!({ "$bytes": "SGVsbG8sIHdvcmxkIQ" })),
+            padded
+        );
+        assert_eq!(
+            to_json(&padded.expect("bytes")).expect("json"),
+            serde_json::json!({ "$bytes": "SGVsbG8sIHdvcmxkIQ" })
+        );
+        assert_eq!(
+            from_json(serde_json::json!({ "subject": { "$link": 3 } })),
+            Err(Error::NotRecordData("a $link or $bytes holding no string"))
+        );
+
+        // An object holding a reserved key beside anything else is an object.
+        let both = serde_json::json!({ "$link": "one", "other": "two" });
+        assert!(matches!(from_json(both), Ok(Ipld::Map(_))));
+    }
+}

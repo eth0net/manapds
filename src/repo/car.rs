@@ -221,4 +221,61 @@ mod tests {
             .decode(input)
             .expect("base64")
     }
+
+    use crate::crypto::{Algorithm, Keypair};
+    use crate::repo::car;
+    use crate::repo::tests::{account, collection, post, rkey};
+    use crate::repo::{Ipld, Repo, Write, decode};
+    use crate::syntax::TidClock;
+
+    #[test]
+    fn a_repository_survives_the_round_trip_through_a_car() {
+        let key = Keypair::generate(Algorithm::Secp256k1);
+        let mut clock = TidClock::new();
+        let (mut repo, mut store) = Repo::create(account(), &key, &mut clock).expect("creates");
+
+        assert_eq!(repo.verify(&key.public_key()), Ok(()));
+        assert_eq!(repo.records(&store), Ok(Vec::new()));
+        let first = repo.rev().clone();
+
+        let writes = vec![
+            Write::Create {
+                collection: collection(),
+                rkey: rkey("3jqfcqzm4fc2j"),
+                record: post("first"),
+            },
+            Write::Create {
+                collection: collection(),
+                rkey: rkey("3jqfcqzm4fd2j"),
+                record: post("second"),
+            },
+        ];
+        let (written, _) = repo
+            .apply(&store, &writes, &key, &mut clock)
+            .expect("applies");
+        store.merge(written);
+
+        assert!(repo.rev() > &first, "{} follows {first}", repo.rev());
+        assert_eq!(repo.records(&store).expect("reads").len(), 2);
+        assert_eq!(repo.verify(&key.public_key()), Ok(()));
+
+        let car = car::write(repo.cid(), &store).expect("writes");
+        let (root, blocks) = car::read(&car).expect("reads");
+        let mut reloaded = Repo::load(&blocks, root).expect("loads");
+
+        assert_eq!(reloaded.cid(), repo.cid());
+        assert_eq!(reloaded.rev(), repo.rev());
+        assert_eq!(reloaded.did(), repo.did());
+        assert_eq!(reloaded.verify(&key.public_key()), Ok(()));
+        assert_eq!(reloaded.records(&blocks), repo.records(&store));
+
+        let found = reloaded
+            .get(&blocks, &collection(), &rkey("3jqfcqzm4fc2j"))
+            .expect("reads")
+            .expect("held");
+        assert_eq!(
+            decode::<Ipld>(&blocks.get(&found).expect("stored")),
+            Ok(post("first"))
+        );
+    }
 }

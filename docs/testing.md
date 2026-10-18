@@ -15,6 +15,12 @@ cannot name that function has to approximate it through whatever public path
 happens to run it — which is how a suite ends up asserting on something near
 the code instead of the code.
 
+Which layer a test belongs to is the one that can break it, not the one it
+tells a story about. A repository written to a CAR file and read back names a
+repository in every line and proves nothing about one: the structure is only
+the payload, and nothing but the framing around it can fail. It goes with the
+framing.
+
 `tests/` is for where the layers meet: a handler against a store, a store
 against its files, a signup against the directory it registers with. Those
 genuinely need the stack, and the cost of standing it up buys something.
@@ -41,12 +47,6 @@ process environment variables, which no mutex inside one file can hold back
 from the other tests in its binary, and doing that unsafely is only sound
 because nothing else shares the process. A binary to itself is what keeps that
 true, so it stays one.
-
-`tests/repo.rs` is thirty unit tests outside the crate. What looks like a
-store in them is a `BlockMap` and a wrapper that counts reads of one, both of
-which are the repository layer rather than anything under it; the suite names
-nothing but `repo`, `crypto` and `syntax`. It belongs next to the tree, the
-commit and the record it is about, which is five files rather than one.
 
 ## Moving one
 
@@ -79,7 +79,4 @@ seeing it.
 
 ## Order
 
-1. Move `repo.rs` in, a destination at a time: the block map to `block.rs`,
-   the tree to `mst.rs`, the commits to `commit.rs`, the record JSON to
-   `json.rs`, and what is left of `Repo` to `repo.rs` itself.
-2. Measure paging cost, which is a kind of test nothing here does yet.
+1. Measure paging cost, which is a kind of test nothing here does yet.
