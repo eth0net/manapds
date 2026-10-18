@@ -4,7 +4,6 @@
 
 mod accounts;
 mod blobs;
-mod cache;
 mod keys;
 mod layout;
 mod log;
