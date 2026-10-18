@@ -8,213 +8,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use manapds::account::{self, email, handle, password};
+use manapds::account::{self, handle, password};
 use manapds::crypto::{Algorithm, Keypair};
 use manapds::plc;
 use manapds::repo::{Ipld, Repo, Write};
 use manapds::store;
 use manapds::syntax::{Did, Nsid, RecordKey, TidClock};
 use manapds::xrpc::auth::{Expired, Scope, Tokens};
-use serde::Deserialize;
 use tempfile::TempDir;
-
-#[derive(Debug, Deserialize)]
-struct Fixture {
-    account: Vector,
-    app: Vector,
-}
-
-/// One password, and what the reference wrote for it.
-#[derive(Debug, Deserialize)]
-struct Vector {
-    #[serde(default)]
-    did: String,
-    #[serde(default)]
-    salt: String,
-    password: String,
-    stored: String,
-}
-
-fn fixture() -> Fixture {
-    serde_json::from_str(include_str!("fixtures/password/scrypt.json")).expect("the fixture")
-}
-
-#[test]
-fn a_password_hashes_to_what_the_reference_stores() {
-    let fixture = fixture();
-
-    assert!(fixture.account.stored.starts_with(&fixture.account.salt));
-    assert!(password::verify(
-        &fixture.account.password,
-        &fixture.account.stored
-    ));
-    assert!(!password::verify("something else", &fixture.account.stored));
-}
-
-#[test]
-fn an_app_password_is_salted_with_the_account_it_belongs_to() {
-    let fixture = fixture();
-    let did = fixture.app.did.parse().expect("a DID");
-
-    assert_eq!(
-        password::app(&did, &fixture.app.password),
-        fixture.app.stored
-    );
-    // Two accounts choosing the same one store different hashes, which is what
-    // the salt is for even though nothing random goes into it.
-    let other = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa".parse().expect("a DID");
-    assert_ne!(
-        password::app(&other, &fixture.app.password),
-        fixture.app.stored
-    );
-}
-
-#[test]
-fn a_fresh_hash_is_salted_and_reads_back() {
-    let stored = password::hash("correct horse battery staple");
-
-    assert!(password::verify("correct horse battery staple", &stored));
-    assert!(!password::verify("correct horse battery stapl", &stored));
-    assert_ne!(stored, password::hash("correct horse battery staple"));
-    // Nothing that is not a salt and a hash is a stored password.
-    assert!(!password::verify("anything", "no colon here"));
-}
-
-#[test]
-fn the_password_nobody_has_is_nobody_s() {
-    for password in [
-        "",
-        "correct horse battery staple",
-        "\u{1f600}",
-        "0".repeat(512).as_str(),
-    ] {
-        assert!(!password::nobody(password), "{password:?}");
-    }
-}
-
-/// A server handing out handles under one domain, as the configuration would.
-fn rules() -> handle::Rules {
-    handle::Rules::new(&[".pds.test".to_owned()], &[])
-}
-
-#[test]
-fn signing_up_takes_a_name_under_a_domain_this_server_serves() {
-    let rules = rules();
-
-    assert_eq!(
-        rules.signup("Alice.PDS.test").expect("a handle").as_str(),
-        "alice.pds.test"
-    );
-    // Somebody else's domain is refused at creation even though it is a
-    // perfectly good handle, because nothing exists yet to point it at.
-    assert_eq!(
-        rules.signup("alice.example.com"),
-        Err(handle::Invalid::Unsupported)
-    );
-}
-
-#[test]
-fn a_server_can_hold_back_names_of_its_own() {
-    let rules = handle::Rules::new(
-        &[".pds.test".to_owned()],
-        &["Mana".to_owned(), "  support  ".to_owned()],
-    );
-
-    // Matched however the configuration and the caller happen to spell it.
-    assert_eq!(
-        rules.signup("mana.pds.test"),
-        Err(handle::Invalid::Reserved)
-    );
-    assert_eq!(
-        rules.signup("MANA.pds.test"),
-        Err(handle::Invalid::Reserved)
-    );
-    assert_eq!(
-        rules.signup("support.pds.test"),
-        Err(handle::Invalid::Reserved)
-    );
-
-    // Added to the built-in list rather than replacing it.
-    assert_eq!(
-        rules.signup("admin.pds.test"),
-        Err(handle::Invalid::Reserved)
-    );
-    assert!(rules.signup("alice.pds.test").is_ok());
-}
-
-#[test]
-fn holding_back_nothing_holds_back_what_the_reference_does() {
-    let rules = rules();
-
-    assert_eq!(
-        rules.signup("admin.pds.test"),
-        Err(handle::Invalid::Reserved)
-    );
-    assert_eq!(rules.signup("mana.pds.test").map(|_| ()), Ok(()));
-}
-
-#[test]
-fn the_part_in_front_of_the_domain_is_one_label_of_a_workable_length() {
-    let rules = rules();
-
-    assert!(matches!(
-        rules.signup("ab.pds.test"),
-        Err(handle::Invalid::Handle("Handle too short"))
-    ));
-    assert!(matches!(
-        rules.signup("nineteen-characters.pds.test"),
-        Err(handle::Invalid::Handle("Handle too long"))
-    ));
-    assert!(matches!(
-        rules.signup("alice.and.bob.pds.test"),
-        Err(handle::Invalid::Handle("Invalid characters in handle"))
-    ));
-    // The two ends of the range are both allowed.
-    assert!(rules.signup("abc.pds.test").is_ok());
-    assert!(rules.signup("eighteen-chars-yes.pds.test").is_ok());
-}
-
-#[test]
-fn a_name_somebody_would_expect_to_reach_the_server_is_held_back() {
-    let rules = rules();
-
-    for name in ["admin", "www", "xrpc", "bsky", "support"] {
-        assert_eq!(
-            rules.signup(&format!("{name}.pds.test")),
-            Err(handle::Invalid::Reserved),
-            "{name}"
-        );
-    }
-}
-
-#[test]
-fn a_handle_nothing_could_ever_resolve_is_refused_wherever_it_came_from() {
-    let rules = rules();
-
-    for input in ["alice.local", "alice.invalid", "alice.onion"] {
-        assert!(
-            matches!(rules.normalize(input), Err(handle::Invalid::Handle(_))),
-            "{input}"
-        );
-    }
-    // `.test` is what a development server runs under, so it stays.
-    assert!(rules.normalize("alice.test").is_ok());
-}
-
-#[test]
-fn the_domain_itself_is_this_server_even_though_no_account_holds_it() {
-    let rules = rules();
-    let handle = |input: &str| rules.normalize(input).expect("a handle");
-
-    assert!(rules.is_local(&handle("alice.pds.test")));
-    assert!(rules.is_local(&handle("pds.test")));
-    assert!(!rules.is_local(&handle("alice.example.com")));
-    assert_eq!(
-        rules.service_domain(&handle("alice.pds.test")),
-        Some(".pds.test")
-    );
-    assert_eq!(rules.service_domain(&handle("pds.test")), None);
-}
 
 fn tokens() -> Tokens {
     Tokens::new(common::SECRET, "did:web:pds.test")
@@ -1026,31 +827,6 @@ async fn a_password_is_measured_in_characters_rather_than_bytes() {
     ));
 }
 
-#[test]
-fn an_address_is_taken_only_if_something_could_be_sent_to_it() {
-    for address in [
-        "alice@example.com",
-        "alice.smith+tag@mail.example.co.uk",
-        "a@b.co",
-    ] {
-        assert!(email::plausible(address), "{address}");
-    }
-    for address in [
-        "not an address",
-        "alice@",
-        "@example.com",
-        "alice@example",
-        "alice@@example.com",
-        "alice@exa mple.com",
-        ".alice@example.com",
-        "alice.@example.com",
-        "al..ice@example.com",
-        "alice@-example.com",
-    ] {
-        assert!(!email::plausible(address), "{address}");
-    }
-}
-
 #[tokio::test]
 async fn signing_in_takes_as_long_whether_or_not_the_account_is_there() {
     let budget = Duration::from_millis(120);
@@ -1065,15 +841,6 @@ async fn signing_in_takes_as_long_whether_or_not_the_account_is_there() {
             "{identifier} answered in {taken:?}, which says whether it was there"
         );
     }
-}
-
-#[test]
-fn a_race_lost_inside_the_write_answers_like_one_lost_before_it() {
-    let named = |error: store::Error| account::Error::from(error).name();
-
-    assert_eq!(named(store::Error::InviteUnavailable), "InvalidInviteCode");
-    assert_eq!(named(store::Error::HandleTaken), "InvalidRequest");
-    assert_eq!(named(store::Error::EmailTaken), "InvalidRequest");
 }
 
 #[tokio::test]
@@ -1147,14 +914,4 @@ async fn a_signup_the_directory_refuses_puts_nothing_in_the_log() {
             .expect("reads"),
         None
     );
-}
-
-#[test]
-fn a_window_nothing_could_mean_keeps_everything_rather_than_faulting() {
-    // Off, and anything a timestamp could not reach, both mean keep: either
-    // way the number asks for blobs to stay, not for an upload to fault.
-    assert_eq!(account::kept_until(0), None);
-    assert_eq!(account::kept_until(u64::MAX), None);
-    assert_eq!(account::kept_until(200_000_000), None);
-    assert!(account::kept_until(24).is_some());
 }

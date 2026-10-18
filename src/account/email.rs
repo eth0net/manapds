@@ -50,3 +50,33 @@ fn domain_part(domain: &str) -> bool {
                 .all(|b| b.is_ascii_alphanumeric() || b == b'-')
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_address_is_taken_only_if_something_could_be_sent_to_it() {
+        for address in [
+            "alice@example.com",
+            "alice.smith+tag@mail.example.co.uk",
+            "a@b.co",
+        ] {
+            assert!(plausible(address), "{address}");
+        }
+        for address in [
+            "not an address",
+            "alice@",
+            "@example.com",
+            "alice@example",
+            "alice@@example.com",
+            "alice@exa mple.com",
+            ".alice@example.com",
+            "alice.@example.com",
+            "al..ice@example.com",
+            "alice@-example.com",
+        ] {
+            assert!(!plausible(address), "{address}");
+        }
+    }
+}

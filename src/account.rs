@@ -2007,3 +2007,28 @@ fn token_id() -> String {
     rand::fill(&mut bytes);
     BASE64.encode(bytes)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store;
+
+    #[test]
+    fn a_window_nothing_could_mean_keeps_everything_rather_than_faulting() {
+        // Off, and anything a timestamp could not reach, both mean keep: either
+        // way the number asks for blobs to stay, not for an upload to fault.
+        assert_eq!(kept_until(0), None);
+        assert_eq!(kept_until(u64::MAX), None);
+        assert_eq!(kept_until(200_000_000), None);
+        assert!(kept_until(24).is_some());
+    }
+
+    #[test]
+    fn a_race_lost_inside_the_write_answers_like_one_lost_before_it() {
+        let named = |error: store::Error| Error::from(error).name();
+
+        assert_eq!(named(store::Error::InviteUnavailable), "InvalidInviteCode");
+        assert_eq!(named(store::Error::HandleTaken), "InvalidRequest");
+        assert_eq!(named(store::Error::EmailTaken), "InvalidRequest");
+    }
+}
