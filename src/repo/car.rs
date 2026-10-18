@@ -138,12 +138,13 @@ fn push_varint(out: &mut Vec<u8>, value: u64) {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path};
-
     use base64::Engine as _;
 
     use super::*;
-    use crate::repo::cid_for;
+    use crate::crypto::{Algorithm, Keypair};
+    use crate::repo::fixture::{account, collection, post, rkey};
+    use crate::repo::{Ipld, Repo, Write, car, cid_for, decode};
+    use crate::syntax::TidClock;
 
     #[derive(Deserialize)]
     struct Fixture {
@@ -210,10 +211,8 @@ mod tests {
     }
 
     fn fixtures() -> Vec<Fixture> {
-        let path =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/car/car-file-fixtures.json");
-        let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        serde_json::from_str(&text).expect("fixtures")
+        serde_json::from_str(include_str!("../../fixtures/car/car-file-fixtures.json"))
+            .expect("the fixtures")
     }
 
     fn base64(input: &str) -> Vec<u8> {
@@ -221,12 +220,6 @@ mod tests {
             .decode(input)
             .expect("base64")
     }
-
-    use crate::crypto::{Algorithm, Keypair};
-    use crate::repo::car;
-    use crate::repo::fixture::{account, collection, post, rkey};
-    use crate::repo::{Ipld, Repo, Write, decode};
-    use crate::syntax::TidClock;
 
     #[test]
     fn a_repository_survives_the_round_trip_through_a_car() {
