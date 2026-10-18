@@ -1033,7 +1033,7 @@ mod tests {
     use ipld_core::ipld::Ipld;
 
     use super::*;
-    use crate::repo::tests::{post, record};
+    use crate::repo::fixture::{post, record};
     use crate::syntax::TidClock;
     use rand::seq::SliceRandom;
 

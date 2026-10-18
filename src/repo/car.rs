@@ -224,7 +224,7 @@ mod tests {
 
     use crate::crypto::{Algorithm, Keypair};
     use crate::repo::car;
-    use crate::repo::tests::{account, collection, post, rkey};
+    use crate::repo::fixture::{account, collection, post, rkey};
     use crate::repo::{Ipld, Repo, Write, decode};
     use crate::syntax::TidClock;
 

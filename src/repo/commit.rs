@@ -92,7 +92,7 @@ impl Commit {
 mod tests {
     use super::*;
     use crate::crypto::Algorithm;
-    use crate::repo::tests::record;
+    use crate::repo::fixture::record;
     use crate::repo::{BlockMap, Store as _, cid_for, decode};
     use crate::syntax::TidClock;
 

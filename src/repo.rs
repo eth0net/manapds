@@ -66,6 +66,8 @@ pub enum Error {
 mod block;
 pub mod car;
 mod commit;
+#[cfg(test)]
+mod fixture;
 mod json;
 mod mst;
 
@@ -374,41 +376,10 @@ impl Repo {
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use super::*;
     use crate::crypto::{Algorithm, Keypair};
     use crate::repo::cid_for;
-
-    /// The record every tree below points its leaves at; only the keys matter to
-    /// the shape, so one CID does for all of them.
-    const RECORD: &str = "bafyreie5cvv4h45feadgeuwhbcutmh6t2ceseocckahdoe6uat64zmz454";
-
-    pub(super) fn record() -> Cid {
-        RECORD.parse().expect("a CID")
-    }
-
-    pub(super) fn account() -> Did {
-        "did:plc:4cjoyc3cgpal7gnrpzyjhnv3".parse().expect("a DID")
-    }
-
-    pub(super) fn collection() -> Nsid {
-        "com.example.record".parse().expect("an NSID")
-    }
-
-    pub(super) fn rkey(key: &str) -> RecordKey {
-        key.parse().expect("a record key")
-    }
-
-    pub(super) fn post(text: &str) -> Ipld {
-        Ipld::Map(BTreeMap::from([
-            (
-                "$type".to_owned(),
-                Ipld::String("com.example.record".to_owned()),
-            ),
-            ("text".to_owned(), Ipld::String(text.to_owned())),
-        ]))
-    }
+    use crate::repo::fixture::{account, collection, post, rkey};
 
     #[test]
     fn a_write_that_fails_leaves_the_revision_where_it_was() {
