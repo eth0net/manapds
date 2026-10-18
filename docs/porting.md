@@ -5,11 +5,18 @@ tell what has changed since.
 
 ## The pin
 
+    96c843845
     @atproto/pds@0.5.32
 
-Every behavior here was read at that tag. Move it in the same commit as the
-catch-up work, never ahead of it — a pin that runs early is worse than none,
-because it claims ground nobody checked.
+The hash is the pin and the tag is there to read it by, with a branch in the
+tag's place where the commit carries none. A tag on its own names nothing a
+reader can check without the network, so the hash is what both the behavior
+and the fixtures are recorded against.
+
+Every behavior here was read at that commit, and the fixtures beside it were
+copied from it. Move all of it in the same commit as the catch-up work, never
+ahead of it — a pin that runs early is worse than none, because it claims
+ground nobody checked.
 
 ## Seeing what moved
 

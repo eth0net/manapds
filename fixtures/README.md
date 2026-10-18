@@ -48,9 +48,9 @@ those migrations, which needs `kysely` and `better-sqlite3` and a copy of
 `packages/pds/src/*/db/migrations/`; the account set also imports two runtime
 values that only a data-cleanup `where` clause uses, so they can be stubbed.
 
-Copied at `7a23156ef`. Check that against the pin in [`docs/porting.md`](../docs/porting.md)
-before trusting any of this to be current: a fixture that has quietly gone
-stale is the one thing here that cannot fail loudly.
+Copied at the pin in [`docs/porting.md`](../docs/porting.md), which is where to
+check how current this is before trusting any of it: a fixture that has quietly
+gone stale is the one thing here that cannot fail loudly.
 
 Those files are under the same `MIT OR Apache-2.0` terms as this repository.
 
