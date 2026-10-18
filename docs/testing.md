@@ -42,20 +42,19 @@ from the other tests in its binary, and doing that unsafely is only sound
 because nothing else shares the process. A binary to itself is what keeps that
 true, so it stays one.
 
-`tests/repo.rs` is the judgment call. The MST is pure logic, but its tests
-need a store to hand, so they are unit tests with a fixture rather than
-integration tests. Leave it until the clear cases are done.
+`tests/repo.rs` is the judgment call left. The MST is pure logic, but its
+tests need a store to hand, so they are unit tests with a fixture rather than
+integration tests. Whether a fixture that small is worth reaching into the
+crate for is a call nobody has had to make yet.
 
-`tests/account.rs` covers several subjects at once, which makes a failure name
-a file rather than a place. Cargo builds `tests/<name>/main.rs` as one binary,
-so a directory with a module per subject splits the reading without splitting
-the link, as `store/` and `records/` now do.
+## Moving one
 
-Splitting one is a move, not an edit, and what makes that worth saying is how
-quietly it goes wrong: an attribute left behind turns a test into an unused
-function, which is a warning rather than a failure. Counting the tests that run
-catches it; comparing the names does not, because the names are all still
-there.
+Splitting a file is a move, not an edit, and what makes that worth saying is
+how quietly it goes wrong. An attribute left behind turns a test into an unused
+function, which is a warning rather than a failure; an item the move does not
+recognize, a type alias between two functions, goes missing entirely. Counting
+the tests that run catches the first and compiling catches the second. Comparing
+the names catches neither, because the names are all still there.
 
 ## What nothing tests
 
@@ -79,7 +78,4 @@ seeing it.
 
 ## Order
 
-1. Split the three oversized files by subject.
-2. Measure paging cost, once there is appetite for a fourth kind of test.
-
-The two are independent of each other and of everything else.
+1. Measure paging cost, once there is appetite for a fourth kind of test.
