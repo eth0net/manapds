@@ -48,7 +48,7 @@ those migrations, which needs `kysely` and `better-sqlite3` and a copy of
 `packages/pds/src/*/db/migrations/`; the account set also imports two runtime
 values that only a data-cleanup `where` clause uses, so they can be stubbed.
 
-Copied at `7a23156ef`. Check that against the pin in [`docs/porting.md`](../../docs/porting.md)
+Copied at `7a23156ef`. Check that against the pin in [`docs/porting.md`](../docs/porting.md)
 before trusting any of this to be current: a fixture that has quietly gone
 stale is the one thing here that cannot fail loudly.
 

@@ -22,10 +22,10 @@ Read the commits rather than the releases. A patch version is usually nothing
 but dependency bumps, and `packages/pds/CHANGELOG.md` is best used as an index
 into the pull requests.
 
-Copy the interop files in `tests/fixtures` again while you are there. A vector
+Copy the interop files in `fixtures` again while you are there. A vector
 that upstream changed is the cheapest possible notice that a rule did too.
 
-One of them is made rather than copied: `tests/fixtures/sequencer/account.json`
+One of them is made rather than copied: `fixtures/sequencer/account.json`
 holds the entries a signup writes, encoded by the reference's own packages.
 `tools/sequencer-fixture.mjs` remakes it and names what it needs installed.
 

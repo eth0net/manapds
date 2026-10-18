@@ -95,7 +95,7 @@ mod tests {
     }
 
     fn fixture() -> Fixture {
-        serde_json::from_str(include_str!("../../tests/fixtures/password/scrypt.json"))
+        serde_json::from_str(include_str!("../../fixtures/password/scrypt.json"))
             .expect("the fixture")
     }
 

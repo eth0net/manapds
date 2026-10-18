@@ -398,7 +398,7 @@ mod tests {
 
     fn load<T: serde::de::DeserializeOwned>(file: &str) -> T {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/crypto")
+            .join("fixtures/crypto")
             .join(file);
         let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         serde_json::from_str(&text).expect("fixture")

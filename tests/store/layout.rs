@@ -19,7 +19,7 @@ fn schema(path: &std::path::Path) -> Vec<String> {
 
 fn reference_schema(name: &str) -> Vec<String> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/schema")
+        .join("fixtures/schema")
         .join(format!("{name}.sql"));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     // `.schema` ends each statement with a semicolon; `sqlite_master` does not.
@@ -34,7 +34,7 @@ fn reference_schema(name: &str) -> Vec<String> {
 /// Builds a database where the reference left one: schema at 004, ledger
 /// stamped to match, and whatever rows the caller wants in it.
 fn account_database_at_004(path: &Path, rows: &str) {
-    let schema = include_str!("../fixtures/schema/account-004.sql");
+    let schema = include_str!("../../fixtures/schema/account-004.sql");
     let db = Connection::open(path).expect("opens");
     // The fixture is sorted for comparing, so the indexes come before the
     // tables they are on.

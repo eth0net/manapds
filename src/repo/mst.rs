@@ -1596,7 +1596,7 @@ mod tests {
     #[test]
     fn the_reference_commit_proof_roots_are_the_ones_built_here() {
         let fixtures: Vec<CommitProof> = serde_json::from_str(include_str!(
-            "../../tests/fixtures/mst/commit-proof-fixtures.json"
+            "../../fixtures/mst/commit-proof-fixtures.json"
         ))
         .expect("the fixture parses");
         assert_eq!(fixtures.len(), 6);

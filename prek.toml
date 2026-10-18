@@ -16,12 +16,12 @@ repo = "builtin"
 hooks = [
   # Whitespace carries meaning in the vendored vectors — a trailing space is
   # what several of them are testing — so the three that rewrite it stop short
-  # of `tests/fixtures`.
-  { id = "trailing-whitespace", args = ["--markdown-linebreak-ext=md"], exclude = '^tests/fixtures/' },
-  { id = "end-of-file-fixer", exclude = '^tests/fixtures/' },
+  # of `fixtures`.
+  { id = "trailing-whitespace", args = ["--markdown-linebreak-ext=md"], exclude = '^fixtures/' },
+  { id = "end-of-file-fixer", exclude = '^fixtures/' },
   # .gitattributes pins the working tree to LF; this catches a file that
   # slipped in before it applied.
-  { id = "mixed-line-ending", args = ["--fix=lf"], exclude = '^tests/fixtures/' },
+  { id = "mixed-line-ending", args = ["--fix=lf"], exclude = '^fixtures/' },
   { id = "check-merge-conflict" },
   { id = "check-case-conflict" },
   # Windows is not a target, but the source tree still has to check out on one.

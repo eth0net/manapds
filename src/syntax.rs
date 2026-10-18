@@ -279,7 +279,7 @@ mod tests {
 
     fn vectors(file: &str) -> Vec<String> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/syntax")
+            .join("fixtures/syntax")
             .join(file);
         let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         text.lines()

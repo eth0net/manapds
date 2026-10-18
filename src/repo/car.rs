@@ -211,7 +211,7 @@ mod tests {
 
     fn fixtures() -> Vec<Fixture> {
         let path =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/car/car-file-fixtures.json");
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/car/car-file-fixtures.json");
         let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         serde_json::from_str(&text).expect("fixtures")
     }

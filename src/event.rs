@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn a_signup_writes_what_the_reference_writes() {
         let fixture: Fixture =
-            serde_json::from_str(include_str!("../tests/fixtures/sequencer/account.json"))
+            serde_json::from_str(include_str!("../fixtures/sequencer/account.json"))
                 .expect("the fixture");
 
         let (commit, bytes) = block(&fixture.commit_block, &fixture.commit);
@@ -265,7 +265,7 @@ mod tests {
     #[test]
     fn only_the_commit_block_rides_the_sync_entry() {
         let fixture: Fixture =
-            serde_json::from_str(include_str!("../tests/fixtures/sequencer/account.json"))
+            serde_json::from_str(include_str!("../fixtures/sequencer/account.json"))
                 .expect("the fixture");
 
         let (commit, bytes) = block(&fixture.commit_block, &fixture.commit);

@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn a_commit_is_the_bytes_the_reference_would_have_written() {
         let golden: Golden =
-            serde_json::from_str(include_str!("../../tests/fixtures/commit/golden.json"))
+            serde_json::from_str(include_str!("../../fixtures/commit/golden.json"))
                 .expect("the fixture");
         let block = hex::decode(&golden.block).expect("hex");
         let keypair = Keypair::from_bytes(

@@ -25,7 +25,7 @@ struct Fixture {
 
 fn fixture() -> (Fixture, Keypair) {
     let fixture: Fixture =
-        serde_json::from_str(include_str!("fixtures/plc/genesis.json")).expect("the fixture");
+        serde_json::from_str(include_str!("../fixtures/plc/genesis.json")).expect("the fixture");
     let rotation = Keypair::from_bytes(
         Algorithm::Secp256k1,
         &hex::decode(&fixture.rotation_scalar).expect("hex"),
