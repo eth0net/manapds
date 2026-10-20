@@ -1,11 +1,17 @@
 # The build needs a C compiler: rusqlite carries SQLite's source and compiles
-# it here rather than looking for a system copy.
+# it here rather than looking for a system copy. Pinned to the version
+# `rust-version` names, so a bumped MSRV cannot pass every cargo job and fail
+# only the image.
 FROM rust:1.98-slim-trixie AS build
 WORKDIR /src
 COPY . .
+# `rust-toolchain.toml` pins a checkout's compiler; here the base image does,
+# and leaving the file would pull a second toolchain in to build at.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo build --release --locked && cp target/release/manapds /manapds
+    rm rust-toolchain.toml \
+    && cargo build --release --locked \
+    && cp target/release/manapds /manapds
 
 FROM debian:trixie-slim
 # Resolving a handle or reaching the PLC directory is an outbound TLS call, so

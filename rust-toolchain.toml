@@ -1,0 +1,10 @@
+# One compiler here and in CI, because a lint arrives with a release and the
+# machine that can fix it should be the one that fails. Bumping this is the
+# deliberate act `rustup update` used to be, and a bump brings a round of new
+# lints with it.
+#
+# Overridden on purpose where the floor is the point: the image builds at the
+# version `rust-version` names, and the MSRV checks ask for it by name.
+[toolchain]
+channel = "1.99.1"
+components = ["clippy", "rustfmt"]
