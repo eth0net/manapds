@@ -51,7 +51,9 @@ hooks = [
   { id = "cargo-fmt", name = "cargo fmt", entry = "cargo fmt --all", language = "system", files = '\.rs$', pass_filenames = false, require_serial = true },
   { id = "cargo-clippy", name = "cargo clippy", entry = "cargo clippy --all-targets -- -D warnings", language = "system", files = '\.rs$|(^|/)Cargo\.(toml|lock)$', pass_filenames = false, require_serial = true },
   { id = "cargo-test", name = "cargo test", entry = "cargo test --all-targets", language = "system", files = '\.rs$|(^|/)Cargo\.(toml|lock)$|\.md$', pass_filenames = false, require_serial = true, stages = ["pre-push"] },
-  { id = "cargo-msrv", name = "cargo check (MSRV 1.98)", entry = "cargo +1.98 check", language = "system", files = '\.rs$|(^|/)Cargo\.(toml|lock)$', pass_filenames = false, require_serial = true, stages = ["pre-push"] },
+  # The floor is read from Cargo.toml so `rust-version` is the only place it
+  # lives, and asked for with `+` because `rust-toolchain.toml` beats a default.
+  { id = "cargo-msrv", name = "cargo check (MSRV)", entry = "sh -c 'cargo +$(grep ^rust-version Cargo.toml | tr -dc 0-9.) check'", language = "system", files = '\.rs$|(^|/)Cargo\.(toml|lock)$', pass_filenames = false, require_serial = true, stages = ["pre-push"] },
 ]
 
 # The sign-off CONTRIBUTING asks for. Git has no `commit.signOff`, so an
