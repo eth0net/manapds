@@ -42,18 +42,20 @@ repo = "https://github.com/crate-ci/typos"
 rev = "v1.50.2"
 hooks = [{ id = "typos", args = ["--force-exclude"] }]
 
-# Scoped to Rust files so touching only docs needs no toolchain. The pre-push
-# set is what CI runs, so a red push costs no CI round trip.
+# Scoped to Rust files so touching only docs needs no toolchain, and the
+# compiler counts as one: a release arrives with new lints and a rustfmt that
+# moves code. The pre-push set is what CI runs, so a red push costs no CI
+# round trip.
 [[repos]]
 repo = "local"
 hooks = [
   # Formats in place and fails if anything moved, so the fix is `git add`.
-  { id = "cargo-fmt", name = "cargo fmt", entry = "cargo fmt --all", language = "system", files = '\.rs$', pass_filenames = false, require_serial = true },
-  { id = "cargo-clippy", name = "cargo clippy", entry = "cargo clippy --all-targets -- -D warnings", language = "system", files = '\.rs$|(^|/)Cargo\.(toml|lock)$', pass_filenames = false, require_serial = true },
-  { id = "cargo-test", name = "cargo test", entry = "cargo test --all-targets", language = "system", files = '\.rs$|(^|/)Cargo\.(toml|lock)$|\.md$', pass_filenames = false, require_serial = true, stages = ["pre-push"] },
+  { id = "cargo-fmt", name = "cargo fmt", entry = "cargo fmt --all", language = "system", files = '\.rs$|(^|/)rust-toolchain\.toml$', pass_filenames = false, require_serial = true },
+  { id = "cargo-clippy", name = "cargo clippy", entry = "cargo clippy --all-targets -- -D warnings", language = "system", files = '\.rs$|(^|/)Cargo\.(toml|lock)$|(^|/)rust-toolchain\.toml$', pass_filenames = false, require_serial = true },
+  { id = "cargo-test", name = "cargo test", entry = "cargo test --all-targets", language = "system", files = '\.rs$|(^|/)Cargo\.(toml|lock)$|\.md$|(^|/)rust-toolchain\.toml$', pass_filenames = false, require_serial = true, stages = ["pre-push"] },
   # The floor is read from Cargo.toml so `rust-version` is the only place it
   # lives, and asked for with `+` because `rust-toolchain.toml` beats a default.
-  { id = "cargo-msrv", name = "cargo check (MSRV)", entry = "sh -c 'cargo +$(grep ^rust-version Cargo.toml | tr -dc 0-9.) check'", language = "system", files = '\.rs$|(^|/)Cargo\.(toml|lock)$', pass_filenames = false, require_serial = true, stages = ["pre-push"] },
+  { id = "cargo-msrv", name = "cargo check (MSRV)", entry = "sh -c 'cargo +$(grep ^rust-version Cargo.toml | tr -dc 0-9.) check'", language = "system", files = '\.rs$|(^|/)Cargo\.(toml|lock)$|(^|/)rust-toolchain\.toml$', pass_filenames = false, require_serial = true, stages = ["pre-push"] },
 ]
 
 # The sign-off CONTRIBUTING asks for. Git has no `commit.signOff`, so an
