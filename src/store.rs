@@ -225,8 +225,8 @@ impl Drop for Running {
 #[cfg(test)]
 const STEP: std::ffi::c_int = 16;
 
-/// What a query costs, counted in the instructions SQLite runs rather than the
-/// time it takes, so a page measured here means the same on any machine.
+/// What a query costs, in [`STEP`]-instruction steps rather than in the time it
+/// takes, so a page measured here means the same on any machine.
 #[cfg(test)]
 pub(crate) fn work(
     db: &rusqlite::Connection,
