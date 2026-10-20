@@ -921,8 +921,8 @@ mod tests {
     #[test]
     fn a_page_of_repositories_costs_the_same_wherever_it_starts() {
         let accounts = filled();
-        // Against another cursored page rather than the uncursored first one,
-        // which has no comparison to pay for and would read as cheaper.
+        // Both pages carry a cursor so the comparison is fair, and a search
+        // in the plan says the index was read, not where the page began.
         let (first, binds) = hosted_query(500, Some(&at(0)));
         let near = super::super::work(&accounts.db, &first, &binds);
         let (far, binds) = hosted_query(500, Some(&at(PAGES_IN)));

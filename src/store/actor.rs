@@ -1241,8 +1241,8 @@ mod tests {
     /// Asserts a page deep in a listing costs about what its first page does.
     ///
     /// Both carry a cursor, so the only difference between them is how far in
-    /// the page starts; a page that walked to its own start instead of seeking
-    /// costs the rows it walked past, which here is hundreds of pages of them.
+    /// the page starts. A search in the plan says the index was read rather
+    /// than scanned, not that the page began where the cursor named it to.
     #[track_caller]
     fn flat(
         store: &Actor,
