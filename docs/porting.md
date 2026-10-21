@@ -5,8 +5,8 @@ tell what has changed since.
 
 ## The pin
 
-    96c843845
-    @atproto/pds@0.5.32
+    3b6c48d3f
+    @atproto/pds@0.5.44
 
 The hash is the pin and the tag is there to read it by, with a branch in the
 tag's place where the commit carries none. A tag on its own names nothing a
@@ -22,7 +22,7 @@ ground nobody checked.
 
 Upstream history answers this better than any summary kept here:
 
-    git log @atproto/pds@0.5.32..@atproto/pds@<newer> -- \
+    git log @atproto/pds@0.5.44..@atproto/pds@<newer> -- \
       packages/pds/src packages/repo/src packages/oauth-provider/src lexicons/
 
 Read the commits rather than the releases. A patch version is usually nothing
@@ -45,10 +45,6 @@ one that goes quietly wrong.
 Divergences where the other server is wrong rather than different. Each entry
 carries what it would take to file: where the code is, what goes wrong, and how
 it was shown. None of them has been reported.
-
-These were read at `@atproto/pds@0.5.38`, ahead of [the pin](#the-pin), because
-a bug is worth filing against what the other server holds now rather than
-against what this one was written to match.
 
 ### listRecords reads a collection down to its cursor
 
@@ -96,13 +92,14 @@ marked deprecated. Nothing current emits any of the three, so refusing them
 costs a caller that was already living on borrowed time, and it buys an
 `AtUri` that prints back exactly what it parsed.
 
-### The OAuth tables exist before the OAuth server does
+### Tables exist before whatever will use them
 
-Nothing here serves OAuth yet, but the account database is migrated all the way
-to 007 regardless. A database half-migrated is one neither server can open: the
-reference would refuse to run migrations it thinks are applied, and this one
-would refuse a schema it does not recognize. The tables cost a few hundred bytes
-and being the shape the other server expects is the whole point of matching it.
+Nothing here serves OAuth or a second authentication factor, but the account
+database is migrated all the way to 008 regardless. A database half-migrated
+is one neither server can open: the reference would refuse to run migrations it
+thinks are applied, and this one would refuse a schema it does not recognize.
+The tables cost a few hundred bytes and being the shape the other server
+expects is the whole point of matching it.
 
 ### Commits are version 3 and parsed all the way down
 

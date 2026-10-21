@@ -7,6 +7,7 @@ CREATE INDEX "refresh_token_did_idx" on "refresh_token" ("did");
 CREATE INDEX "token_did_idx" on "token" ("did");
 CREATE INDEX "used_refresh_token_id_idx" on "used_refresh_token" ("tokenId");
 CREATE TABLE "account_device" ("did" varchar not null, "deviceId" varchar not null, "createdAt" varchar not null, "updatedAt" varchar not null, constraint "account_device_pk" primary key ("deviceId", "did"), constraint "account_device_did_fk" foreign key ("did") references "account" ("did") on delete cascade on update cascade, constraint "account_device_device_id_fk" foreign key ("deviceId") references "device" ("id") on delete cascade on update cascade);
+CREATE TABLE "account_email_auth_factor" ("did" varchar primary key, "emailAuthFactorEnabledAt" varchar not null);
 CREATE TABLE "account" ("did" varchar primary key, "email" varchar not null, "passwordScrypt" varchar not null, "emailConfirmedAt" varchar, "invitesDisabled" int2 default 0 not null);
 CREATE TABLE "actor" ("did" varchar primary key, "handle" varchar, "createdAt" varchar not null, "takedownRef" varchar, "deactivatedAt" varchar, "deleteAfter" varchar);
 CREATE TABLE "app_password" ("did" varchar not null, "name" varchar not null, "passwordScrypt" varchar not null, "createdAt" varchar not null, "privileged" integer default 0 not null, constraint "app_password_pkey" primary key ("did", "name"));

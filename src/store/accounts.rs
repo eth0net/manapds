@@ -1,7 +1,7 @@
 //! The account database: who has an account here, what they are called, what
 //! they sign in with, and what they have authorized.
 //!
-//! The OAuth tables are built even though nothing serves OAuth yet, because a
+//! Tables for what nothing serves yet are built all the same, because a
 //! database has to be the shape the reference left it in whichever server
 //! opens it next.
 
@@ -89,6 +89,12 @@ const LEXICON_FAILURES: &str = r#"
 create index "lexicon_failures_idx" on "lexicon" ("updatedAt" DESC) WHERE ("lexicon" is NULL);
 "#;
 
+/// A second factor on sign-in, in a table of its own so that a third needs no
+/// rewrite of `account`.
+const EMAIL_AUTH_FACTOR: &str = r#"
+create table "account_email_auth_factor" ("did" varchar primary key, "emailAuthFactorEnabledAt" varchar not null);
+"#;
+
 /// A device session nobody asked to be remembered is not kept past the hour.
 const FORGET_UNREMEMBERED: &str =
     r#"delete from "device_account" where "remember" = 0 and "authenticatedAt" < ?1"#;
@@ -104,7 +110,7 @@ on conflict do nothing
 "#;
 
 /// Every migration this server knows, in the order they are applied.
-const MIGRATIONS: [db::Migration; 7] = [
+const MIGRATIONS: [db::Migration; 8] = [
     ("001", |tx| Ok(tx.execute_batch(INIT)?)),
     ("002", |tx| Ok(tx.execute_batch(DEACTIVATION)?)),
     ("003", |tx| Ok(tx.execute_batch(PRIVILEGED_APP_PASSWORDS)?)),
@@ -119,6 +125,7 @@ const MIGRATIONS: [db::Migration; 7] = [
     }),
     ("006", |tx| Ok(tx.execute_batch(PERMISSION_SETS)?)),
     ("007", |tx| Ok(tx.execute_batch(LEXICON_FAILURES)?)),
+    ("008", |tx| Ok(tx.execute_batch(EMAIL_AUTH_FACTOR)?)),
 ];
 
 /// An account, as the two tables hold it between them.

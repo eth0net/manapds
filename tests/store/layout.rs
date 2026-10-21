@@ -99,7 +99,10 @@ fn a_new_store_writes_the_ledger_the_reference_reads() {
         .expect("queries")
         .collect::<Result<_, _>>()
         .expect("reads");
-    assert_eq!(applied, ["001", "002", "003", "004", "005", "006", "007"]);
+    assert_eq!(
+        applied,
+        ["001", "002", "003", "004", "005", "006", "007", "008"]
+    );
 
     let (id, locked): (String, i64) = db
         .query_row(
@@ -228,14 +231,14 @@ fn a_database_migrated_past_the_account_schema_is_refused() {
     Connection::open(&path)
         .expect("opens")
         .execute(
-            r#"insert into "kysely_migration" ("name", "timestamp") values ('008', '')"#,
+            r#"insert into "kysely_migration" ("name", "timestamp") values ('009', '')"#,
             [],
         )
         .expect("writes");
 
     let refused = Accounts::open(&path);
     assert!(
-        matches!(refused, Err(Error::TooNew(ref name)) if name == "008"),
+        matches!(refused, Err(Error::TooNew(ref name)) if name == "009"),
         "{refused:?}"
     );
 }
