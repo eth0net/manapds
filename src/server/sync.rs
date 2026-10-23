@@ -103,8 +103,6 @@ pub(crate) async fn get_repo(
     State(accounts): State<Arc<Manager>>,
     Params(query): Params<Export>,
 ) -> xrpc::Result<Response> {
-    // todo: nothing bounds how long a caller may hold the thread and the read
-    // transaction this opens, and nobody has to authenticate to open one.
     let since = query.since.as_deref().map(parse::since).transpose()?;
     Ok(streamed(
         accounts.export(&parse::did(&query.did)?, since).await?,

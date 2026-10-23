@@ -3,6 +3,7 @@
 //! One binary, a module per subject, and the fixtures every subject builds on.
 
 mod directory;
+mod export;
 mod log;
 mod sessions;
 mod signup;

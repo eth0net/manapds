@@ -65,6 +65,12 @@ const PAGE: u32 = 500;
 /// How many pieces of a download may be read ahead of whoever takes them.
 const READ_AHEAD: usize = 2;
 
+/// The floor on how many downloads run at once.
+const DOWNLOADS: usize = 2;
+
+/// How long a piece may go untaken before the download behind it is dropped.
+const PATIENCE: Duration = Duration::from_secs(30);
+
 /// The most invite codes one call writes, across every account it names.
 ///
 /// Well past what anyone hands out at once, and a bound on what a mistyped
@@ -343,9 +349,11 @@ pub struct Credentials {
 pub struct Manager {
     config: Arc<Config>,
     login: Duration,
+    patience: Duration,
     directory: store::Directory,
     accounts: Arc<Mutex<store::Accounts>>,
     hashing: Arc<tokio::sync::Semaphore>,
+    exporting: Arc<tokio::sync::Semaphore>,
     sequencer: Arc<Mutex<store::Sequencer>>,
     clock: Arc<Mutex<TidClock>>,
     writing: Writing,
@@ -370,9 +378,11 @@ impl Manager {
             rules: handle::Rules::new(&config.handle_domains, &config.reserved_handles),
             accounts: Arc::new(Mutex::new(accounts)),
             hashing: Arc::new(tokio::sync::Semaphore::new(hashes_at_once())),
+            exporting: Arc::new(tokio::sync::Semaphore::new(downloads_at_once())),
             sequencer: Arc::new(Mutex::new(sequencer)),
             clock: Arc::new(Mutex::new(TidClock::new())),
             writing: Writing::default(),
+            patience: PATIENCE,
             login: LOGIN,
             tokens,
             config,
@@ -385,6 +395,16 @@ impl Manager {
     #[must_use]
     pub fn answering_in(mut self, budget: Duration) -> Self {
         self.login = budget;
+        self
+    }
+
+    /// Bounds downloads tighter than a server would, which is what a test
+    /// wants and nothing else does: the defaults are sized for the machine
+    /// rather than for showing in a moment that the bound is there.
+    #[must_use]
+    pub fn downloading(mut self, at_once: usize, patience: Duration) -> Self {
+        self.exporting = Arc::new(tokio::sync::Semaphore::new(at_once));
+        self.patience = patience;
         self
     }
 
@@ -810,7 +830,9 @@ impl Manager {
     /// what a revision after `since` wrote, in the pieces it is read in.
     ///
     /// The thread doing the reading is held until the last piece is taken, so
-    /// a caller that stops taking them stops the read.
+    /// a caller that stops taking them stops the read, and one that leaves a
+    /// piece sitting for [`PATIENCE`] is dropped rather than waited on. How
+    /// many run at once is [`downloads_at_once`].
     ///
     /// # Errors
     ///
@@ -827,9 +849,18 @@ impl Manager {
     ) -> Result<mpsc::Receiver<Result<Bytes, Error>>, Error> {
         let path = self.directory.actor_store(did);
         let account = did.clone();
+        let turn = Arc::clone(&self.exporting)
+            .acquire_owned()
+            .await
+            .expect("the semaphore is never closed");
+        let runtime = tokio::runtime::Handle::current();
+        let patience = self.patience;
         let (started, opening) = oneshot::channel();
         let (sender, file) = mpsc::channel(READ_AHEAD);
         tokio::task::spawn_blocking(move || {
+            // `blocking_send` takes no deadline, and a piece nobody takes
+            // would hold this thread for as long as the connection stands.
+            let hand = |piece| runtime.block_on(sender.send_timeout(piece, patience));
             let actor = match open(&path, account) {
                 Ok(actor) => actor,
                 Err(error) => {
@@ -861,10 +892,7 @@ impl Manager {
                     for (cid, bytes) in &page.blocks {
                         repo::car::push(&mut piece, cid, bytes);
                     }
-                    if sender
-                        .blocking_send(Ok(std::mem::take(&mut piece).into()))
-                        .is_err()
-                    {
+                    if hand(Ok(std::mem::take(&mut piece).into())).is_err() {
                         return Ok(());
                     }
                     from = page.next;
@@ -874,8 +902,11 @@ impl Manager {
                 }
             });
             if let Err(error) = read {
-                drop(sender.blocking_send(Err(error)));
+                drop(hand(Err(error)));
             }
+            // Named so the turn is captured by this closure rather than left
+            // behind to be given up the moment the download starts.
+            drop(turn);
         });
         opening.await.expect("the storage thread")?;
         Ok(file)
@@ -1996,6 +2027,20 @@ fn hashes_at_once() -> usize {
     std::thread::available_parallelism()
         .map_or(HASHES, std::num::NonZeroUsize::get)
         .max(HASHES)
+}
+
+/// How many downloads are sent at once.
+///
+/// Each one holds a thread from the pool every file read here shares, and
+/// nobody has to authenticate to ask for one, so the count is what keeps a
+/// download from being a way to stop signing in.
+///
+/// Never fewer than [`DOWNLOADS`], since one core would otherwise leave a
+/// second reader waiting on the first.
+fn downloads_at_once() -> usize {
+    std::thread::available_parallelism()
+        .map_or(DOWNLOADS, std::num::NonZeroUsize::get)
+        .max(DOWNLOADS)
 }
 
 /// A refresh token's `jti`, which is also the row the session is kept under.

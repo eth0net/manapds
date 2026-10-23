@@ -100,6 +100,13 @@ long as whoever asked for it keeps taking pieces, and a page of blocks is all
 either end holds. Reading the repository into memory first would cost the whole
 of it twice, once in the task and once in the answer waiting to be written.
 
+That task is a thread, and an unauthenticated request is all it takes to start
+one, so two bounds sit on it: a count sized from the machine, and a deadline
+of thirty seconds on any one piece going untaken. Neither alone would do. The
+count on its own is a few connections that never read away from refusing every
+download, and the deadline on its own leaves a caller that takes a byte inside
+each one holding as many threads as it cares to open.
+
 The account database is a single connection the whole server shares, so every
 call to it runs in a task of that kind too, and the lock is taken and given up
 inside one. The rollback behind a dropped signup is the exception: it takes the
