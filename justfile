@@ -36,7 +36,7 @@ spell:
 # advisories, licenses, duplicate versions and crate sources (needs cargo-deny)
 [group('checks')]
 deny:
-    cargo deny check
+    cargo deny check --deny warnings
 
 # run the server, reading configuration from the environment
 [group('dev')]
