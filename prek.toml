@@ -58,6 +58,16 @@ hooks = [
   { id = "cargo-msrv", name = "cargo check (MSRV)", entry = "sh -c 'cargo +$(grep ^rust-version Cargo.toml | tr -dc 0-9.) check'", language = "system", files = '\.rs$|(^|/)Cargo\.(toml|lock)$|(^|/)rust-toolchain\.toml$', pass_filenames = false, require_serial = true, stages = ["pre-push"] },
 ]
 
+# Unscoped, alone among these: an advisory is published against a lockfile
+# nobody has edited, so a `files` pattern would hold this back exactly when it
+# has something to say. The 1.5s is mostly the advisory fetch, a reach for
+# GitHub of its own, so a push with no network fails here rather than later.
+[[repos]]
+repo = "local"
+hooks = [
+  { id = "deny", name = "supply chain (just deny)", entry = "just deny", language = "system", always_run = true, pass_filenames = false, require_serial = true, stages = ["pre-push"] },
+]
+
 # The sign-off CONTRIBUTING asks for. Git has no `commit.signOff`, so an
 # unenforced convention is the only alternative. Merge commits are exempt, as
 # DCO checks conventionally are — they carry no new work to certify.
