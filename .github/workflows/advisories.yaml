@@ -1,0 +1,30 @@
+# The supply chain job, defined once and reached two ways: CI calls it on a
+# push or a pull request, and the schedule runs it where nothing has changed.
+
+name: advisories
+
+on:
+  schedule:
+    # An advisory is published against a lockfile already written, so a trigger
+    # tied to a change never fires for the case it matters most. GitHub stops
+    # scheduling this after 60 days without a commit, which is its own signal.
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  deny:
+    name: supply chain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Advisories, licenses, duplicate versions and crate sources. Configured
+      # in deny.toml, which says what each check is for.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          # Escalates unmaintained notices, yanked versions and unused allow
+          # entries to match the -D warnings the other jobs run under, and is
+          # what `just deny` runs so the two agree. The escape hatch is an
+          # `ignore` entry in deny.toml with a reason.
+          command-arguments: --deny warnings

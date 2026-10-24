@@ -64,18 +64,4 @@ jobs:
       - uses: crate-ci/typos@v1.50.2
 
   deny:
-    name: supply chain
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      # Advisories, licenses, duplicate versions and crate sources. Configured
-      # in deny.toml, which says what each check is for.
-      - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check
-          # Escalates unmaintained notices, yanked versions and unused allow
-          # entries to match the -D warnings the other jobs run under. The
-          # advisory database moves on its own, so this can fail on a tree that
-          # has not changed. That is the point; the escape hatch is an `ignore`
-          # entry in deny.toml with a reason.
-          command-arguments: --deny warnings
+    uses: ./.github/workflows/advisories.yaml
