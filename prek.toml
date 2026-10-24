@@ -39,7 +39,7 @@ hooks = [
 # it excludes, in `typos.toml`.
 [[repos]]
 repo = "https://github.com/crate-ci/typos"
-rev = "v1.50.2"
+rev = "v1.51.1"
 hooks = [{ id = "typos", args = ["--force-exclude"] }]
 
 # Scoped to Rust files so touching only docs needs no toolchain, and the
