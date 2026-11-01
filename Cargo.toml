@@ -30,7 +30,7 @@ jiff = { version = "0.2.37", default-features = false, features = ["std"] }
 k256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std"] }
 p256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std"] }
 rand = "0.10.2"
-rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+rusqlite = { version = "0.41.1", default-features = false, features = ["bundled"] }
 scrypt = { version = "0.12.0", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_bytes = "0.11.19"
@@ -61,7 +61,7 @@ strip = true
 [dev-dependencies]
 futures-util = { version = "0.3.34", default-features = false }
 hex = "0.4.3"
-rusqlite = { version = "0.40.2", default-features = false, features = ["hooks"] }
+rusqlite = { version = "0.41.1", default-features = false, features = ["hooks"] }
 tempfile = "3.27.0"
 tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.7", features = ["normalize-path"] }
