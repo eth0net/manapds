@@ -927,13 +927,13 @@ mod tests {
 
     #[test]
     fn a_page_of_repositories_costs_the_same_wherever_it_starts() {
-        let accounts = filled();
+        let mut accounts = filled();
         // Both pages carry a cursor so the comparison is fair, and a search
         // in the plan says the index was read, not where the page began.
         let (first, binds) = hosted_query(500, Some(&at(0)));
-        let near = super::super::work(&accounts.db, &first, &binds);
+        let near = super::super::work(&mut accounts.db, &first, &binds);
         let (far, binds) = hosted_query(500, Some(&at(PAGES_IN)));
-        let deep = super::super::work(&accounts.db, &far, &binds);
+        let deep = super::super::work(&mut accounts.db, &far, &binds);
 
         assert!(deep < near * 2, "{deep} steps against {near}");
     }

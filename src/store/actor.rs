@@ -1245,23 +1245,23 @@ mod tests {
     /// than scanned, not that the page began where the cursor named it to.
     #[track_caller]
     fn flat(
-        store: &Actor,
+        store: &mut Actor,
         what: &str,
         first: &(String, Vec<rusqlite::types::Value>),
         far: &(String, Vec<rusqlite::types::Value>),
     ) {
-        let near = super::super::work(&store.db, &first.0, &first.1);
-        let deep = super::super::work(&store.db, &far.0, &far.1);
+        let near = super::super::work(&mut store.db, &first.0, &first.1);
+        let deep = super::super::work(&mut store.db, &far.0, &far.1);
         assert!(deep < near * 2, "{what}: {deep} steps against {near}");
     }
 
     #[test]
     fn a_collection_page_costs_the_same_wherever_it_starts() {
-        let store = filled();
+        let mut store = filled();
         let prefix = format!("at://{}/com.example.record/", store.did);
         for reverse in [false, true] {
             flat(
-                &store,
+                &mut store,
                 &format!("reverse {reverse}"),
                 &records_query(&prefix, 50, Some(&key(head(!reverse))), reverse),
                 &records_query(&prefix, 50, Some(&key(deep(!reverse))), reverse),
@@ -1271,7 +1271,7 @@ mod tests {
 
     #[test]
     fn a_block_page_costs_the_same_wherever_it_starts() {
-        let store = filled();
+        let mut store = filled();
         // Revisions are unique, so which CID the cursor carries only decides
         // ties and any one of them will do.
         let at = |row| Mark {
@@ -1279,7 +1279,7 @@ mod tests {
             ..mark()
         };
         flat(
-            &store,
+            &mut store,
             "a page of blocks",
             &blocks_query(None, Some(&at(head(true))), 500),
             &blocks_query(None, Some(&at(deep(true))), 500),
@@ -1288,15 +1288,15 @@ mod tests {
 
     #[test]
     fn a_blob_page_costs_the_same_wherever_it_starts() {
-        let store = filled();
+        let mut store = filled();
         flat(
-            &store,
+            &mut store,
             "a page of blobs",
             &blobs_query(None, 500, Some(&blob(head(false)))),
             &blobs_query(None, 500, Some(&blob(deep(false)))),
         );
         flat(
-            &store,
+            &mut store,
             "a page of the blobs nothing uploaded",
             &missing_blobs_query(500, Some(&blob(head(false)))),
             &missing_blobs_query(500, Some(&blob(deep(false)))),

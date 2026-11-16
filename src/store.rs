@@ -229,7 +229,7 @@ const STEP: std::ffi::c_int = 16;
 /// takes, so a page measured here means the same on any machine.
 #[cfg(test)]
 pub(crate) fn work(
-    db: &rusqlite::Connection,
+    db: &mut rusqlite::Connection,
     query: &str,
     binds: &[rusqlite::types::Value],
 ) -> u64 {
@@ -247,11 +247,15 @@ pub(crate) fn work(
     )
     .expect("counts");
 
-    let mut statement = db.prepare(query).expect("prepares");
-    let mut rows = statement
-        .query(rusqlite::params_from_iter(binds))
-        .expect("runs");
-    while rows.next().expect("a row").is_some() {}
+    // Scoped so the statement is given back before the handler is taken off,
+    // which needs the connection to itself.
+    {
+        let mut statement = db.prepare(query).expect("prepares");
+        let mut rows = statement
+            .query(rusqlite::params_from_iter(binds))
+            .expect("runs");
+        while rows.next().expect("a row").is_some() {}
+    }
 
     db.progress_handler(STEP, None::<fn() -> bool>)
         .expect("stops counting");
